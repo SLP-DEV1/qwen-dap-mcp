@@ -59,7 +59,7 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
       includeDisassembly,
       includeModules,
       moduleCount,
-    }) => {
+    }) => session.runExclusiveLifecycle('open dump', async () => {
       const adapter = discoverCodeLldb({
         ...(adapterPath ? { explicitPath: adapterPath as string } : {}),
       });
@@ -104,6 +104,6 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
           note: 'A crash dump is frozen state. Live execution-control operations are rejected by the session guard.',
         },
       };
-    }),
+    })),
   );
 }
