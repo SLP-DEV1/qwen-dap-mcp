@@ -1,0 +1,54 @@
+name: Qwen Extension Package Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'package.json'
+      - 'qwen-extension.json'
+      - 'skills/**'
+      - 'scripts/build-extension-package.mjs'
+      - '.github/workflows/extension-package-smoke.yml'
+
+jobs:
+  archive-install:
+    runs-on: ubuntu-latest
+    env:
+      QWEN_CODE_SMOKE_VERSION: '0.22.0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install bridge dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build, test and stage extension
+        run: npm run check
+
+      - name: Create archive and validate archive shape
+        shell: bash
+        run: |
+          mkdir -p release
+          tar -C release/extension -czf release/qwen-dap-mcp.tar.gz .
+          test "$(tar -tzf release/qwen-dap-mcp.tar.gz | grep -Ec '^\./qwen-extension\.json$')" -eq 1
+          if tar -tvzf release/qwen-dap-mcp.tar.gz | awk '$1 ~ /^[lh]/ { found=1 } END { exit found ? 0 : 1 }'; then
+            echo 'Archive unexpectedly contains a symbolic or hard link.' >&2
+            exit 1
+          fi
+          sha256sum release/qwen-dap-mcp.tar.gz
+
+      - name: Install Qwen Code
+        run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
+
+      - name: Install the generated extension archive
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/qwen-extension-home"
+          mkdir -p "$HOME"
+          qwen --version
+          qwen extensions install "$PWD/release/qwen-dap-mcp.tar.gz" --consent
+          qwen extensions list | tee release/qwen-extensions-list.txt
+          grep -F 'qwen-dap-mcp' release/qwen-extensions-list.txt
