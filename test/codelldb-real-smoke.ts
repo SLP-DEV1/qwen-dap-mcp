@@ -115,7 +115,6 @@ try {
   assert.ok(initialSnapshot.disassembly && initialSnapshot.disassembly.length > 0, 'Runtime snapshot did not capture disassembly');
   assert.ok(initialSnapshot.modules && initialSnapshot.modules.length > 0, 'Runtime snapshot did not capture modules');
 
-  // Remove the source breakpoint before continuing so the next stop validates the data watchpoint.
   await session.setSourceBreakpoints(source, []);
   const watchStop = await session.continueExecution(threadId, true, 10_000) as {
     stopped: { reason?: string; description?: string };
@@ -129,15 +128,24 @@ try {
   const watchSnapshot = await session.runtimeSnapshot({ threadId, includeModules: false });
   const watchedCounter = watchSnapshot.locals.find((variable) => variable.name === 'counter');
   assert.ok(watchedCounter, 'Watchpoint snapshot lost local counter');
-
   await session.setDataBreakpoints([]);
 
-  // The fixture sleeps for two seconds after printing, giving us a deterministic running target for pause.
+  // The fixture sleeps after printing, giving a running target for a real DAP pause request.
   await session.continueExecution(threadId, false);
-  const pauseResult = await session.pause(threadId, true, 5_000) as { stopped: { reason?: string } };
-  assert.match(pauseResult.stopped.reason ?? '', /pause/i, `Expected pause stop, got ${JSON.stringify(pauseResult.stopped)}`);
-  const pausedSnapshot = await session.runtimeSnapshot({ threadId, includeDisassembly: true });
+  const pauseResult = await session.pause(threadId, true, 5_000) as {
+    requestedAction: string;
+    stopped: { reason?: string; description?: string };
+  };
+  assert.equal(pauseResult.requestedAction, 'pause');
+  const rawPauseText = `${pauseResult.stopped.reason ?? ''} ${pauseResult.stopped.description ?? ''}`;
+  // On Windows CodeLLDB/LLDB implements pause via DebugBreak, surfaced as exception 0x80000003.
+  assert.match(rawPauseText, /pause|0x80000003|debugbreak/i, `Unexpected pause stop: ${JSON.stringify(pauseResult.stopped)}`);
+
+  const pausedSnapshot = await session.runtimeSnapshot({ threadId, includeDisassembly: true, includeExceptionInfo: true });
   assert.ok(pausedSnapshot.stack.length > 0, 'Paused snapshot returned no stack');
+  if (pauseResult.stopped.reason === 'exception') {
+    assert.ok(pausedSnapshot.exception, 'DebugBreak-style pause did not include exception info in the snapshot');
+  }
 
   console.log(
     JSON.stringify(
@@ -163,13 +171,20 @@ try {
         moduleCount: modules.length,
         disassemblyCount: disassembly.length,
         memoryBytes: Buffer.from(memory.data ?? '', 'base64').length,
+        advancedBreakpoints: {
+          conditionalSourceVerified: advancedSource[0]?.verified ?? false,
+          functionVerified: functionBreakpoints[0]?.verified ?? false,
+          instructionVerified: instructionBreakpoints[0]?.verified ?? false,
+        },
         dataBreakpoint: {
           info: dataInfo,
           stopped: watchStop.stopped,
           counterAfterWrite: watchedCounter.value,
         },
         pause: {
-          stopped: pauseResult.stopped,
+          requestedAction: pauseResult.requestedAction,
+          rawStopped: pauseResult.stopped,
+          exception: pausedSnapshot.exception,
           topFrame: pausedSnapshot.frame,
         },
         snapshot: {
