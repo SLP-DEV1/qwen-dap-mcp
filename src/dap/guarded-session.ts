@@ -1,7 +1,7 @@
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapError } from './errors.js';
-import { DapSession, type StartSessionOptions } from './session.js';
+import { DapSession, type SourceBreakpointGroup, type StartSessionOptions } from './session.js';
 
 /**
  * DapSession with an explicit frozen postmortem mode.
@@ -13,10 +13,25 @@ import { DapSession, type StartSessionOptions } from './session.js';
  */
 export class GuardedDapSession extends DapSession {
   private postmortem = false;
+  private debugRequestInFlight = false;
 
   override async start(options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
     this.postmortem = false;
     return super.start(options);
+  }
+
+  override async launch(
+    configuration: Record<string, unknown>,
+    breakpoints: SourceBreakpointGroup[] = [],
+  ): Promise<unknown> {
+    return this.runExclusiveDebugRequest('launch', () => super.launch(configuration, breakpoints));
+  }
+
+  override async attach(
+    configuration: Record<string, unknown>,
+    breakpoints: SourceBreakpointGroup[] = [],
+  ): Promise<unknown> {
+    return this.runExclusiveDebugRequest('attach', () => super.attach(configuration, breakpoints));
   }
 
   markPostmortem(): void {
@@ -68,6 +83,21 @@ export class GuardedDapSession extends DapSession {
   ): Promise<DebugProtocol.Breakpoint[]> {
     this.assertLiveOperation('setDataBreakpoints');
     return super.setDataBreakpoints(breakpoints);
+  }
+
+  private async runExclusiveDebugRequest(operation: 'launch' | 'attach', action: () => Promise<unknown>): Promise<unknown> {
+    if (this.debugRequestInFlight) {
+      throw new DapError(
+        `Cannot ${operation} while another launch or attach request is already in progress. Wait for the current request to finish or reset the session first.`,
+      );
+    }
+
+    this.debugRequestInFlight = true;
+    try {
+      return await action();
+    } finally {
+      this.debugRequestInFlight = false;
+    }
   }
 
   private assertLiveOperation(operation: string): void {
