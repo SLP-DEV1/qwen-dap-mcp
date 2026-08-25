@@ -1,0 +1,13 @@
+{
+  "name": "qwen-dap-mcp",
+  "version": "0.5.0",
+  "displayName": "Qwen DAP MCP",
+  "description": "Native runtime debugging for Qwen Code through a local DAP-to-MCP bridge, with a bundled debugging Skill.",
+  "mcpServers": {
+    "qwen-dap-mcp": {
+      "command": "node",
+      "args": ["${extensionPath}${/}dist${/}index.js"],
+      "cwd": "${extensionPath}"
+    }
+  }
+}
