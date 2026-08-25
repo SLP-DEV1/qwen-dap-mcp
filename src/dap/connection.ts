@@ -102,20 +102,32 @@ export class DapConnection extends EventEmitter {
 
   async stop(): Promise<void> {
     const child = this.child;
-    if (!child || child.exitCode !== null || child.killed) {
+    if (!child) {
+      return;
+    }
+
+    if (child.exitCode !== null) {
+      this.rejectAll(new DapError('DAP adapter stopped'));
       this.child = undefined;
       return;
     }
 
-    child.kill();
+    if (!child.killed) {
+      child.kill();
+    }
+
     await Promise.race([
       new Promise<void>((resolve) => child.once('exit', () => resolve())),
       new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
     ]);
 
-    if (child.exitCode === null && !child.killed) {
+    // child.killed only means a signal was sent successfully; it does not mean
+    // the process has exited. Escalate whenever the adapter is still alive.
+    if (child.exitCode === null) {
       child.kill('SIGKILL');
     }
+
+    this.rejectAll(new DapError('DAP adapter stopped'));
     this.child = undefined;
   }
 
