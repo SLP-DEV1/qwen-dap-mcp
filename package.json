@@ -1,6 +1,6 @@
 {
   "name": "qwen-dap-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A small DAP-to-MCP bridge for agentic runtime debugging, designed to work with Qwen Code and other MCP clients.",
   "type": "module",
   "bin": {
