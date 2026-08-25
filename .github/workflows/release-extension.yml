@@ -1,0 +1,91 @@
+name: Release Qwen Extension
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+
+permissions:
+  contents: write
+
+env:
+  QWEN_CODE_SMOKE_VERSION: '0.22.0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build, test and stage extension
+        run: npm run check
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build self-contained extension archive
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        run: |
+          mkdir -p release
+          tar -C release/extension -czf release/qwen-dap-mcp.tar.gz .
+          test "$(tar -tzf release/qwen-dap-mcp.tar.gz | grep -Ec '^\./qwen-extension\.json$')" -eq 1
+          if tar -tvzf release/qwen-dap-mcp.tar.gz | awk '$1 ~ /^[lh]/ { found=1 } END { exit found ? 0 : 1 }'; then
+            echo 'Archive unexpectedly contains a symbolic or hard link.' >&2
+            exit 1
+          fi
+          sha256sum release/qwen-dap-mcp.tar.gz | tee release/qwen-dap-mcp.sha256.txt
+
+      - name: Install Qwen Code for archive smoke test
+        if: steps.version.outputs.exists == 'false'
+        run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
+
+      - name: Verify archive installs as a Qwen extension
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/qwen-extension-home"
+          mkdir -p "$HOME"
+          qwen --version
+          qwen extensions install "$PWD/release/qwen-dap-mcp.tar.gz" --consent
+          qwen extensions list | tee release/qwen-extensions-list.txt
+          grep -F 'qwen-dap-mcp' release/qwen-extensions-list.txt
+
+      - name: Publish GitHub release
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "release/qwen-dap-mcp.tar.gz#qwen-dap-mcp.tar.gz" \
+            --target "$GITHUB_SHA" \
+            --title "qwen-dap-mcp ${{ steps.version.outputs.tag }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Release already exists
+        if: steps.version.outputs.exists == 'true'
+        run: echo "${{ steps.version.outputs.tag }} already exists; nothing to publish."
