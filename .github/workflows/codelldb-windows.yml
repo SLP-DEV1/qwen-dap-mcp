@@ -11,6 +11,9 @@ on:
       - 'test/codelldb-profile.test.ts'
       - 'test/fixtures/native-smoke.cpp'
       - '.github/workflows/codelldb-windows.yml'
+      - 'scripts/build-extension-package.mjs'
+      - 'qwen-extension.json'
+      - 'skills/**'
       - 'package.json'
       - 'tsconfig.json'
 
