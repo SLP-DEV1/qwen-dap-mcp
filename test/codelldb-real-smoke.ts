@@ -22,10 +22,7 @@ if (!programArg || !sourceArg) {
 
 const program = resolve(programArg);
 const source = resolve(sourceArg);
-const adapter = discoverCodeLldb({
-  ...(adapterPath ? { explicitPath: adapterPath } : {}),
-});
-
+const adapter = discoverCodeLldb({ ...(adapterPath ? { explicitPath: adapterPath } : {}) });
 const session = new DapSession();
 
 try {
@@ -38,7 +35,7 @@ try {
   const stoppedPromise = session.connection.waitForEvent('stopped', 30_000);
   const launchResult = await session.launch(
     buildCodeLldbLaunchConfiguration({ program, stopOnEntry: false }),
-    [{ source, lines: [6] }],
+    [{ source, lines: [8] }],
   );
   const stopped = await stoppedPromise;
   const stoppedBody = stopped.body as { threadId?: number; reason?: string } | undefined;
@@ -64,6 +61,32 @@ try {
   const evaluated = await session.evaluate('counter', mainFrame.id, 'watch');
   assert.match(evaluated.result, /35/, `Expected counter to be 35 before breakpoint line executes, got '${evaluated.result}'`);
 
+  const advancedSource = await session.setSourceBreakpoints(source, [
+    { line: 8, condition: 'counter == 35', hitCondition: '>= 1' },
+  ]);
+  assert.ok(advancedSource[0]?.verified, 'CodeLLDB did not verify the conditional source breakpoint');
+
+  const functionBreakpoints = await session.setFunctionBreakpoints([{ name: 'main' }]);
+  assert.ok(functionBreakpoints[0]?.verified, 'CodeLLDB did not verify the main function breakpoint');
+  await session.setFunctionBreakpoints([]);
+
+  const instructionBreakpoints = await session.setInstructionBreakpoints([
+    { instructionReference: mainFrame.instructionPointerReference },
+  ]);
+  assert.ok(instructionBreakpoints[0]?.verified, 'CodeLLDB did not verify the instruction breakpoint');
+  await session.setInstructionBreakpoints([]);
+
+  await session.setExceptionBreakpoints(['cpp_throw']);
+
+  const dataInfo = await session.dataBreakpointInfo('counter', locals.variablesReference, mainFrame.id);
+  assert.ok(dataInfo.dataId, `CodeLLDB did not return a dataId for counter: ${JSON.stringify(dataInfo)}`);
+  assert.ok(dataInfo.accessTypes?.includes('write') ?? true, 'CodeLLDB data breakpoint does not support write access');
+
+  const dataBreakpoints = await session.setDataBreakpoints([
+    { dataId: dataInfo.dataId, accessType: 'write' },
+  ]);
+  assert.ok(dataBreakpoints[0]?.verified, 'CodeLLDB did not verify the counter data breakpoint');
+
   const modules = await session.modules(0, 100);
   assert.ok(modules.length > 0, 'CodeLLDB returned no loaded modules');
   assert.ok(
@@ -79,20 +102,42 @@ try {
   assert.ok(memory.data, 'CodeLLDB returned no readable memory bytes at the instruction pointer');
   assert.ok(Buffer.from(memory.data, 'base64').length > 0, 'Decoded memory payload was empty');
 
-  const snapshot = await session.runtimeSnapshot({
+  const initialSnapshot = await session.runtimeSnapshot({
     threadId,
     includeModules: true,
     moduleCount: 100,
     disassembleBefore: 5,
     disassembleAfter: 5,
   });
-  assert.match(snapshot.frame.name, /main/i, 'Runtime snapshot did not select the main frame');
-  assert.ok(snapshot.locals.some((variable) => variable.name === 'counter'), 'Runtime snapshot missed local variable counter');
-  assert.ok(snapshot.registers.length > 0, 'Runtime snapshot did not capture CodeLLDB registers');
-  assert.ok(snapshot.disassembly && snapshot.disassembly.length > 0, 'Runtime snapshot did not capture disassembly');
-  assert.ok(snapshot.modules && snapshot.modules.length > 0, 'Runtime snapshot did not capture modules');
+  assert.match(initialSnapshot.frame.name, /main/i, 'Runtime snapshot did not select the main frame');
+  assert.ok(initialSnapshot.locals.some((variable) => variable.name === 'counter'), 'Runtime snapshot missed local variable counter');
+  assert.ok(initialSnapshot.registers.length > 0, 'Runtime snapshot did not capture CodeLLDB registers');
+  assert.ok(initialSnapshot.disassembly && initialSnapshot.disassembly.length > 0, 'Runtime snapshot did not capture disassembly');
+  assert.ok(initialSnapshot.modules && initialSnapshot.modules.length > 0, 'Runtime snapshot did not capture modules');
 
+  // Remove the source breakpoint before continuing so the next stop validates the data watchpoint.
+  await session.setSourceBreakpoints(source, []);
+  const watchStop = await session.continueExecution(threadId, true, 10_000) as {
+    stopped: { reason?: string; description?: string };
+  };
+  assert.match(
+    `${watchStop.stopped.reason ?? ''} ${watchStop.stopped.description ?? ''}`,
+    /data|watch|breakpoint/i,
+    `Expected a data/watchpoint stop, got ${JSON.stringify(watchStop.stopped)}`,
+  );
+
+  const watchSnapshot = await session.runtimeSnapshot({ threadId, includeModules: false });
+  const watchedCounter = watchSnapshot.locals.find((variable) => variable.name === 'counter');
+  assert.ok(watchedCounter, 'Watchpoint snapshot lost local counter');
+
+  await session.setDataBreakpoints([]);
+
+  // The fixture sleeps for two seconds after printing, giving us a deterministic running target for pause.
   await session.continueExecution(threadId, false);
+  const pauseResult = await session.pause(threadId, true, 5_000) as { stopped: { reason?: string } };
+  assert.match(pauseResult.stopped.reason ?? '', /pause/i, `Expected pause stop, got ${JSON.stringify(pauseResult.stopped)}`);
+  const pausedSnapshot = await session.runtimeSnapshot({ threadId, includeDisassembly: true });
+  assert.ok(pausedSnapshot.stack.length > 0, 'Paused snapshot returned no stack');
 
   console.log(
     JSON.stringify(
@@ -106,6 +151,10 @@ try {
           supportsReadMemoryRequest: capabilities.supportsReadMemoryRequest,
           supportsModulesRequest: capabilities.supportsModulesRequest,
           supportsExceptionInfoRequest: capabilities.supportsExceptionInfoRequest,
+          supportsConditionalBreakpoints: capabilities.supportsConditionalBreakpoints,
+          supportsFunctionBreakpoints: capabilities.supportsFunctionBreakpoints,
+          supportsInstructionBreakpoints: capabilities.supportsInstructionBreakpoints,
+          supportsDataBreakpoints: capabilities.supportsDataBreakpoints,
         },
         stopped: stoppedBody,
         topFrame: mainFrame,
@@ -114,13 +163,22 @@ try {
         moduleCount: modules.length,
         disassemblyCount: disassembly.length,
         memoryBytes: Buffer.from(memory.data ?? '', 'base64').length,
+        dataBreakpoint: {
+          info: dataInfo,
+          stopped: watchStop.stopped,
+          counterAfterWrite: watchedCounter.value,
+        },
+        pause: {
+          stopped: pauseResult.stopped,
+          topFrame: pausedSnapshot.frame,
+        },
         snapshot: {
-          thread: snapshot.thread,
-          frame: snapshot.frame,
-          localNames: snapshot.locals.map((variable) => variable.name),
-          registerCount: snapshot.registers.length,
-          disassemblyCount: snapshot.disassembly?.length ?? 0,
-          moduleCount: snapshot.modules?.length ?? 0,
+          thread: initialSnapshot.thread,
+          frame: initialSnapshot.frame,
+          localNames: initialSnapshot.locals.map((variable) => variable.name),
+          registerCount: initialSnapshot.registers.length,
+          disassemblyCount: initialSnapshot.disassembly?.length ?? 0,
+          moduleCount: initialSnapshot.modules?.length ?? 0,
         },
         launchResult,
       },
@@ -129,5 +187,5 @@ try {
     ),
   );
 } finally {
-  await session.disconnect(false);
+  await session.disconnect(true);
 }
