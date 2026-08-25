@@ -2,6 +2,31 @@
 
 All notable prototype milestones are documented here.
 
+## 0.6.0
+
+### Added
+
+- Self-contained Qwen Code extension packaging with a bundled `dist/index.js`.
+- Release staging validation that rejects unresolved npm runtime imports and symlinks.
+- GitHub Actions release workflow that builds and tests the bridge, creates a generic `qwen-dap-mcp.tar.gz`, installs that archive with Qwen Code, and publishes it as the single GitHub Release asset.
+- Reproducible Qwen Code archive smoke test pinned to Qwen Code 0.22.0.
+
+### Changed
+
+- `npm run check` now also builds the release-ready extension staging directory.
+- Release archives no longer require `npm install` after download because runtime dependencies are bundled into the MCP server entrypoint.
+- Generated `release/` output is ignored by git.
+
+### Installation target
+
+After the v0.6.0 GitHub Release is published, Qwen Code can install the extension directly from the repository release with:
+
+```text
+qwen extensions install SLP-DEV1/qwen-dap-mcp
+```
+
+The release workflow validates that the produced archive can be installed by Qwen Code before publishing it.
+
 ## 0.5.0
 
 ### Added
