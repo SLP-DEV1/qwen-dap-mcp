@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -13,6 +14,7 @@ const extensionManifestPath = fileURLToPath(
   new URL('../qwen-extension.json', import.meta.url),
 );
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
+const builtServerPath = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
 function validateSkill(content: string): void {
   assert.match(content, /^---\r?\nname: native-runtime-debug\r?\n/m);
@@ -49,7 +51,7 @@ test('project and extension native-runtime-debug skills stay identical and valid
   assert.equal(extensionSkill, projectSkill, 'Bundled extension Skill must match the project Skill');
 });
 
-test('Qwen extension manifest starts the local MCP server and matches package version', async () => {
+test('Qwen extension manifest starts the built local MCP server and matches package version', async () => {
   const [manifestText, packageText] = await Promise.all([
     readFile(extensionManifestPath, 'utf8'),
     readFile(packagePath, 'utf8'),
@@ -60,7 +62,7 @@ test('Qwen extension manifest starts the local MCP server and matches package ve
     version?: string;
     mcpServers?: Record<string, { command?: string; args?: string[]; cwd?: string; trust?: unknown }>;
   };
-  const pkg = JSON.parse(packageText) as { version?: string };
+  const pkg = JSON.parse(packageText) as { version?: string; files?: string[] };
 
   assert.equal(manifest.name, 'qwen-dap-mcp');
   assert.equal(manifest.version, pkg.version);
@@ -71,4 +73,10 @@ test('Qwen extension manifest starts the local MCP server and matches package ve
   assert.deepEqual(server.args, ['${extensionPath}${/}dist${/}index.js']);
   assert.equal(server.cwd, '${extensionPath}');
   assert.equal(server.trust, undefined, 'Extension must not bypass Qwen MCP trust review');
+
+  await access(builtServerPath, constants.R_OK);
+
+  assert.ok(pkg.files?.includes('dist'), 'npm package must include built runtime files');
+  assert.ok(pkg.files?.includes('qwen-extension.json'), 'npm package must include the Qwen extension manifest');
+  assert.ok(pkg.files?.includes('skills'), 'npm package must include bundled Qwen Skills');
 });
