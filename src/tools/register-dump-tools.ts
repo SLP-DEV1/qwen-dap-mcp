@@ -5,6 +5,70 @@ import { discoverCodeLldb } from '../adapters/codelldb.js';
 import { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 
+export type OpenDumpOptions = {
+  dumpPath: string;
+  program?: string;
+  sourceMap?: Record<string, string>;
+  adapterPath?: string;
+  cwd?: string;
+  requestTimeoutMs?: number;
+  threadId?: number;
+  stackLevels?: number;
+  maxVariablesPerScope?: number;
+  includeDisassembly?: boolean;
+  includeModules?: boolean;
+  moduleCount?: number;
+};
+
+export async function openDump(session: GuardedDapSession, options: OpenDumpOptions) {
+  return session.runExclusiveLifecycle('open dump', async () => {
+    const adapter = discoverCodeLldb({
+      ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}),
+    });
+    const capabilities = await session.start({
+      command: adapter.command,
+      adapterId: 'lldb',
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+    });
+
+    const configuration = buildCodeLldbDumpConfiguration({
+      dumpPath: options.dumpPath,
+      ...(options.program ? { program: options.program } : {}),
+      ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
+    });
+    const attach = await session.attach(configuration);
+    session.markPostmortem();
+
+    const snapshot = await session.runtimeSnapshot({
+      ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+      stackLevels: options.stackLevels ?? 20,
+      maxVariablesPerScope: options.maxVariablesPerScope ?? 100,
+      includeDisassembly: options.includeDisassembly ?? true,
+      includeModules: options.includeModules ?? true,
+      moduleCount: options.moduleCount ?? 100,
+      includeExceptionInfo: true,
+    });
+
+    return {
+      mode: 'postmortem' as const,
+      readOnlyTarget: true,
+      dumpPath: options.dumpPath,
+      ...(options.program ? { program: options.program } : {}),
+      adapter,
+      capabilities,
+      attach,
+      snapshot,
+      guidance: {
+        canInspect: ['threads', 'stack', 'scopes', 'variables', 'registers', 'modules', 'memory', 'disassembly'],
+        blockedOperations: ['continue', 'step', 'pause', 'data breakpoints'],
+        cannotResume: true,
+        note: 'A crash dump is frozen state. Live execution-control operations are rejected by the session guard.',
+      },
+    };
+  });
+}
+
 function result(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
 }
@@ -46,64 +110,6 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
         moduleCount: z.number().int().positive().max(500).default(100),
       }),
     },
-    wrap(async ({
-      dumpPath,
-      program,
-      sourceMap,
-      adapterPath,
-      cwd,
-      requestTimeoutMs,
-      threadId,
-      stackLevels,
-      maxVariablesPerScope,
-      includeDisassembly,
-      includeModules,
-      moduleCount,
-    }) => session.runExclusiveLifecycle('open dump', async () => {
-      const adapter = discoverCodeLldb({
-        ...(adapterPath ? { explicitPath: adapterPath as string } : {}),
-      });
-      const capabilities = await session.start({
-        command: adapter.command,
-        adapterId: 'lldb',
-        ...(cwd ? { cwd: cwd as string } : {}),
-        requestTimeoutMs: requestTimeoutMs as number,
-      });
-
-      const configuration = buildCodeLldbDumpConfiguration({
-        dumpPath: dumpPath as string,
-        ...(program ? { program: program as string } : {}),
-        ...(sourceMap ? { sourceMap: sourceMap as Record<string, string> } : {}),
-      });
-      const attach = await session.attach(configuration);
-      session.markPostmortem();
-
-      const snapshot = await session.runtimeSnapshot({
-        ...(threadId === undefined ? {} : { threadId: threadId as number }),
-        stackLevels: stackLevels as number,
-        maxVariablesPerScope: maxVariablesPerScope as number,
-        includeDisassembly: includeDisassembly as boolean,
-        includeModules: includeModules as boolean,
-        moduleCount: moduleCount as number,
-        includeExceptionInfo: true,
-      });
-
-      return {
-        mode: 'postmortem',
-        readOnlyTarget: true,
-        dumpPath,
-        ...(program ? { program } : {}),
-        adapter,
-        capabilities,
-        attach,
-        snapshot,
-        guidance: {
-          canInspect: ['threads', 'stack', 'scopes', 'variables', 'registers', 'modules', 'memory', 'disassembly'],
-          blockedOperations: ['continue', 'step', 'pause', 'data breakpoints'],
-          cannotResume: true,
-          note: 'A crash dump is frozen state. Live execution-control operations are rejected by the session guard.',
-        },
-      };
-    })),
+    wrap(async (options) => openDump(session, options as OpenDumpOptions)),
   );
 }
