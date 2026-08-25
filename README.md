@@ -2,20 +2,34 @@
 
 A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for agentic native runtime debugging and postmortem crash analysis.
 
-It lets Qwen Code and other MCP clients consume structured debugger state without embedding a native debugger protocol directly in the agent core.
+It gives Qwen Code and other MCP clients structured debugger state without embedding a native debugger protocol into the agent itself. CodeLLDB is the first built-in debugger profile.
 
-## What it can do
+## v0.8: agent-first crash diagnosis
 
-- launch or attach to authorized native targets through DAP,
-- inspect threads, stacks, scopes, locals, registers and modules,
-- evaluate expressions,
-- read bounded memory and disassemble around the instruction pointer,
-- use source, conditional, function, instruction and data breakpoints,
-- capture a bounded `debug_snapshot` in one MCP call,
-- open Windows minidumps and other LLDB-supported core files for **read-only postmortem analysis**,
-- expose the workflow to Qwen Code as an installable extension with a bundled `native-runtime-debug` Skill.
+v0.8 adds a higher-level diagnosis layer on top of the raw DAP primitives.
 
-CodeLLDB is the first built-in debugger profile and is continuously exercised against real Windows C++ targets in CI.
+Instead of making the model manually sequence launch → wait → stack → locals → registers → disassembly → exception info, the bridge can now do that orchestration and return an evidence-bounded diagnosis.
+
+The main tools are:
+
+- `debug_this_crash` — one high-level workflow for current stops, initialized live DAP sessions, automatic CodeLLDB launches, or crash dumps,
+- `debug_diagnose_stop` — classify and explain the current stopped state,
+- `debug_source_disassembly` — correlate source location + instruction pointer with nearby machine instructions,
+- `debug_run_to_stop` — launch/attach and race-safely wait for `stopped`, `exited`, or `terminated`, returning a bounded snapshot on a stop.
+
+The diagnosis engine can recognize evidence consistent with common native failure families such as:
+
+- access violation / `EXC_BAD_ACCESS`,
+- segmentation fault / `SIGSEGV`,
+- stack overflow,
+- divide-by-zero / `SIGFPE`,
+- illegal instruction / `SIGILL`,
+- abort/assert failures,
+- heap-corruption/double-free style diagnostics,
+- generic debugger exceptions/signals,
+- and non-crash stops such as entry, breakpoint, pause, or step.
+
+It also surfaces suspicious null-like pointer values and common debug-allocator poison patterns, but deliberately reports them as evidence/hypotheses rather than unconditional proof.
 
 ## Architecture
 
@@ -26,108 +40,153 @@ Qwen Code / MCP client
         ▼
    qwen-dap-mcp
         │
+        ├── agent diagnosis layer
+        │     ├── classification / hypotheses
+        │     ├── exception analysis
+        │     └── source ↔ disassembly correlation
+        │
         │ DAP over stdio
         ▼
  CodeLLDB / DAP adapter
         │
-        ├── live authorized target
-        │
+        ├── authorized live target
         └── crash dump / core file
 ```
 
-The MCP server itself has no HTTP listener and does not expose a remote debugger service.
+The MCP server has no HTTP listener. The adapter is spawned locally without a shell and communicates over stdio.
 
 ## Install in Qwen Code
 
-Install the latest GitHub Release directly:
+Install the latest GitHub Release:
 
 ```bash
 qwen extensions install SLP-DEV1/qwen-dap-mcp
 ```
 
-Then restart Qwen Code if needed and verify:
+Then verify in Qwen Code:
 
 ```text
 /mcp
 /skills
 ```
 
-You should see:
+You should see the `qwen-dap-mcp` MCP server and the bundled `native-runtime-debug` Skill.
+
+The release archive is self-contained: runtime npm dependencies are bundled into `dist/index.js`, so users do not need to clone the repository or run `npm install`.
+
+## Fastest workflow: debug this crash
+
+### Reproduce a local native crash with CodeLLDB
+
+When you have the executable and want the bridge to reproduce/analyze the next stop in one call:
 
 ```text
-Skill:       native-runtime-debug
-MCP server:  qwen-dap-mcp
-```
-
-The Skill can be invoked explicitly:
-
-```text
-/native-runtime-debug
-```
-
-or Qwen Code can select it automatically for matching native-debugging tasks.
-
-The release archive is self-contained: runtime npm dependencies are bundled into `dist/index.js`, so users do not need to clone, run `npm install`, or build the extension.
-
-## Crash-dump / minidump analysis
-
-Starting with **v0.7**, `debug_open_dump` opens an LLDB-supported crash artifact through CodeLLDB's postmortem target flow.
-
-Example agent request:
-
-```text
-Analyze C:\crashes\app.dmp using C:\build\app.exe.
-Find the crashing thread, project frame, source line, relevant locals/registers,
-and the likely root cause. Do not guess beyond debugger evidence.
-```
-
-The MCP primitive is conceptually:
-
-```text
-debug_open_dump(
-  dumpPath="C:\\crashes\\app.dmp",
-  program="C:\\build\\app.exe"
+debug_this_crash(
+  mode="codelldb",
+  program="C:\\build\\app.exe",
+  args=["--repro"],
+  timeoutMs=30000
 )
 ```
 
-Optional `sourceMap` can remap build-machine source paths to the current checkout:
+The workflow:
+
+1. discovers CodeLLDB,
+2. starts/initializes the adapter,
+3. validates and launches the local program,
+4. arms stop/exit listeners before launch so fast crashes cannot race past the agent,
+5. waits for `stopped`, `exited`, or `terminated`,
+6. captures a bounded runtime snapshot when stopped,
+7. returns crash classification, exception evidence, suspicious values, source/disassembly correlation, hypotheses, confidence, and suggested checks.
+
+Optional source breakpoints can be supplied in the same call.
+
+### Analyze an existing crash dump
 
 ```text
-debug_open_dump(
+debug_this_crash(
+  mode="dump",
   dumpPath="C:\\crashes\\app.dmp",
   program="C:\\build\\app.exe",
   sourceMap={"D:/agent/_work/project/src":"C:/work/project/src"}
 )
 ```
 
-`debug_open_dump` automatically:
+This reuses the same CodeLLDB postmortem path as `debug_open_dump`, then analyzes the recovered frozen state automatically.
 
-1. discovers or starts CodeLLDB,
-2. opens the core/minidump using LLDB's core-file target flow,
-3. attaches **no live process**,
-4. captures an initial bounded snapshot with modules enabled,
-5. marks the session as postmortem/frozen.
+### Diagnose an already stopped session
 
-### Postmortem safety semantics
+```text
+debug_diagnose_stop(
+  includeModules=true,
+  includeDisassembly=true,
+  includeExceptionInfo=true
+)
+```
 
-A crash dump is frozen state. In postmortem mode the bridge rejects live execution controls:
+Use this after a breakpoint, exception, pause, or after opening a dump when you want a fresh bounded diagnosis.
 
-- `debug_continue`
-- `debug_step`
-- `debug_pause`
-- data-breakpoint/watchpoint setup
+### Correlate source and machine code
 
-Inspection remains available:
+```text
+debug_source_disassembly(
+  disassembleBefore=8,
+  disassembleAfter=12
+)
+```
 
-- `debug_threads`
-- `debug_stack`
-- `debug_scopes`
-- `debug_variables`
-- `debug_snapshot`
-- `debug_modules`
-- `debug_disassemble`
-- `debug_read_memory`
-- `debug_exception_info` when recoverable from the artifact
+The result includes the selected frame/source line, `instructionPointerReference`, an exact or nearest matching instruction, and the nearby previous/next instructions.
+
+## Diagnosis output model
+
+A diagnosis separates raw facts from inference:
+
+- **classification** — best current stop/crash family,
+- **confidence** — strength of that classification/hypothesis,
+- **exception** — adapter-provided exception id/description/details when available,
+- **faultLocation** — top selected frame, source line, module and instruction pointer,
+- **sourceDisassembly** — source ↔ machine-code correlation,
+- **suspiciousValues** — bounded clues such as null-like pointers or poison patterns,
+- **hypotheses** — likely explanations with evidence and suggested falsification/verification checks,
+- **nextActions** — small debugger actions that can improve confidence.
+
+The bridge intentionally does **not** claim that every suspicious pointer/register is the root cause. The bundled Qwen Skill instructs the agent to keep claims evidence-bounded and to distinguish “consistent with” from “proven”.
+
+## Raw bounded snapshot
+
+`debug_snapshot` remains the preferred low-level stop-state primitive. It can include:
+
+- selected thread,
+- stack frames,
+- current frame/source location,
+- locals / arguments,
+- registers,
+- disassembly around the instruction pointer,
+- optional loaded modules,
+- structured exception information when supported.
+
+Bounds are intentional so an agent does not pull an unbounded debugger state tree into context.
+
+## Crash-dump / minidump analysis
+
+`debug_open_dump` remains available when raw postmortem evidence is preferred over the high-level diagnosis workflow.
+
+It:
+
+1. discovers/starts CodeLLDB,
+2. opens an LLDB-supported core/minidump,
+3. attaches no live process,
+4. captures an initial bounded snapshot,
+5. marks the shared session as postmortem/frozen.
+
+A crash dump is read-only state. The session guard rejects live operations such as:
+
+- `debug_continue`,
+- `debug_step`,
+- `debug_pause`,
+- live data-breakpoint/watchpoint setup.
+
+Inspection remains available through stack, variables, modules, memory, disassembly, snapshots, and the v0.8 diagnostic tools.
 
 Finish a dump session with:
 
@@ -135,243 +194,121 @@ Finish a dump session with:
 debug_disconnect(terminateDebuggee=false)
 ```
 
-An old dump can establish the cause of a past crash, but it cannot prove a source fix worked. Verification still requires rebuilding and reproducing the scenario or analyzing a newly generated dump.
+An old dump can establish the cause of that captured crash, but it cannot prove that a later source change fixed the bug. Verification still requires rebuilding/reproducing or analyzing a newly generated dump.
 
-## Real Windows minidump validation
+## Real Windows validation
 
-The repository includes a dedicated `CodeLLDB Windows Dump Smoke` workflow. It:
+The repository contains dedicated Windows CodeLLDB smoke workflows.
 
-1. compiles a small MSVC C++ program with PDB symbols,
+The dump smoke test:
+
+1. compiles a small MSVC C++ target with PDB symbols,
 2. intentionally dereferences a null pointer,
-3. writes a real Windows `.dmp` using `MiniDumpWriteDump`,
-4. starts real CodeLLDB over DAP stdio,
-5. opens the generated dump,
-6. verifies postmortem thread/stack/source/register/module/disassembly recovery.
+3. writes a real `.dmp` using `MiniDumpWriteDump`,
+4. downloads/starts real CodeLLDB,
+5. opens the dump through DAP,
+6. verifies thread/stack/source/register/module/disassembly recovery.
 
-A representative successful v0.7 CI run recovered:
-
-```text
-exception:            0xC0000005 access violation
-project frame:        int crash_here(int *)
-source line:          native-dump.cpp:43
-pointer:              <null>
-local_marker:         77
-threads:              4
-modules:              18
-disassembly:          9 instructions
-register groups:      2
-```
-
-That test demonstrates actual postmortem root-cause evidence rather than merely checking that a dump file can be opened.
-
-## `debug_snapshot`
-
-`debug_snapshot` is the preferred inspection primitive after a live breakpoint/exception or while exploring a dump.
-
-A bounded snapshot can include:
-
-- selected thread,
-- stack frames,
-- top/current frame,
-- source path and line,
-- instruction pointer,
-- locals / arguments,
-- registers,
-- disassembly around IP,
-- optional loaded modules,
-- structured exception information when the adapter exposes it.
-
-Example:
-
-```text
-debug_snapshot(
-  includeModules=true,
-  stackLevels=20,
-  maxVariablesPerScope=100
-)
-```
-
-The bounds are intentional so an agent does not pull an unbounded debugger state tree into context.
+This exercises real native postmortem behavior rather than only mocks.
 
 ## MCP tools
 
-| MCP tool | Purpose |
+| Tool | Purpose |
 | --- | --- |
-| `debug_open_dump` | Open a native core/minidump for read-only postmortem analysis |
+| `debug_this_crash` | High-level current/live/CodeLLDB/dump diagnosis workflow |
+| `debug_diagnose_stop` | Analyze the current stopped state and return likely causes/evidence |
+| `debug_source_disassembly` | Correlate source frame/IP with nearby instructions |
+| `debug_run_to_stop` | Launch/attach and wait race-safely for stop/exit/termination |
+| `debug_open_dump` | Open a native core/minidump for read-only postmortem inspection |
+| `debug_snapshot` | Capture a bounded raw runtime snapshot |
 | `debug_codelldb_info` | Discover CodeLLDB |
 | `debug_start_codelldb` | Start and initialize CodeLLDB |
-| `debug_launch_codelldb` | Launch a native target using the CodeLLDB profile |
-| `debug_attach_codelldb` | Attach to an authorized local native process |
-| `debug_start` | Start a generic DAP adapter |
-| `debug_launch` | Launch with a generic DAP configuration |
-| `debug_attach` | Attach with a generic DAP configuration |
-| `debug_set_breakpoints` | Set simple source-line breakpoints |
+| `debug_launch_codelldb` | Launch a local native target using the CodeLLDB profile |
+| `debug_attach_codelldb` | Attach to an authorized local process |
+| `debug_start` | Start a generic local DAP adapter |
+| `debug_launch` | Launch using a generic DAP configuration |
+| `debug_attach` | Attach using a generic DAP configuration |
+| `debug_set_breakpoints` | Simple source-line breakpoints |
 | `debug_set_source_breakpoints` | Conditional/hit-count/log source breakpoints |
 | `debug_set_function_breakpoints` | Function breakpoints |
 | `debug_set_instruction_breakpoints` | Instruction-address breakpoints |
 | `debug_data_breakpoint_info` | Resolve a debugger-owned data-breakpoint id |
-| `debug_set_data_breakpoints` | Set data breakpoints/watchpoints on live sessions |
+| `debug_set_data_breakpoints` | Set live watchpoints/data breakpoints |
 | `debug_set_exception_breakpoints` | Configure adapter-defined exception filters |
 | `debug_pause` | Pause a live target |
-| `debug_continue` | Continue a live target |
+| `debug_continue` | Continue a live target and optionally wait for stop |
 | `debug_step` | Step over / into / out |
 | `debug_threads` | List threads |
 | `debug_stack` | Read stack frames |
 | `debug_scopes` | Read frame scopes |
 | `debug_variables` | Expand variables |
-| `debug_evaluate` | Evaluate an expression |
-| `debug_modules` | List loaded images/libraries |
+| `debug_evaluate` | Evaluate a debugger expression |
+| `debug_modules` | List loaded modules/images |
 | `debug_disassemble` | Disassemble around a memory reference |
 | `debug_read_memory` | Read a bounded memory range |
 | `debug_exception_info` | Read structured exception information |
-| `debug_snapshot` | Capture an agent-friendly bounded runtime snapshot |
 | `debug_status` | Inspect session state/capabilities/events |
 | `debug_events` | Read recent asynchronous DAP events |
 | `debug_disconnect` | Disconnect and stop the adapter |
 
-## Typical live CodeLLDB workflow
+## Lifecycle and concurrency semantics
+
+The server owns one shared debugger session. Session-mutating operations are serialized behind a reentrant lifecycle gate.
+
+Composite workflows such as:
 
 ```text
-1. debug_codelldb_info()
-2. debug_start_codelldb()
-3. debug_launch_codelldb(program=..., breakpoints=[...])
-4. debug_snapshot(includeModules=true)
-5. debug_evaluate(...)
-6. add a conditional/function/instruction/watchpoint only when evidence requires it
-7. debug_continue(...) or debug_step(...)
-8. debug_snapshot()
-9. patch source
-10. rebuild and reproduce
-11. debug_disconnect()
+debug_this_crash → start → reset → launch → wait → snapshot
 ```
 
-### Data breakpoints / watchpoints
+can safely call guarded operations from the same async transaction, while an unrelated competing MCP request receives a deterministic lifecycle-busy error instead of racing adapter/session state.
 
-DAP data breakpoints use a two-stage flow because the debugger owns the stable identifier:
+## Local path safety
+
+Local CodeLLDB/dump resources are normalized and validated as actual local files/directories. Legitimate parent segments such as `dir/../app.exe` are normalized rather than rejected with a simplistic `..` ban.
+
+Generic DAP configuration objects remain adapter-resolvable so remote/container adapters are not incorrectly forced into local filesystem semantics.
+
+## Logging
+
+Structured logs are written to **stderr only** so MCP stdout remains protocol-clean.
+
+Set:
 
 ```text
-info = debug_data_breakpoint_info(
-  name="counter",
-  variablesReference=...,
-  frameId=...
-)
-
-debug_set_data_breakpoints(
-  breakpoints=[{ dataId=info.dataId, accessType="write" }]
-)
+QWEN_DAP_LOG_LEVEL=debug|info|warn|error|silent
 ```
 
-The real CodeLLDB Windows test verifies a hardware/data watchpoint that stops when a local `counter` changes from 35 to 42.
+The logger safely handles real circular references without mislabeling repeated non-circular shared object references as `[Circular]`.
 
-## Windows pause semantics
+## Development
 
-On Windows, CodeLLDB/LLDB may implement a requested pause through `DebugBreak`. The raw DAP stop can therefore look like:
+Requirements:
 
-```text
-requestedAction: pause
-stopped.reason: exception
-stopped.description: Exception 0x80000003 ...
-```
+- Node.js 20+
+- npm
 
-When `requestedAction` is `pause`, that raw `0x80000003` is the debugger's pause mechanism by itself, not proof that the application independently crashed.
-
-This rule is different from a crash dump: a dump's captured exception context came from the crashed process and is treated as postmortem evidence.
-
-## CodeLLDB requirements and discovery
-
-CodeLLDB **1.11.0 or newer** is required for direct stdio DAP support.
-
-The bridge searches, in order, through:
-
-- explicit `adapterPath`,
-- `CODELLDB_PATH`,
-- VS Code extension directories,
-- VS Code Insiders,
-- Cursor,
-- Windsurf,
-- VS Code OSS,
-- `PATH`.
-
-For best source-level Windows results, keep the matching `.exe` and `.pdb` available for the analyzed build.
-
-## Development setup
+Run the complete project check:
 
 ```bash
-git clone https://github.com/SLP-DEV1/qwen-dap-mcp.git
-cd qwen-dap-mcp
 npm install --ignore-scripts
 npm run check
 ```
 
-For local extension development:
+`npm run check` performs TypeScript build, unit/integration tests, and extension-package staging.
 
-```bash
-qwen extensions link .
-```
+The CI matrix runs on Node 20 and Node 22. Additional workflows exercise real CodeLLDB on Windows, including a generated native minidump.
 
-Run the MCP server directly:
+## Safety model
 
-```bash
-npm start
-```
-
-## Testing
-
-The project currently uses several independent layers:
-
-- **CI / Node 20 + 22**: TypeScript build, unit tests, mock-DAP integration, Skill/manifest consistency, release packaging.
-- **CodeLLDB Windows Smoke**: real MSVC executable, breakpoints, watchpoints, snapshot, memory/disassembly/modules/registers/pause.
-- **CodeLLDB Windows Dump Smoke**: real generated Windows minidump opened through real CodeLLDB/DAP.
-- **Qwen Extension Package Smoke**: generated release archive is installed by Qwen Code.
-- **Release workflow**: only publishes a self-contained archive after build/install validation.
-
-## Safety posture
-
-- MCP transport is **stdio only**.
-- DAP adapters are spawned with `shell: false`.
-- `runInTerminal` reverse requests are rejected by default.
-- The extension does not bypass Qwen's MCP trust/consent flow.
-- `debug_read_memory` is read-only and bounded to at most 64 KiB per call.
-- No memory-write MCP tool is exposed.
-- Postmortem sessions block resumable execution controls.
-- Launch/attach/inspection is intended only for software, processes and crash artifacts the user is authorized to debug.
-
-## Current limitations
-
-- CodeLLDB is currently the only built-in debugger profile.
-- No multi-session support yet.
-- No automatic symbol-server downloading yet.
-- Linux core-dump CI is not yet added.
-- No remote HTTP MCP listener.
-- No memory-write tool.
-- No Qwen Code core patches are required; this remains an MCP-first extension.
-
-## Roadmap
-
-### v0.6 — installable extension ✅
-
-- self-contained GitHub Release archive ✅
-- direct `qwen extensions install SLP-DEV1/qwen-dap-mcp` ✅
-- Qwen archive-install smoke test ✅
-
-### v0.7 — postmortem debugging ✅
-
-- `debug_open_dump` ✅
-- matching executable + source-map support ✅
-- frozen postmortem session guard ✅
-- real Windows minidump generation ✅
-- real CodeLLDB minidump inspection CI ✅
-- Qwen Skill postmortem workflow ✅
-
-### Next
-
-- Linux ELF core-dump CI and adapter validation
-- symbol/PDB discovery improvements
-- module + RVA + source/symbol correlation helpers
-- multi-session support
-- MCP stepping-latency / event-streaming measurements
-- native-bug benchmark suite for agent diagnosis and fix verification
+- local stdio MCP transport only,
+- no built-in remote HTTP debugger service,
+- no bearer-auth layer is needed while transport remains stdio-only,
+- no arbitrary memory-write MCP primitive,
+- live attach is intended only for authorized local targets,
+- postmortem dumps are explicitly frozen against execution-control operations,
+- Qwen MCP trust review is not bypassed by the extension manifest.
 
 ## License
 
-Apache-2.0
+See `LICENSE`.
