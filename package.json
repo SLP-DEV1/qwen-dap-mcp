@@ -1,6 +1,6 @@
 {
   "name": "qwen-dap-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A small DAP-to-MCP bridge for agentic runtime debugging, designed to work with Qwen Code and other MCP clients.",
   "type": "module",
   "bin": {
@@ -14,7 +14,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test test/dap-session.test.ts",
+    "test": "tsx --test test/*.test.ts",
+    "test:codelldb:real": "tsx test/codelldb-real-smoke.ts",
     "check": "npm run build && npm test",
     "start": "node dist/index.js"
   },
@@ -27,6 +28,8 @@
     "dap",
     "debug-adapter-protocol",
     "debugger",
+    "codelldb",
+    "lldb",
     "qwen-code",
     "agentic-debugging"
   ],
