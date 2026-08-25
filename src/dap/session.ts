@@ -277,7 +277,7 @@ export class DapSession {
     memoryReference: string,
     count: number,
     offset = 0,
-  ): Promise<DebugProtocol.ReadMemoryResponse['body']> {
+  ): Promise<NonNullable<DebugProtocol.ReadMemoryResponse['body']>> {
     this.assertConfigured();
     this.assertCapability('supportsReadMemoryRequest', 'readMemory');
     const response = await this.connection.sendRequest(
@@ -285,7 +285,7 @@ export class DapSession {
       { memoryReference, count, offset } satisfies DebugProtocol.ReadMemoryArguments,
       this.requestTimeoutMs,
     );
-    return (response.body ?? { address: memoryReference }) as DebugProtocol.ReadMemoryResponse['body'];
+    return (response.body ?? { address: memoryReference }) as NonNullable<DebugProtocol.ReadMemoryResponse['body']>;
   }
 
   async exceptionInfo(threadId: number): Promise<DebugProtocol.ExceptionInfoResponse['body']> {
