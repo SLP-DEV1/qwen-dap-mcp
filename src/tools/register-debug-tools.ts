@@ -1,6 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 
+import {
+  buildCodeLldbAttachConfiguration,
+  buildCodeLldbLaunchConfiguration,
+  discoverCodeLldb,
+} from '../adapters/codelldb.js';
 import { DapSession } from '../dap/session.js';
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -36,6 +41,100 @@ function wrap<TArgs extends Record<string, unknown>>(
 }
 
 export function registerDebugTools(server: McpServer, session: DapSession): void {
+  server.registerTool(
+    'debug_codelldb_info',
+    {
+      title: 'Locate CodeLLDB',
+      description:
+        'Locate a CodeLLDB >= 1.11.0 adapter from an explicit path, CODELLDB_PATH, common VS Code-compatible extension directories, or PATH.',
+      inputSchema: z.object({
+        adapterPath: z.string().min(1).optional(),
+      }),
+    },
+    wrap(async ({ adapterPath }) =>
+      discoverCodeLldb({ ...(adapterPath ? { explicitPath: adapterPath as string } : {}) }),
+    ),
+  );
+
+  server.registerTool(
+    'debug_start_codelldb',
+    {
+      title: 'Start CodeLLDB',
+      description:
+        'Auto-discover and initialize CodeLLDB using DAP over stdio. CodeLLDB 1.11.0 or newer is required.',
+      inputSchema: z.object({
+        adapterPath: z.string().min(1).optional(),
+        cwd: z.string().optional(),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).optional(),
+      }),
+    },
+    wrap(async ({ adapterPath, cwd, requestTimeoutMs }) => {
+      const adapter = discoverCodeLldb({
+        ...(adapterPath ? { explicitPath: adapterPath as string } : {}),
+      });
+      const capabilities = await session.start({
+        command: adapter.command,
+        adapterId: 'lldb',
+        ...(cwd ? { cwd: cwd as string } : {}),
+        ...(requestTimeoutMs ? { requestTimeoutMs: requestTimeoutMs as number } : {}),
+      });
+      return { adapter, capabilities, status: session.snapshot() };
+    }),
+  );
+
+  server.registerTool(
+    'debug_launch_codelldb',
+    {
+      title: 'Launch with CodeLLDB',
+      description:
+        'Launch a native program through an initialized CodeLLDB session. Uses terminal=console so no runInTerminal reverse request is required.',
+      inputSchema: z.object({
+        program: z.string().min(1),
+        args: z.array(z.string()).optional(),
+        cwd: z.string().optional(),
+        env: z.record(z.string(), z.string()).optional(),
+        stopOnEntry: z.boolean().default(false),
+        breakpoints: z.array(breakpointGroupSchema).optional(),
+      }),
+    },
+    wrap(async ({ program, args, cwd, env, stopOnEntry, breakpoints }) =>
+      session.launch(
+        buildCodeLldbLaunchConfiguration({
+          program: program as string,
+          ...(args ? { args: args as string[] } : {}),
+          ...(cwd ? { cwd: cwd as string } : {}),
+          ...(env ? { env: env as Record<string, string> } : {}),
+          stopOnEntry: stopOnEntry as boolean,
+        }),
+        (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'debug_attach_codelldb',
+    {
+      title: 'Attach with CodeLLDB',
+      description: 'Attach an initialized CodeLLDB session to an authorized local native process by PID.',
+      inputSchema: z.object({
+        pid: z.number().int().positive(),
+        program: z.string().min(1).optional(),
+        stopOnEntry: z.boolean().default(true),
+        breakpoints: z.array(breakpointGroupSchema).optional(),
+      }),
+    },
+    wrap(async ({ pid, program, stopOnEntry, breakpoints }) =>
+      session.attach(
+        buildCodeLldbAttachConfiguration({
+          pid: pid as number,
+          ...(program ? { program: program as string } : {}),
+          stopOnEntry: stopOnEntry as boolean,
+        }),
+        (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+      ),
+    ),
+  );
+
   server.registerTool(
     'debug_start',
     {
