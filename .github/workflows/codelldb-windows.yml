@@ -12,6 +12,7 @@ on:
       - 'test/fixtures/native-smoke.cpp'
       - '.github/workflows/codelldb-windows.yml'
       - 'package.json'
+      - 'tsconfig.json'
 
 jobs:
   real-codelldb:
