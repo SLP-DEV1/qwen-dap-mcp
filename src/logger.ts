@@ -24,24 +24,52 @@ function normalizeLogLevel(value: string | undefined): LogLevel {
   return 'info';
 }
 
-function stringifyLogRecord(record: Record<string, unknown>): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(record, (_key, value: unknown) => {
+function normalizeLogValue(value: unknown, ancestors: Set<object>): unknown {
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+
+  if (ancestors.has(value)) {
+    return '[Circular]';
+  }
+
+  ancestors.add(value);
+  try {
     if (value instanceof Error) {
       return {
         name: value.name,
         message: value.message,
         ...(value.stack ? { stack: value.stack } : {}),
-        ...('cause' in value && value.cause !== undefined ? { cause: value.cause } : {}),
+        ...('cause' in value && value.cause !== undefined
+          ? { cause: normalizeLogValue(value.cause, ancestors) }
+          : {}),
       };
     }
 
-    if (typeof value === 'object' && value !== null) {
-      if (seen.has(value)) return '[Circular]';
-      seen.add(value);
+    if (value instanceof Date) {
+      return value.toISOString();
     }
-    return value;
-  });
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeLogValue(item, ancestors));
+    }
+
+    const normalized: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      normalized[key] = normalizeLogValue(child, ancestors);
+    }
+    return normalized;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function stringifyLogRecord(record: Record<string, unknown>): string {
+  return JSON.stringify(normalizeLogValue(record, new Set<object>()));
 }
 
 export function createLogger(options: LoggerOptions = {}) {
