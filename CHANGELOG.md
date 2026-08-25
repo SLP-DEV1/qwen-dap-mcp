@@ -2,6 +2,24 @@
 
 All notable prototype milestones are documented here.
 
+## 0.7.0
+
+### Added
+
+- `debug_open_dump` for read-only postmortem analysis of LLDB-supported core/minidump files through CodeLLDB.
+- CodeLLDB dump configuration using the documented `target create -c <core>` attach flow with no live process attach.
+- Optional matching executable and `sourceMap` support for symbol/source resolution.
+- Immediate bounded snapshot after opening a dump, including stack, locals/registers, modules and disassembly when available.
+- Dedicated Windows minidump fixture that writes a real `.dmp` with `MiniDumpWriteDump` after an intentional access violation.
+- Real CodeLLDB Windows dump CI that opens the generated minidump and validates thread/stack/source/instruction/module/disassembly recovery.
+- Postmortem workflow guidance in the bundled `native-runtime-debug` Skill.
+
+### Safety / semantics
+
+- Dump sessions are explicitly treated as frozen read-only postmortem state.
+- The Skill tells agents not to continue, step, pause, or use watchpoint workflows on a dump session.
+- Verification after a dump diagnosis still requires rebuilding and reproducing the original scenario or analyzing a newly generated dump.
+
 ## 0.6.0
 
 ### Added
