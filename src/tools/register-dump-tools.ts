@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 
 import { discoverCodeLldb } from '../adapters/codelldb.js';
 import { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';
-import { DapSession } from '../dap/session.js';
+import { GuardedDapSession } from '../dap/guarded-session.js';
 
 function result(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
@@ -24,7 +24,7 @@ function wrap<TArgs extends Record<string, unknown>>(handler: (args: TArgs) => P
   };
 }
 
-export function registerDumpTools(server: McpServer, session: DapSession): void {
+export function registerDumpTools(server: McpServer, session: GuardedDapSession): void {
   server.registerTool(
     'debug_open_dump',
     {
@@ -76,6 +76,7 @@ export function registerDumpTools(server: McpServer, session: DapSession): void 
         ...(sourceMap ? { sourceMap: sourceMap as Record<string, string> } : {}),
       });
       const attach = await session.attach(configuration);
+      session.markPostmortem();
 
       const snapshot = await session.runtimeSnapshot({
         ...(threadId === undefined ? {} : { threadId: threadId as number }),
@@ -98,8 +99,9 @@ export function registerDumpTools(server: McpServer, session: DapSession): void 
         snapshot,
         guidance: {
           canInspect: ['threads', 'stack', 'scopes', 'variables', 'registers', 'modules', 'memory', 'disassembly'],
+          blockedOperations: ['continue', 'step', 'pause', 'data breakpoints'],
           cannotResume: true,
-          note: 'A crash dump is frozen state. Do not use continue, step, pause, or watchpoint workflows on this session.',
+          note: 'A crash dump is frozen state. Live execution-control operations are rejected by the session guard.',
         },
       };
     }),

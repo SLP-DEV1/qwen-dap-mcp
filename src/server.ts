@@ -1,11 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/server';
 
-import { DapSession } from './dap/session.js';
+import { GuardedDapSession } from './dap/guarded-session.js';
 import { registerDebugTools } from './tools/register-debug-tools.js';
 import { registerDumpTools } from './tools/register-dump-tools.js';
 
 export function createServer(): McpServer {
-  const session = new DapSession();
+  const session = new GuardedDapSession();
   const server = new McpServer(
     {
       name: 'qwen-dap-mcp',
