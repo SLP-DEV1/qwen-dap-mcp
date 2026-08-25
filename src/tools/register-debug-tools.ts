@@ -40,6 +40,14 @@ function wrap<TArgs extends Record<string, unknown>>(
   };
 }
 
+function bytesToHex(data: string | undefined): string | undefined {
+  if (!data) return undefined;
+  return Buffer.from(data, 'base64')
+    .toString('hex')
+    .match(/.{1,2}/g)
+    ?.join(' ');
+}
+
 export function registerDebugTools(server: McpServer, session: DapSession): void {
   server.registerTool(
     'debug_codelldb_info',
@@ -331,6 +339,123 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
         frameId as number | undefined,
         context as 'watch' | 'repl' | 'hover' | 'clipboard' | 'variables',
       ),
+    ),
+  );
+
+  server.registerTool(
+    'debug_modules',
+    {
+      title: 'List Loaded Modules',
+      description: 'List loaded executable images and libraries when the adapter supports the DAP modules request.',
+      inputSchema: z.object({
+        startModule: z.number().int().nonnegative().default(0),
+        moduleCount: z.number().int().positive().max(1000).default(100),
+      }),
+    },
+    wrap(async ({ startModule, moduleCount }) =>
+      session.modules(startModule as number, moduleCount as number),
+    ),
+  );
+
+  server.registerTool(
+    'debug_disassemble',
+    {
+      title: 'Disassemble Memory',
+      description: 'Disassemble instructions around a DAP memoryReference such as a stack frame instruction pointer.',
+      inputSchema: z.object({
+        memoryReference: z.string().min(1),
+        instructionCount: z.number().int().positive().max(500).default(20),
+        instructionOffset: z.number().int().min(-500).max(500).default(0),
+        offset: z.number().int().min(-1048576).max(1048576).default(0),
+        resolveSymbols: z.boolean().default(true),
+      }),
+    },
+    wrap(async ({ memoryReference, instructionCount, instructionOffset, offset, resolveSymbols }) =>
+      session.disassemble(
+        memoryReference as string,
+        instructionCount as number,
+        instructionOffset as number,
+        offset as number,
+        resolveSymbols as boolean,
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'debug_read_memory',
+    {
+      title: 'Read Debuggee Memory',
+      description:
+        'Read a bounded memory range through DAP. Returns the adapter response plus a convenient hexadecimal rendering of readable bytes.',
+      inputSchema: z.object({
+        memoryReference: z.string().min(1),
+        count: z.number().int().positive().max(65536),
+        offset: z.number().int().min(-16777216).max(16777216).default(0),
+      }),
+    },
+    wrap(async ({ memoryReference, count, offset }) => {
+      const memory = await session.readMemory(
+        memoryReference as string,
+        count as number,
+        offset as number,
+      );
+      return {
+        ...memory,
+        ...(bytesToHex(memory.data) ? { hex: bytesToHex(memory.data) } : {}),
+      };
+    }),
+  );
+
+  server.registerTool(
+    'debug_exception_info',
+    {
+      title: 'Read Exception Information',
+      description: 'Read structured exception information for a stopped thread when supported by the active adapter.',
+      inputSchema: z.object({ threadId: z.number().int().positive() }),
+    },
+    wrap(async ({ threadId }) => session.exceptionInfo(threadId as number)),
+  );
+
+  server.registerTool(
+    'debug_snapshot',
+    {
+      title: 'Capture Runtime Debug Snapshot',
+      description:
+        'Capture one bounded agent-friendly runtime snapshot: stopped reason, selected thread, stack, top frame, scopes, locals, registers, and optional disassembly/modules/exception info.',
+      inputSchema: z.object({
+        threadId: z.number().int().positive().optional(),
+        stackLevels: z.number().int().positive().max(100).default(12),
+        maxVariablesPerScope: z.number().int().positive().max(500).default(100),
+        includeDisassembly: z.boolean().default(true),
+        disassembleBefore: z.number().int().nonnegative().max(100).default(8),
+        disassembleAfter: z.number().int().nonnegative().max(100).default(12),
+        includeModules: z.boolean().default(false),
+        moduleCount: z.number().int().positive().max(500).default(50),
+        includeExceptionInfo: z.boolean().default(true),
+      }),
+    },
+    wrap(async ({
+      threadId,
+      stackLevels,
+      maxVariablesPerScope,
+      includeDisassembly,
+      disassembleBefore,
+      disassembleAfter,
+      includeModules,
+      moduleCount,
+      includeExceptionInfo,
+    }) =>
+      session.runtimeSnapshot({
+        ...(threadId === undefined ? {} : { threadId: threadId as number }),
+        stackLevels: stackLevels as number,
+        maxVariablesPerScope: maxVariablesPerScope as number,
+        includeDisassembly: includeDisassembly as boolean,
+        disassembleBefore: disassembleBefore as number,
+        disassembleAfter: disassembleAfter as number,
+        includeModules: includeModules as boolean,
+        moduleCount: moduleCount as number,
+        includeExceptionInfo: includeExceptionInfo as boolean,
+      }),
     ),
   );
 
