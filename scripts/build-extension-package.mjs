@@ -37,9 +37,6 @@ const result = await build({
   minify: false,
   legalComments: 'none',
   metafile: true,
-  banner: {
-    js: '#!/usr/bin/env node',
-  },
 });
 
 const builtinNames = new Set(
