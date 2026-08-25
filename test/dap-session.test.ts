@@ -6,7 +6,7 @@ import { DapSession } from '../src/dap/session.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/mock-dap-adapter.mjs', import.meta.url));
 
-test('runs a minimal DAP debug workflow end-to-end', async (t) => {
+test('runs a rich DAP debug workflow end-to-end', async (t) => {
   const session = new DapSession();
   t.after(async () => session.reset());
 
@@ -22,12 +22,37 @@ test('runs a minimal DAP debug workflow end-to-end', async (t) => {
   assert.equal(capabilities.supportsDisassembleRequest, true);
   assert.equal(capabilities.supportsReadMemoryRequest, true);
   assert.equal(capabilities.supportsExceptionInfoRequest, true);
+  assert.equal(capabilities.supportsConditionalBreakpoints, true);
+  assert.equal(capabilities.supportsFunctionBreakpoints, true);
+  assert.equal(capabilities.supportsInstructionBreakpoints, true);
+  assert.equal(capabilities.supportsDataBreakpoints, true);
+
+  const exceptionBreakpoints = await session.setExceptionBreakpoints(
+    ['mock_throw'],
+    [{ filterId: 'mock_throw', condition: 'answer == 42' }],
+  );
+  assert.equal(exceptionBreakpoints[0]?.verified, true);
 
   const launch = await session.launch(
     { program: '/tmp/fake-app' },
     [{ source: '/tmp/main.cpp', lines: [42] }],
   );
   assert.equal((launch as { request: string }).request, 'launch');
+
+  const advancedSource = await session.setSourceBreakpoints('/tmp/main.cpp', [
+    { line: 42, condition: 'answer == 42', hitCondition: '>= 2', logMessage: 'answer={answer}' },
+  ]);
+  assert.equal(advancedSource[0]?.verified, true);
+  assert.equal(advancedSource[0]?.line, 42);
+
+  const functions = await session.setFunctionBreakpoints([{ name: 'main', condition: 'answer == 42' }]);
+  assert.equal(functions[0]?.verified, true);
+
+  const instructions = await session.setInstructionBreakpoints([
+    { instructionReference: '0x1000', condition: 'answer == 42' },
+  ]);
+  assert.equal(instructions[0]?.verified, true);
+  assert.equal(instructions[0]?.instructionReference, '0x1000');
 
   const threads = await session.threads();
   assert.deepEqual(threads, [{ id: 1, name: 'main' }]);
@@ -45,6 +70,15 @@ test('runs a minimal DAP debug workflow end-to-end', async (t) => {
   assert.equal(variables[0]?.name, 'answer');
   assert.equal(variables[0]?.value, '42');
 
+  const dataInfo = await session.dataBreakpointInfo('answer', 200, 100);
+  assert.equal(dataInfo.dataId, 'mock:answer');
+  assert.deepEqual(dataInfo.accessTypes, ['read', 'write', 'readWrite']);
+
+  const dataBreakpoints = await session.setDataBreakpoints([
+    { dataId: dataInfo.dataId ?? 'mock:answer', accessType: 'write', condition: 'answer >= 0' },
+  ]);
+  assert.equal(dataBreakpoints[0]?.verified, true);
+
   const registers = await session.variables(300);
   assert.equal(registers[0]?.name, 'rip');
   assert.equal(registers[0]?.value, '0x1000');
@@ -55,9 +89,9 @@ test('runs a minimal DAP debug workflow end-to-end', async (t) => {
   const modules = await session.modules();
   assert.equal(modules[0]?.name, 'fake-app');
 
-  const instructions = await session.disassemble('0x1000', 3, -1);
-  assert.equal(instructions.length, 3);
-  assert.equal(instructions[0]?.instruction, 'nop');
+  const disassembly = await session.disassemble('0x1000', 3, -1);
+  assert.equal(disassembly.length, 3);
+  assert.equal(disassembly[0]?.instruction, 'nop');
 
   const memory = await session.readMemory('0x1000', 4);
   assert.deepEqual([...Buffer.from(memory.data ?? '', 'base64')], [0x90, 0x90, 0xcc, 0xc3]);
@@ -73,14 +107,13 @@ test('runs a minimal DAP debug workflow end-to-end', async (t) => {
   assert.equal(snapshot.disassembly?.length, 21);
   assert.equal(snapshot.modules?.[0]?.name, 'fake-app');
 
-  const continued = await session.continueExecution(1, true, 1_000) as {
-    stopped: { reason: string };
-  };
+  const paused = await session.pause(1, true, 1_000) as { stopped: { reason: string } };
+  assert.equal(paused.stopped.reason, 'pause');
+
+  const continued = await session.continueExecution(1, true, 1_000) as { stopped: { reason: string } };
   assert.equal(continued.stopped.reason, 'breakpoint');
 
-  const stepped = await session.step('next', 1, true, 1_000) as {
-    stopped: { reason: string };
-  };
+  const stepped = await session.step('next', 1, true, 1_000) as { stopped: { reason: string } };
   assert.equal(stepped.stopped.reason, 'step');
 
   await session.disconnect(true);
