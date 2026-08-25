@@ -9,18 +9,20 @@ function write(message) {
 }
 
 function response(request, body = {}) {
-  write({
-    seq: seq++,
-    type: 'response',
-    request_seq: request.seq,
-    success: true,
-    command: request.command,
-    body,
-  });
+  write({ seq: seq++, type: 'response', request_seq: request.seq, success: true, command: request.command, body });
 }
 
 function event(name, body = {}) {
   write({ seq: seq++, type: 'event', event: name, body });
+}
+
+function verifiedBreakpoints(items = []) {
+  return items.map((item, index) => ({
+    id: index + 1,
+    verified: true,
+    ...(item.line ? { line: item.line } : {}),
+    ...(item.instructionReference ? { instructionReference: item.instructionReference } : {}),
+  }));
 }
 
 function handle(request) {
@@ -33,6 +35,15 @@ function handle(request) {
         supportsDisassembleRequest: true,
         supportsReadMemoryRequest: true,
         supportsExceptionInfoRequest: true,
+        supportsConditionalBreakpoints: true,
+        supportsHitConditionalBreakpoints: true,
+        supportsLogPoints: true,
+        supportsFunctionBreakpoints: true,
+        supportsInstructionBreakpoints: true,
+        supportsDataBreakpoints: true,
+        exceptionBreakpointFilters: [
+          { filter: 'mock_throw', label: 'Mock throw', default: false, supportsCondition: true },
+        ],
       });
       break;
     case 'launch':
@@ -41,12 +52,28 @@ function handle(request) {
       event('initialized');
       break;
     case 'setBreakpoints':
+      response(request, { breakpoints: verifiedBreakpoints(request.arguments?.breakpoints ?? []) });
+      break;
+    case 'setFunctionBreakpoints':
+      response(request, { breakpoints: verifiedBreakpoints(request.arguments?.breakpoints ?? []) });
+      break;
+    case 'setInstructionBreakpoints':
+      response(request, { breakpoints: verifiedBreakpoints(request.arguments?.breakpoints ?? []) });
+      break;
+    case 'dataBreakpointInfo':
       response(request, {
-        breakpoints: (request.arguments?.breakpoints ?? []).map((bp, index) => ({
-          id: index + 1,
-          verified: true,
-          line: bp.line,
-        })),
+        dataId: `mock:${request.arguments?.name ?? 'value'}`,
+        description: `Mock watchpoint for ${request.arguments?.name ?? 'value'}`,
+        accessTypes: ['read', 'write', 'readWrite'],
+        canPersist: true,
+      });
+      break;
+    case 'setDataBreakpoints':
+      response(request, { breakpoints: verifiedBreakpoints(request.arguments?.breakpoints ?? []) });
+      break;
+    case 'setExceptionBreakpoints':
+      response(request, {
+        breakpoints: (request.arguments?.filters ?? []).map((filter, index) => ({ id: index + 1, verified: true, message: filter })),
       });
       break;
     case 'configurationDone':
@@ -62,17 +89,15 @@ function handle(request) {
       break;
     case 'stackTrace':
       response(request, {
-        stackFrames: [
-          {
-            id: 100,
-            name: 'main',
-            source: { name: 'main.cpp', path: '/tmp/main.cpp' },
-            line: 42,
-            column: 1,
-            instructionPointerReference: '0x1000',
-            moduleId: 'mock-main',
-          },
-        ],
+        stackFrames: [{
+          id: 100,
+          name: 'main',
+          source: { name: 'main.cpp', path: '/tmp/main.cpp' },
+          line: 42,
+          column: 1,
+          instructionPointerReference: '0x1000',
+          moduleId: 'mock-main',
+        }],
         totalFrames: 1,
       });
       break;
@@ -93,9 +118,7 @@ function handle(request) {
           ],
         });
       } else {
-        response(request, {
-          variables: [{ name: 'answer', value: '42', type: 'int', variablesReference: 0 }],
-        });
+        response(request, { variables: [{ name: 'answer', value: '42', type: 'int', variablesReference: 0 }] });
       }
       break;
     case 'evaluate':
@@ -103,15 +126,7 @@ function handle(request) {
       break;
     case 'modules':
       response(request, {
-        modules: [
-          {
-            id: 'mock-main',
-            name: 'fake-app',
-            path: '/tmp/fake-app',
-            addressRange: '0x1000-0x1fff',
-            symbolStatus: 'Symbols loaded',
-          },
-        ],
+        modules: [{ id: 'mock-main', name: 'fake-app', path: '/tmp/fake-app', addressRange: '0x1000-0x1fff', symbolStatus: 'Symbols loaded' }],
         totalModules: 1,
       });
       break;
@@ -146,6 +161,10 @@ function handle(request) {
         details: { message: 'Mock exception details' },
       });
       break;
+    case 'pause':
+      response(request);
+      setTimeout(() => event('stopped', { reason: 'pause', threadId: request.arguments?.threadId ?? 1, allThreadsStopped: true }), 5);
+      break;
     case 'continue':
     case 'next':
     case 'stepIn':
@@ -164,11 +183,7 @@ function handle(request) {
       break;
     default:
       write({
-        seq: seq++,
-        type: 'response',
-        request_seq: request.seq,
-        success: false,
-        command: request.command,
+        seq: seq++, type: 'response', request_seq: request.seq, success: false, command: request.command,
         message: `Unsupported mock command: ${request.command}`,
       });
   }
