@@ -52,3 +52,25 @@ jobs:
           qwen extensions install "$PWD/release/qwen-dap-mcp.tar.gz" --consent
           qwen extensions list | tee release/qwen-extensions-list.txt
           grep -F 'qwen-dap-mcp' release/qwen-extensions-list.txt
+
+  published-release-install:
+    runs-on: ubuntu-latest
+    env:
+      QWEN_CODE_SMOKE_VERSION: '0.22.0'
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Qwen Code
+        run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
+
+      - name: Install latest published GitHub release
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/qwen-published-release-home"
+          mkdir -p "$HOME"
+          qwen --version
+          qwen extensions install SLP-DEV1/qwen-dap-mcp --consent
+          qwen extensions list | tee "$RUNNER_TEMP/qwen-published-extensions-list.txt"
+          grep -F 'qwen-dap-mcp' "$RUNNER_TEMP/qwen-published-extensions-list.txt"
