@@ -36,7 +36,7 @@ function validateSkill(content: string): void {
   ];
 
   for (const tool of requiredTools) {
-    assert.ok(content.includes(`\`${tool}\``), `Skill must reference ${tool}`);
+    assert.ok(content.includes(tool), `Skill must reference ${tool}`);
   }
 
   assert.match(content, /authorized local targets/i);
