@@ -1,0 +1,68 @@
+name: CodeLLDB Windows Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/adapters/codelldb.ts'
+      - 'src/tools/register-debug-tools.ts'
+      - 'test/codelldb-real-smoke.ts'
+      - 'test/codelldb-profile.test.ts'
+      - 'test/fixtures/native-smoke.cpp'
+      - '.github/workflows/codelldb-windows.yml'
+      - 'package.json'
+
+jobs:
+  real-codelldb:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build and unit test bridge
+        run: npm run check
+
+      - name: Build native C++ smoke target with debug symbols
+        shell: pwsh
+        run: |
+          cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
+
+      - name: Download latest CodeLLDB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'qwen-dap-mcp-ci' }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/vadimcn/codelldb/releases/latest'
+          $asset = $release.assets | Where-Object {
+            $_.name -match '^codelldb-(win32-x64|x86_64-windows)\.vsix$'
+          } | Select-Object -First 1
+          if (-not $asset) {
+            throw "No Windows x64 CodeLLDB VSIX found in latest release $($release.tag_name)"
+          }
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile codelldb.vsix
+          Copy-Item codelldb.vsix codelldb.zip
+          Expand-Archive -Path codelldb.zip -DestinationPath .codelldb -Force
+          $adapter = Get-ChildItem .codelldb -Recurse -Filter codelldb.exe |
+            Where-Object { $_.FullName -match '[\\/]adapter[\\/]codelldb\.exe$' } |
+            Select-Object -First 1
+          if (-not $adapter) {
+            throw 'codelldb.exe was not found inside the VSIX'
+          }
+          "CODELLDB_PATH=$($adapter.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using CodeLLDB $($release.tag_name): $($adapter.FullName)"
+
+      - name: Run real DAP smoke test
+        shell: pwsh
+        run: |
+          npx tsx test/codelldb-real-smoke.ts `
+            --adapter "$env:CODELLDB_PATH" `
+            --program "$pwd\test\fixtures\native-smoke.exe" `
+            --source "$pwd\test\fixtures\native-smoke.cpp"
