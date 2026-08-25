@@ -26,9 +26,9 @@ The easiest route is to install the `vadimcn.vscode-lldb` extension in VS Code. 
 
 You can also pass an explicit `adapterPath` to `debug_codelldb_info` or `debug_start_codelldb`.
 
-## Qwen Code workflow
+## Recommended Qwen Code workflow
 
-After adding this MCP server to Qwen Code, a basic native debugging sequence is:
+After adding this MCP server to Qwen Code, the preferred v0.3 sequence is:
 
 ```text
 1. debug_codelldb_info()
@@ -39,13 +39,27 @@ After adding this MCP server to Qwen Code, a basic native debugging sequence is:
        { source="C:\\project\\src\\main.cpp", lines=[42] }
      ]
    )
-4. debug_threads()
-5. debug_stack(threadId=...)
-6. debug_scopes(frameId=...)
-7. debug_variables(variablesReference=...)
-8. debug_evaluate(expression="someVariable", frameId=...)
-9. debug_step(action="next", threadId=...)
-10. debug_disconnect()
+4. debug_snapshot(includeModules=true)
+5. debug_evaluate(expression="someVariable", frameId=...)
+6. debug_step(action="next", threadId=...)
+7. debug_snapshot()
+8. debug_continue(threadId=...)
+9. debug_disconnect()
+```
+
+`debug_snapshot` is designed for agent use. In one bounded request it collects the current stopped reason, selected thread, stack, top frame, source location, locals, registers, disassembly around the instruction pointer, optional modules, and exception information when the current stop was caused by an exception.
+
+The lower-level tools remain useful for focused follow-up inspection:
+
+```text
+debug_threads()
+debug_stack(threadId=...)
+debug_scopes(frameId=...)
+debug_variables(variablesReference=...)
+debug_modules()
+debug_disassemble(memoryReference=...)
+debug_read_memory(memoryReference=..., count=32)
+debug_exception_info(threadId=...)
 ```
 
 The CodeLLDB launch helper forces `terminal: "console"`. This is intentional: the bridge does not execute DAP `runInTerminal` reverse requests, so debugger-controlled program I/O stays inside the DAP session.
@@ -57,9 +71,23 @@ For software you are authorized to debug:
 ```text
 1. debug_start_codelldb()
 2. debug_attach_codelldb(pid=12345, program="C:\\project\\build\\app.exe")
-3. debug_threads()
-4. debug_stack(threadId=...)
+3. debug_snapshot(includeModules=true)
 ```
+
+## Native inspection support
+
+The current CodeLLDB profile exposes standard DAP requests for:
+
+- threads and stack frames,
+- scopes and variables,
+- expression evaluation,
+- loaded modules,
+- disassembly,
+- bounded memory reads,
+- structured exception information,
+- registers through CodeLLDB's standard `Registers` scope.
+
+`debug_read_memory` is read-only and capped at 64 KiB per MCP call. The bridge does not expose a memory-write MCP tool.
 
 ## Real integration test
 
@@ -71,12 +99,26 @@ The Windows GitHub Actions workflow:
 2. compiles the C++ fixture with MSVC debug symbols,
 3. downloads the latest CodeLLDB Windows x64 release,
 4. starts the real CodeLLDB adapter over stdio,
-5. sets a source breakpoint,
-6. waits for the stopped event,
-7. reads threads and stack frames,
-8. expands local variables,
-9. evaluates `counter`,
-10. resumes and disconnects.
+5. sets and hits a source breakpoint,
+6. validates thread and stack state,
+7. reads local variables,
+8. evaluates `counter`,
+9. enumerates loaded modules,
+10. disassembles around the current instruction pointer,
+11. reads executable memory,
+12. captures and validates a combined runtime snapshot,
+13. resumes and disconnects.
+
+A representative successful run with CodeLLDB 1.12.3 produced:
+
+```text
+local variables:    delta, counter
+counter:            35
+loaded modules:     5
+disassembly:        11 instructions
+memory read:        16 bytes
+snapshot registers: 2 entries
+```
 
 This verifies the bridge against a real native debugger rather than only the mock DAP adapter.
 
