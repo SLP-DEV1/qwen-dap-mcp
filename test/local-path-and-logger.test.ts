@@ -78,6 +78,40 @@ test('structured logger filters by level and emits parseable records', () => {
   assert.equal(error.message, 'visible error');
 });
 
+test('structured logger preserves shared non-circular object references', () => {
+  const lines: string[] = [];
+  const log = createLogger({ level: 'info', sink: (line) => lines.push(line) });
+  const shared = { userId: 123, path: '/tmp/x' };
+
+  log.info('diamond reference', { a: shared, b: shared });
+
+  const record = JSON.parse(lines[0] ?? '{}') as {
+    fields?: { a?: unknown; b?: unknown };
+  };
+  assert.deepEqual(record.fields?.a, shared);
+  assert.deepEqual(record.fields?.b, shared);
+});
+
+test('structured logger marks only true ancestor cycles as circular', () => {
+  const lines: string[] = [];
+  const log = createLogger({ level: 'info', sink: (line) => lines.push(line) });
+  const cyclic: { name: string; self?: unknown } = { name: 'root' };
+  cyclic.self = cyclic;
+  const error = new Error('boom') as Error & { cause?: unknown };
+  error.cause = error;
+
+  log.info('real cycles', { cyclic, error });
+
+  const record = JSON.parse(lines[0] ?? '{}') as {
+    fields?: {
+      cyclic?: { self?: unknown };
+      error?: { cause?: unknown };
+    };
+  };
+  assert.equal(record.fields?.cyclic?.self, '[Circular]');
+  assert.equal(record.fields?.error?.cause, '[Circular]');
+});
+
 test('structured logger supports silent mode', () => {
   const lines: string[] = [];
   const log = createLogger({ level: 'silent', sink: (line) => lines.push(line) });
