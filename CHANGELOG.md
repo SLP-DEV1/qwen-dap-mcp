@@ -2,6 +2,29 @@
 
 All notable prototype milestones are documented here.
 
+## 0.7.1
+
+### Fixed
+
+- Serialized shared DAP lifecycle mutations across `start`, `launch`, `attach`, `disconnect`, `reset`, and crash-dump opening so concurrent MCP requests cannot race the same adapter/session state.
+- Made compound lifecycle operations reentrant, allowing internal flows such as `start -> reset` and `open dump -> start -> attach` without self-deadlock.
+- Hardened adapter shutdown so a process that was signalled but has not actually exited is escalated to `SIGKILL` instead of being mistaken for an exited process.
+- Added centralized local filesystem validation for CodeLLDB program images, crash dumps, explicit adapter paths, and local adapter working directories.
+- Relative paths, including legitimate `..` segments, are normalized with the platform path resolver instead of being blanket-blocked.
+- Missing files/directories and wrong path kinds now fail before contacting the debugger with contextual error messages.
+
+### Added
+
+- Structured stderr-only logging with `debug`, `info`, `warn`, `error`, and `silent` levels controlled by `QWEN_DAP_LOG_LEVEL`.
+- DAP lifecycle, adapter process, protocol, and local-path validation diagnostics routed through the centralized logger without contaminating MCP stdout.
+- Regression coverage for lifecycle concurrency/reentrancy, forced adapter termination, path normalization and validation, CodeLLDB launch validation, logger filtering, and silent mode.
+
+### Security / compatibility
+
+- Generic DAP `configuration` objects remain adapter-defined and are not forced through local filesystem checks, preserving support for remote and custom adapters.
+- The MCP transport remains stdio-only with no HTTP listener; bearer-token authentication is therefore not applicable to the current transport.
+- Closes the hardening work tracked in issue #1.
+
 ## 0.7.0
 
 ### Added
