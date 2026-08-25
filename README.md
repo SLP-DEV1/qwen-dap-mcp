@@ -36,7 +36,14 @@ The bridge is not tied to one language or debugger. It speaks standard DAP frami
 | `debug_start` | Spawn and initialize a generic DAP adapter |
 | `debug_launch` | Launch a target and complete DAP configuration |
 | `debug_attach` | Attach to an authorized target |
-| `debug_set_breakpoints` | Set source breakpoints |
+| `debug_set_breakpoints` | Set simple source-line breakpoints |
+| `debug_set_source_breakpoints` | Set conditional, hit-count and log source breakpoints |
+| `debug_set_function_breakpoints` | Set function breakpoints |
+| `debug_set_instruction_breakpoints` | Set instruction-address breakpoints |
+| `debug_data_breakpoint_info` | Resolve a debugger-specific dataId for a variable/watchpoint |
+| `debug_set_data_breakpoints` | Set data breakpoints / watchpoints |
+| `debug_set_exception_breakpoints` | Configure adapter-defined exception filters |
+| `debug_pause` | Pause a running target and preserve the raw DAP stop |
 | `debug_continue` | Continue and optionally wait for a stop |
 | `debug_step` | Step over / into / out |
 | `debug_threads` | List threads |
@@ -55,7 +62,7 @@ The bridge is not tied to one language or debugger. It speaks standard DAP frami
 
 ## `debug_snapshot`
 
-`debug_snapshot` is the preferred inspection primitive for an agent after a breakpoint, step, or exception. It reduces multiple debugger round trips into one bounded MCP result.
+`debug_snapshot` is the preferred inspection primitive for an agent after a breakpoint, step, watchpoint or exception. It reduces multiple debugger round trips into one bounded MCP result.
 
 By default it captures:
 
@@ -77,6 +84,93 @@ debug_snapshot(includeModules=true, moduleCount=50)
 ```
 
 The result is intentionally bounded with configurable stack, variable, module and disassembly limits so an agent does not accidentally pull an unbounded debugger state tree into context.
+
+## Advanced breakpoints and watchpoints
+
+v0.4 adds richer stop control using standard DAP requests.
+
+### Conditional / hit-count / log source breakpoints
+
+```text
+debug_set_source_breakpoints(
+  source="C:\\project\\src\\main.cpp",
+  breakpoints=[
+    {
+      line=42,
+      condition="counter > 10",
+      hitCondition=">= 3"
+    }
+  ]
+)
+```
+
+`logMessage` is also exposed for adapters that support DAP log points.
+
+### Function and instruction breakpoints
+
+```text
+debug_set_function_breakpoints(
+  breakpoints=[{ name="main" }]
+)
+
+debug_set_instruction_breakpoints(
+  breakpoints=[{ instructionReference="0x7ff612341234" }]
+)
+```
+
+### Data breakpoints / watchpoints
+
+DAP data breakpoints use a two-step flow because the debugger owns the stable data identifier:
+
+```text
+info = debug_data_breakpoint_info(
+  name="counter",
+  variablesReference=...,
+  frameId=...
+)
+
+debug_set_data_breakpoints(
+  breakpoints=[
+    { dataId=info.dataId, accessType="write" }
+  ]
+)
+```
+
+CodeLLDB currently advertises `read`, `write` and `readWrite` access modes for the real C++ test variable.
+
+### Exception filters
+
+```text
+debug_set_exception_breakpoints(
+  filters=["cpp_throw"]
+)
+```
+
+The exact filter IDs are adapter-defined and are advertised in the DAP initialize capabilities.
+
+### Clearing breakpoints
+
+DAP `set*Breakpoints` requests replace the corresponding breakpoint collection. Pass an empty array to clear that class of breakpoint:
+
+```text
+debug_set_function_breakpoints(breakpoints=[])
+debug_set_instruction_breakpoints(breakpoints=[])
+debug_set_data_breakpoints(breakpoints=[])
+```
+
+## Pause semantics
+
+`debug_pause` returns an explicit `requestedAction: "pause"` marker and preserves the raw DAP stopped event.
+
+On Windows, CodeLLDB/LLDB currently implements a pause through **DebugBreak**. The raw stop can therefore look like:
+
+```text
+requestedAction: pause
+stopped.reason: exception
+stopped.description: Exception 0x80000003 ...
+```
+
+That is a successful pause, not an application crash. Preserving the raw event is useful for debugging while the `requestedAction` field makes the user's/agent's intent unambiguous.
 
 ## CodeLLDB on Windows
 
@@ -102,10 +196,14 @@ Typical agent workflow:
    )
 4. debug_snapshot(includeModules=true)
 5. debug_evaluate(expression="value", frameId=...)
-6. debug_step(action="next", threadId=...)
-7. debug_snapshot()
-8. debug_continue(threadId=...)
-9. debug_disconnect()
+6. debug_set_source_breakpoints(...)
+7. debug_data_breakpoint_info(...)
+8. debug_set_data_breakpoints(...)
+9. debug_continue(threadId=...)
+10. debug_snapshot()
+11. debug_pause(threadId=...)
+12. debug_snapshot()
+13. debug_disconnect()
 ```
 
 The CodeLLDB launch helper forces `terminal: "console"`, keeping debuggee I/O inside DAP and avoiding `runInTerminal` reverse requests.
@@ -116,22 +214,46 @@ See [docs/CODELLDB_WINDOWS.md](docs/CODELLDB_WINDOWS.md) for setup and the real 
 
 The Windows integration workflow builds a small C++ program with MSVC debug symbols and drives a real CodeLLDB process over DAP stdio.
 
-The current v0.3 integration test verifies all of the following against CodeLLDB 1.12.x:
+The current v0.4 integration test verifies all of the following against CodeLLDB 1.12.x:
 
 - launch of an MSVC-built executable,
 - verified source breakpoint,
+- conditional/hit-count source breakpoint,
+- function breakpoint,
+- instruction breakpoint,
+- exception breakpoint configuration,
 - stopped event and thread selection,
 - source/line mapping and instruction pointer,
 - stack trace,
 - locals,
 - expression evaluation,
+- a real data breakpoint / hardware watchpoint,
 - loaded modules,
 - disassembly around the instruction pointer,
 - bounded memory reads,
 - register scope capture,
-- combined runtime snapshots.
+- combined runtime snapshots,
+- pause of a running Windows target, including CodeLLDB's raw DebugBreak semantics.
 
-A representative CI run captured 5 modules, 11 disassembled instructions, 16 bytes of executable memory, local variables `delta` and `counter`, and register state in a single snapshot workflow.
+A representative successful CI run with CodeLLDB 1.12.3 produced:
+
+```text
+initial counter:              35
+conditional source verified: true
+function breakpoint verified: true
+instruction breakpoint:      true
+watchpoint access modes:      read / write / readWrite
+watchpoint stop reason:       data breakpoint
+counter after watched write:  42
+loaded modules:               5
+disassembly:                  11 instructions
+memory read:                  16 bytes
+snapshot registers:           2 entries
+pause requestedAction:        pause
+raw Windows pause stop:       exception 0x80000003 (DebugBreak)
+```
+
+This verifies the bridge against a real native debugger rather than only the mock DAP adapter.
 
 ## Safety posture
 
@@ -144,6 +266,7 @@ This is a local debugging bridge, not a remote debugger service.
 - Keep the Qwen Code MCP entry **untrusted** (`trust: false`) so debugger tool calls remain reviewable.
 - `debug_evaluate` may have side effects depending on the debugger/language.
 - `debug_read_memory` is read-only and limited to at most 64 KiB per MCP call.
+- The bridge does not expose a memory-write MCP tool.
 - Use launch/attach/inspection tools only with software and processes you are authorized to debug.
 
 ## Requirements
@@ -206,25 +329,25 @@ Exact launch configuration is adapter-specific. A generic DAP-capable agent can 
 2. debug_launch(configuration={...}, breakpoints=[...])
 3. debug_snapshot()
 4. debug_evaluate(...)
-5. debug_step(...) or debug_continue(...)
-6. debug_snapshot()
-7. debug_disconnect()
+5. configure advanced breakpoints/watchpoints as needed
+6. debug_step(...) or debug_continue(...)
+7. debug_snapshot()
+8. debug_disconnect()
 ```
 
-The lower-level `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble` and `debug_read_memory` tools remain available when the agent needs targeted inspection.
+The lower-level thread, stack, scope, variable, module, disassembly and memory tools remain available when the agent needs targeted inspection.
 
 ## Testing
 
 Normal CI runs the TypeScript build, CodeLLDB profile tests, and an end-to-end mock DAP adapter test on Node 20 and 22.
 
-A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSVC debug symbols, downloads the latest Windows CodeLLDB release, starts `codelldb.exe` over stdio and validates the native inspection path. Changes to the DAP session, CodeLLDB profile, MCP tools, native smoke test or package metadata automatically trigger that workflow.
+A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSVC debug symbols, downloads the latest Windows CodeLLDB release, starts `codelldb.exe` over stdio and validates the native inspection and breakpoint-control paths. Changes to the DAP session, CodeLLDB profile, MCP tools, native smoke test or package metadata automatically trigger that workflow.
 
 ## Current limitations
 
 - No HTTP listener or remote exposure
 - No `runInTerminal` reverse-request execution
 - No memory-write MCP tool
-- No conditional/function/data/instruction-breakpoint MCP tools yet
 - No multi-session support yet
 - No crash-dump/core-dump workflow yet
 - No additional built-in debugger profile beyond CodeLLDB yet
@@ -242,16 +365,18 @@ A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSV
 - Bounded memory reads ✅
 - Exception information ✅
 - Agent-friendly runtime snapshot ✅
-- Real CI assertions for the advanced inspection path ✅
 
-### v0.4 — richer breakpoint and stop control
+### v0.4 — richer breakpoint and stop control ✅
 
-- Conditional breakpoints
-- Function breakpoints
-- Data breakpoints / watchpoints
-- Instruction breakpoints
-- Exception breakpoint configuration
-- Pause support
+- Conditional source breakpoints ✅
+- Hit-count breakpoints ✅
+- Log-point fields ✅
+- Function breakpoints ✅
+- Data breakpoints / hardware watchpoints ✅
+- Instruction breakpoints ✅
+- Exception breakpoint configuration ✅
+- Pause support with raw-stop preservation ✅
+- Real Windows assertions for conditional/function/instruction/data breakpoints and pause ✅
 
 ### v0.5 — agent workflow layer
 
@@ -263,7 +388,7 @@ A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSV
 
 ## Development status
 
-**Experimental, but backed by a real native integration test.** The generic protocol framing and session orchestration are covered by a mock DAP end-to-end test, while the CodeLLDB profile is exercised against a real MSVC-built C++ executable on GitHub Actions Windows runners.
+**Experimental, but backed by a real native integration test.** The generic protocol framing and session orchestration are covered by a mock DAP end-to-end test, while the CodeLLDB profile is exercised against a real MSVC-built C++ executable on GitHub Actions Windows runners, including hardware watchpoints and pause behavior.
 
 ## License
 
