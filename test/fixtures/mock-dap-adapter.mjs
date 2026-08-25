@@ -29,6 +29,10 @@ function handle(request) {
       response(request, {
         supportsConfigurationDoneRequest: true,
         supportsEvaluateForHovers: true,
+        supportsModulesRequest: true,
+        supportsDisassembleRequest: true,
+        supportsReadMemoryRequest: true,
+        supportsExceptionInfoRequest: true,
       });
       break;
     case 'launch':
@@ -65,6 +69,8 @@ function handle(request) {
             source: { name: 'main.cpp', path: '/tmp/main.cpp' },
             line: 42,
             column: 1,
+            instructionPointerReference: '0x1000',
+            moduleId: 'mock-main',
           },
         ],
         totalFrames: 1,
@@ -72,16 +78,73 @@ function handle(request) {
       break;
     case 'scopes':
       response(request, {
-        scopes: [{ name: 'Locals', variablesReference: 200, expensive: false }],
+        scopes: [
+          { name: 'Locals', variablesReference: 200, expensive: false },
+          { name: 'Registers', variablesReference: 300, expensive: false },
+        ],
       });
       break;
     case 'variables':
-      response(request, {
-        variables: [{ name: 'answer', value: '42', type: 'int', variablesReference: 0 }],
-      });
+      if (request.arguments?.variablesReference === 300) {
+        response(request, {
+          variables: [
+            { name: 'rip', value: '0x1000', type: 'uint64', variablesReference: 0 },
+            { name: 'rsp', value: '0x2000', type: 'uint64', variablesReference: 0 },
+          ],
+        });
+      } else {
+        response(request, {
+          variables: [{ name: 'answer', value: '42', type: 'int', variablesReference: 0 }],
+        });
+      }
       break;
     case 'evaluate':
       response(request, { result: '42', type: 'int', variablesReference: 0 });
+      break;
+    case 'modules':
+      response(request, {
+        modules: [
+          {
+            id: 'mock-main',
+            name: 'fake-app',
+            path: '/tmp/fake-app',
+            addressRange: '0x1000-0x1fff',
+            symbolStatus: 'Symbols loaded',
+          },
+        ],
+        totalModules: 1,
+      });
+      break;
+    case 'disassemble': {
+      const count = request.arguments?.instructionCount ?? 4;
+      const instructionOffset = request.arguments?.instructionOffset ?? 0;
+      response(request, {
+        instructions: Array.from({ length: count }, (_, index) => ({
+          address: `0x${(0x1000 + instructionOffset + index).toString(16)}`,
+          instructionBytes: index === 0 ? '90' : 'cc',
+          instruction: index === 0 ? 'nop' : 'int3',
+          symbol: index === 0 ? 'main' : undefined,
+        })),
+      });
+      break;
+    }
+    case 'readMemory': {
+      const requested = request.arguments?.count ?? 4;
+      const bytes = Buffer.from([0x90, 0x90, 0xcc, 0xc3]).subarray(0, requested);
+      response(request, {
+        address: request.arguments?.memoryReference ?? '0x1000',
+        data: bytes.toString('base64'),
+        unreadableBytes: Math.max(0, requested - bytes.length),
+      });
+      break;
+    }
+    case 'exceptionInfo':
+      response(request, {
+        exceptionId: 'MOCK_ACCESS_VIOLATION',
+        description: 'Mock access violation',
+        breakMode: 'unhandled',
+        details: { message: 'Mock exception details' },
+      });
       break;
     case 'continue':
     case 'next':
