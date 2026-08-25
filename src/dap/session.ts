@@ -114,21 +114,120 @@ export class DapSession {
     return this.beginDebugRequest('attach', configuration, breakpoints);
   }
 
-  async setBreakpoints(
+  async setBreakpoints(source: string, lines: number[]): Promise<DebugProtocol.Breakpoint[]> {
+    return this.setSourceBreakpoints(source, lines.map((line) => ({ line })));
+  }
+
+  async setSourceBreakpoints(
     source: string,
-    lines: number[],
+    breakpoints: DebugProtocol.SourceBreakpoint[],
   ): Promise<DebugProtocol.Breakpoint[]> {
     this.assertInitialized();
     const response = await this.connection.sendRequest(
       'setBreakpoints',
       {
         source: { path: source },
-        breakpoints: lines.map((line) => ({ line })),
+        breakpoints,
         sourceModified: false,
       } satisfies DebugProtocol.SetBreakpointsArguments,
       this.requestTimeoutMs,
     );
     return ((response.body as DebugProtocol.SetBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  async setFunctionBreakpoints(
+    breakpoints: DebugProtocol.FunctionBreakpoint[],
+  ): Promise<DebugProtocol.Breakpoint[]> {
+    this.assertInitialized();
+    this.assertCapability('supportsFunctionBreakpoints', 'setFunctionBreakpoints');
+    const response = await this.connection.sendRequest(
+      'setFunctionBreakpoints',
+      { breakpoints } satisfies DebugProtocol.SetFunctionBreakpointsArguments,
+      this.requestTimeoutMs,
+    );
+    return ((response.body as DebugProtocol.SetFunctionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  async setInstructionBreakpoints(
+    breakpoints: DebugProtocol.InstructionBreakpoint[],
+  ): Promise<DebugProtocol.Breakpoint[]> {
+    this.assertInitialized();
+    this.assertCapability('supportsInstructionBreakpoints', 'setInstructionBreakpoints');
+    const response = await this.connection.sendRequest(
+      'setInstructionBreakpoints',
+      { breakpoints } satisfies DebugProtocol.SetInstructionBreakpointsArguments,
+      this.requestTimeoutMs,
+    );
+    return ((response.body as DebugProtocol.SetInstructionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  async dataBreakpointInfo(
+    name: string,
+    variablesReference?: number,
+    frameId?: number,
+  ): Promise<NonNullable<DebugProtocol.DataBreakpointInfoResponse['body']>> {
+    this.assertConfigured();
+    this.assertCapability('supportsDataBreakpoints', 'dataBreakpointInfo');
+    const args: DebugProtocol.DataBreakpointInfoArguments = {
+      name,
+      ...(variablesReference === undefined ? {} : { variablesReference }),
+      ...(frameId === undefined ? {} : { frameId }),
+    };
+    const response = await this.connection.sendRequest('dataBreakpointInfo', args, this.requestTimeoutMs);
+    return (response.body ?? {
+      dataId: null,
+      description: name,
+      canPersist: false,
+    }) as NonNullable<DebugProtocol.DataBreakpointInfoResponse['body']>;
+  }
+
+  async setDataBreakpoints(
+    breakpoints: DebugProtocol.DataBreakpoint[],
+  ): Promise<DebugProtocol.Breakpoint[]> {
+    this.assertConfigured();
+    this.assertCapability('supportsDataBreakpoints', 'setDataBreakpoints');
+    const response = await this.connection.sendRequest(
+      'setDataBreakpoints',
+      { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,
+      this.requestTimeoutMs,
+    );
+    return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  async setExceptionBreakpoints(
+    filters: string[],
+    filterOptions?: DebugProtocol.ExceptionFilterOptions[],
+  ): Promise<DebugProtocol.Breakpoint[]> {
+    this.assertInitialized();
+    const args: DebugProtocol.SetExceptionBreakpointsArguments = {
+      filters,
+      ...(filterOptions === undefined ? {} : { filterOptions }),
+    };
+    const response = await this.connection.sendRequest('setExceptionBreakpoints', args, this.requestTimeoutMs);
+    return ((response.body as DebugProtocol.SetExceptionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  async pause(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
+    this.assertConfigured();
+    const stopped = waitForStop
+      ? this.connection.waitForEvent(
+          'stopped',
+          timeoutMs,
+          (event) => {
+            const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
+            return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
+          },
+        )
+      : undefined;
+
+    const response = await this.connection.sendRequest(
+      'pause',
+      { threadId } satisfies DebugProtocol.PauseArguments,
+      this.requestTimeoutMs,
+    );
+    if (!stopped) return response.body ?? {};
+    const event = await stopped;
+    return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
 
   async continueExecution(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
@@ -150,10 +249,7 @@ export class DapSession {
       this.requestTimeoutMs,
     );
 
-    if (!stopped) {
-      return response.body ?? {};
-    }
-
+    if (!stopped) return response.body ?? {};
     const event = await stopped;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
@@ -182,10 +278,7 @@ export class DapSession {
       this.requestTimeoutMs,
     );
 
-    if (!stopped) {
-      return response.body ?? {};
-    }
-
+    if (!stopped) return response.body ?? {};
     const event = await stopped;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
@@ -261,13 +354,7 @@ export class DapSession {
     this.assertCapability('supportsDisassembleRequest', 'disassemble');
     const response = await this.connection.sendRequest(
       'disassemble',
-      {
-        memoryReference,
-        instructionCount,
-        instructionOffset,
-        offset,
-        resolveSymbols,
-      } satisfies DebugProtocol.DisassembleArguments,
+      { memoryReference, instructionCount, instructionOffset, offset, resolveSymbols } satisfies DebugProtocol.DisassembleArguments,
       this.requestTimeoutMs,
     );
     return ((response.body as DebugProtocol.DisassembleResponse['body'] | undefined)?.instructions ?? []);
@@ -301,27 +388,18 @@ export class DapSession {
 
   async runtimeSnapshot(options: RuntimeSnapshotOptions = {}): Promise<RuntimeSnapshot> {
     this.assertConfigured();
-
     const threadList = await this.threads();
-    if (threadList.length === 0) {
-      throw new DapError('The debugger returned no threads for debug_snapshot.');
-    }
+    if (threadList.length === 0) throw new DapError('The debugger returned no threads for debug_snapshot.');
 
-    const lastStopped = [...this.connection.recentEvents]
-      .reverse()
-      .find((record) => record.event === 'stopped');
+    const lastStopped = [...this.connection.recentEvents].reverse().find((record) => record.event === 'stopped');
     const stoppedBody = lastStopped?.body as DebugProtocol.StoppedEvent['body'] | undefined;
     const selectedThreadId = options.threadId ?? stoppedBody?.threadId ?? threadList[0]?.id;
     const thread = threadList.find((candidate) => candidate.id === selectedThreadId) ?? threadList[0];
-    if (!thread) {
-      throw new DapError('Unable to select a thread for debug_snapshot.');
-    }
+    if (!thread) throw new DapError('Unable to select a thread for debug_snapshot.');
 
     const stack = await this.stackTrace(thread.id, 0, options.stackLevels ?? 12);
     const frame = stack[0];
-    if (!frame) {
-      throw new DapError(`Thread ${thread.id} has no stack frame for debug_snapshot.`);
-    }
+    if (!frame) throw new DapError(`Thread ${thread.id} has no stack frame for debug_snapshot.`);
 
     const frameScopes = await this.scopes(frame.id);
     const maxVariables = options.maxVariablesPerScope ?? 100;
@@ -336,21 +414,10 @@ export class DapSession {
       : [];
 
     let disassembly: DebugProtocol.DisassembledInstruction[] | undefined;
-    const includeDisassembly = options.includeDisassembly ?? true;
-    if (
-      includeDisassembly
-      && this.capabilities?.supportsDisassembleRequest
-      && frame.instructionPointerReference
-    ) {
+    if ((options.includeDisassembly ?? true) && this.capabilities?.supportsDisassembleRequest && frame.instructionPointerReference) {
       const before = options.disassembleBefore ?? 8;
       const after = options.disassembleAfter ?? 12;
-      disassembly = await this.disassemble(
-        frame.instructionPointerReference,
-        before + after + 1,
-        -before,
-        0,
-        true,
-      );
+      disassembly = await this.disassemble(frame.instructionPointerReference, before + after + 1, -before, 0, true);
     }
 
     let loadedModules: DebugProtocol.Module[] | undefined;
@@ -359,11 +426,7 @@ export class DapSession {
     }
 
     let exception: DebugProtocol.ExceptionInfoResponse['body'] | undefined;
-    if (
-      (options.includeExceptionInfo ?? true)
-      && stoppedBody?.reason === 'exception'
-      && this.capabilities?.supportsExceptionInfoRequest
-    ) {
+    if ((options.includeExceptionInfo ?? true) && stoppedBody?.reason === 'exception' && this.capabilities?.supportsExceptionInfoRequest) {
       exception = await this.exceptionInfo(thread.id);
     }
 
@@ -428,15 +491,11 @@ export class DapSession {
 
     const initializedEvent = this.connection.waitForEvent('initialized', this.requestTimeoutMs);
     const requestPromise = this.connection.sendRequest(request, configuration, Math.max(this.requestTimeoutMs, 60_000));
-
     await initializedEvent;
 
     const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
     for (const group of breakpoints) {
-      breakpointResults.push({
-        source: group.source,
-        breakpoints: await this.setBreakpoints(group.source, group.lines),
-      });
+      breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
     }
 
     if (this.capabilities?.supportsConfigurationDoneRequest) {
@@ -445,7 +504,6 @@ export class DapSession {
 
     const response = await requestPromise;
     this.configured = true;
-
     return {
       request,
       response: response.body ?? {},
@@ -468,8 +526,6 @@ export class DapSession {
 
   private assertConfigured(): void {
     this.assertInitialized();
-    if (!this.configured) {
-      throw new DapError('The debuggee has not been launched or attached yet.');
-    }
+    if (!this.configured) throw new DapError('The debuggee has not been launched or attached yet.');
   }
 }
