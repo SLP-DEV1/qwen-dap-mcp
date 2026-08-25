@@ -22,6 +22,10 @@ function validateSkill(content: string): void {
   assert.match(content, /\r?\n---\r?\n/);
 
   const requiredTools = [
+    'debug_this_crash',
+    'debug_diagnose_stop',
+    'debug_source_disassembly',
+    'debug_run_to_stop',
     'debug_start_codelldb',
     'debug_launch_codelldb',
     'debug_snapshot',
@@ -32,10 +36,11 @@ function validateSkill(content: string): void {
   ];
 
   for (const tool of requiredTools) {
-    assert.ok(content.includes(`\`${tool}\``), `Skill must reference ${tool}`);
+    assert.ok(content.includes(tool), `Skill must reference ${tool}`);
   }
 
   assert.match(content, /authorized local targets/i);
+  assert.match(content, /confidence/i);
   assert.match(content, /rebuild/i);
   assert.match(content, /verify/i);
 }

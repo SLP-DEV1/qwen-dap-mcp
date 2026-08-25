@@ -5,276 +5,188 @@ description: Diagnose native C/C++ runtime bugs and crash dumps with qwen-dap-mc
 
 # Native Runtime Debugging
 
-Use the `qwen-dap-mcp` MCP tools to diagnose runtime behavior from structured debugger state instead of guessing from logs alone.
+Use `qwen-dap-mcp` to reason from structured debugger evidence rather than guessing from logs. This skill is for software, crash artifacts, and authorized local targets the user owns or is permitted to debug.
 
-This skill is for software, crash artifacts, and local processes the user owns or is authorized to debug.
+## Prefer the v0.8 high-level tools
 
-## Prerequisites
+For crash-oriented tasks, start with the highest-level tool that matches the available evidence:
 
-- The `qwen-dap-mcp` MCP server is configured and visible in `/mcp`.
-- For the built-in Windows C/C++ path, CodeLLDB 1.11.0+ is installed or `CODELLDB_PATH` points to `codelldb.exe`.
-- The target should be built with debug information when source-level diagnosis is required.
-- For postmortem analysis, keep the matching executable and symbols next to the dump when possible.
+1. **Known local native executable, reproduce under CodeLLDB**
+   - Use `debug_this_crash(mode="codelldb", program=..., args=[...], breakpoints=[...])`.
+   - This discovers/starts CodeLLDB, launches the program, waits race-safely for stop/exit, captures a bounded snapshot, and returns a structured diagnosis in one call.
+2. **Existing minidump/core file**
+   - Use `debug_this_crash(mode="dump", dumpPath=..., program=..., sourceMap=...)`.
+   - This opens the dump as frozen postmortem state and immediately analyzes the recovered stop.
+3. **Already stopped live or postmortem session**
+   - Use `debug_diagnose_stop()` for crash classification, exception evidence, suspicious values, ranked hypotheses, source/disassembly correlation, and suggested checks.
+4. **Need only machine-code/source correlation**
+   - Use `debug_source_disassembly()` to correlate the top source frame and instruction pointer with the current/nearest instruction and nearby instructions.
+5. **Already initialized generic DAP adapter**
+   - Use `debug_this_crash(mode="live", request="launch"|"attach", configuration=...)` or `debug_run_to_stop(...)`.
 
-Prefer `debug_start_codelldb` / `debug_launch_codelldb` for Windows native C/C++ projects. Use `debug_open_dump` for an existing native crash dump. Use the generic `debug_start`, `debug_launch`, and `debug_attach` tools only when another DAP adapter is intentionally configured.
+Use lower-level tools when the high-level report identifies a concrete follow-up question, not by default.
 
-## Operating rules
+## How to interpret the diagnosis
+
+The diagnosis engine is evidence-bounded. Treat these fields differently:
+
+- `classification`: best current crash/stop family from debugger evidence.
+- `confidence`: strength of that classification or hypothesis, not proof.
+- `hypotheses`: likely explanations ranked from the available exception, frame, locals/registers, and instruction context.
+- `suspiciousValues`: clues such as null-like pointers or common debug-allocator poison patterns. A clue is not automatically the root cause.
+- `sourceDisassembly`: source line + instruction pointer + current/nearest machine instruction and surrounding instructions.
+- `nextActions`: debugger checks that can strengthen or falsify the current hypothesis.
+
+Never convert a heuristic into a confirmed root-cause statement without matching evidence. Prefer wording such as “consistent with”, “strong candidate”, or “the debugger shows” until the faulting operation/data flow is established.
+
+Common classifications include access violation, segmentation fault, stack overflow, divide-by-zero, illegal instruction, abort/assert, heap corruption, generic exception/signal, and non-crash stops such as breakpoint/entry/pause/step.
+
+## Core operating rules
 
 1. Debug only user-owned or otherwise authorized local targets and crash artifacts.
-2. Prefer launch over attach when the project can be started under the debugger.
-3. Keep debugger operations narrow. Do not dump large variable trees or memory ranges without a concrete reason.
-4. Use `debug_snapshot` as the default stop-state inspection tool before issuing many lower-level calls.
-5. Treat adapter capability flags as authoritative. Do not assume a breakpoint or memory feature exists when the adapter does not advertise it.
-6. Preserve raw debugger evidence in the diagnosis: stop reason or dump context, frame, source line, relevant locals, and the debugger operation that produced the evidence.
-7. After changing source code, rebuild and reproduce the same scenario before claiming the bug is fixed.
-8. The bridge intentionally does not expose memory writes. Do not work around that restriction with debugger expression side effects unless the user explicitly needs expression evaluation for their own authorized target.
-9. A crash dump is frozen state. Never use continue, step, pause, or watchpoint workflows on a postmortem dump session.
+2. Prefer launch over attach when the program can be started under the debugger.
+3. Keep reads bounded. Do not recursively dump huge variable trees or memory ranges without a specific diagnostic reason.
+4. Preserve raw evidence in the final explanation: stop reason, exception id/description, top relevant frame, source line, suspicious value/register, and relevant instruction when available.
+5. Do not assume the top system/runtime frame is the original cause. Walk to the first project-controlled frame when needed.
+6. Treat DAP capability flags as authoritative.
+7. The bridge intentionally does not expose arbitrary memory writes.
+8. After changing source, rebuild and reproduce the same scenario before claiming a fix is verified.
+9. A historical dump can establish what happened in that captured state, but cannot prove a new source change fixed it.
 
-## Phase 1: Establish the debug session
+## Live CodeLLDB: low-level fallback
 
-For CodeLLDB live debugging:
-
-1. Call `debug_codelldb_info` if adapter discovery has not been verified yet.
-2. Call `debug_start_codelldb`.
-3. Inspect returned capabilities. Note support for modules, disassembly, memory reads, conditional/function/instruction/data breakpoints, and exception information.
-
-Then choose one live path:
-
-### Launch
-
-Use `debug_launch_codelldb` with the executable and a small number of source breakpoints close to the suspected failure.
-
-If the failure location is not known, prefer one of these strategies:
-
-- break at the start of the suspected subsystem or function,
-- configure an exception breakpoint,
-- launch normally and use `debug_pause` when the bad runtime state becomes observable.
-
-### Attach
-
-Use `debug_attach_codelldb` only for an authorized local process when launch-under-debugger is not suitable.
-
-After launch/attach, wait for a real stopped state before requesting stack/scopes/variables.
-
-### Postmortem crash dump
-
-Use `debug_open_dump` when a `.dmp`, core file, or other LLDB-supported crash artifact already exists.
-
-Recommended arguments:
-
-- `dumpPath`: required crash artifact.
-- `program`: matching executable when available; this improves symbol and module resolution.
-- `sourceMap`: map build-machine source paths to the current checkout when sources moved.
-- `adapterPath`: only when normal CodeLLDB discovery is insufficient.
-
-`debug_open_dump` starts CodeLLDB, opens the dump through LLDB's core-file target flow, attaches no live process, and immediately returns a bounded snapshot with modules enabled.
-
-Treat the returned session as read-only postmortem state:
-
-- inspect threads, stacks, scopes, locals, registers, modules, memory, and disassembly,
-- use `debug_snapshot` for additional bounded views,
-- do not call `debug_continue`, `debug_step`, `debug_pause`, or data-breakpoint tools,
-- use `debug_disconnect(terminateDebuggee=false)` when finished.
-
-## Phase 2: Capture the first useful state
-
-At the first relevant live stop, call:
+If `debug_this_crash(mode="codelldb")` is not appropriate, use the explicit flow:
 
 ```text
-debug_snapshot(includeModules=true)
+1. debug_codelldb_info()
+2. debug_start_codelldb()
+3. optional debug_set_exception_breakpoints(...)
+4. debug_launch_codelldb(program=..., breakpoints=[...])
+5. debug_snapshot(includeModules=true, includeExceptionInfo=true)
+6. debug_diagnose_stop()
+7. targeted follow-up tool only when needed
+8. patch source
+9. rebuild and reproduce
+10. debug_disconnect()
 ```
 
-For a dump, the initial snapshot is already returned by `debug_open_dump`; call `debug_snapshot` again only when another thread or a different bound is needed.
+`debug_snapshot` remains the preferred raw bounded stop-state primitive. It can include thread, stack, top frame, source, locals/arguments, registers, disassembly, modules, and structured exception information.
 
-Read the result in this order:
+## Postmortem crash dumps
 
-1. stop/dump context and selected thread
-2. top frame and source location
-3. stack frames leading to the failure
-4. locals / arguments
-5. registers when exposed
-6. disassembly around the instruction pointer
-7. loaded module for the active frame
-8. exception information when the adapter exposes it
+For raw dump inspection, `debug_open_dump(dumpPath=..., program=..., sourceMap=...)` remains available. Prefer `debug_this_crash(mode="dump", ...)` when the user wants the likely cause rather than only raw recovered state.
 
-Do not immediately assume the top frame is the root cause. Follow the call stack and data flow back to the first frame controlled by the project when the failure is inside a runtime or system library.
+A dump session is frozen/read-only. Never use these live operations in postmortem mode:
 
-For dumps, remember that missing locals or symbols can be an artifact-quality problem. Distinguish "not present in the dump/symbols" from "the value did not exist".
+- `debug_continue`
+- `debug_step`
+- `debug_pause`
+- `debug_data_breakpoint_info`
+- `debug_set_data_breakpoints`
 
-## Phase 3: Choose the smallest diagnostic action
+Inspection remains valid with `debug_snapshot`, `debug_diagnose_stop`, `debug_source_disassembly`, `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble`, `debug_read_memory`, and `debug_exception_info` when the adapter can recover it.
 
-### Suspected bad branch or value
+Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
 
-For a live session, use `debug_evaluate` for a specific expression and `debug_step` to cross the relevant statement. Capture another `debug_snapshot` after the step.
+## Source ↔ disassembly reasoning
 
-Compare before/after state and identify the exact source operation that changes behavior.
+When source alone does not explain the failure, use `debug_source_disassembly()` before issuing broad memory reads.
 
-For a dump, do not step. Inspect the frozen expression/local/register state only.
+Reason in this order:
 
-### Variable changes unexpectedly
+1. identify the selected top/project frame and source line,
+2. read `instructionPointerReference`,
+3. inspect `currentInstruction` when the address matches exactly,
+4. if symbols/instruction boundaries do not line up exactly, note that the tool selected the nearest instruction,
+5. use previous/next instructions to understand the immediate machine-code context,
+6. map instruction operands back to relevant locals/registers before claiming a dereference, bad jump, or arithmetic fault.
 
-Use a data breakpoint/watchpoint rather than repeatedly stepping in a live session:
+Do not claim that a zero-valued register proves a null dereference unless the faulting instruction actually uses that register/address.
 
-1. Get the current frame and Locals scope from `debug_snapshot` or `debug_scopes`.
-2. Call `debug_data_breakpoint_info` with the variable name, its scope `variablesReference`, and the current `frameId`.
-3. If a `dataId` is returned, call `debug_set_data_breakpoints` with the narrowest useful access type, usually `write`.
-4. Remove unrelated source/function/instruction breakpoints if they would stop first.
-5. Continue with `debug_continue`.
-6. At the data-breakpoint stop, call `debug_snapshot` and identify the write site and new value.
+## Exception and memory-lifetime analysis
 
-Pass `breakpoints=[]` to `debug_set_data_breakpoints` when the watchpoint is no longer needed.
+For exception stops, keep the adapter-provided exception id, description, details, and break mode in the evidence chain. For access violations/SIGSEGV-like faults:
 
-Do not attempt this flow for a crash dump.
+- a null pointer local/argument near the fault is strong evidence only when source/disassembly shows it participates in the failing access,
+- poison patterns such as `0xFEEEFEEE`, `0xDDDDDDDD`, `0xCDCDCDCD`, `0xCCCCCCCC`, or `0xDEADBEEF` are clues for freed/uninitialized/diagnostic memory, not standalone proof,
+- an invalid non-null address can still come from bounds errors, lifetime bugs, corrupted control flow, races, or mismatched binaries/symbols.
 
-### Known function is suspicious
+For stack overflow, inspect repeating frame patterns and recursion termination. For divide-by-zero, identify the actual divisor. For illegal instruction, inspect the control-flow target and binary/symbol match. For abort/assert, walk past runtime abort helpers to the first project frame and locate the violated invariant.
 
-Use `debug_set_function_breakpoints` to stop when the function is entered. Prefer a condition only when it materially reduces irrelevant stops.
+## Windows CodeLLDB pause caveat
 
-Clear function breakpoints with an empty array after reaching the relevant state.
+A user-requested `debug_pause` on Windows can be implemented using `DebugBreak`, producing an exception-like `0x80000003` stop. When the stop follows a requested pause, do not classify that breakpoint exception as an application crash by itself.
 
-### Exact machine instruction is suspicious
+This caveat does not apply to an independently produced crash dump: its captured exception context comes from the crashed process.
 
-Use the `instructionPointerReference` from a frame or an address obtained from `debug_disassemble`, then use `debug_set_instruction_breakpoints` for live debugging.
+## Targeted follow-up tools
 
-For a dump, use the instruction pointer only for disassembly/memory inspection; it cannot be resumed.
+### Unexpected variable write
 
-### Need a conditional source breakpoint
-
-Use `debug_set_source_breakpoints` rather than the simple line-only tool. Available fields include:
-
-- `condition`
-- `hitCondition`
-- `logMessage`
-- `column`
-
-Use conditions to reduce noise, not to encode large debugger expressions.
-
-### C++ exception path
-
-Inspect `exceptionBreakpointFilters` from adapter capabilities and configure only the useful filter with `debug_set_exception_breakpoints` for live debugging.
-
-For CodeLLDB, filters commonly include `cpp_throw` and `cpp_catch`.
-
-At the exception stop, use `debug_snapshot(includeExceptionInfo=true)` and inspect both the exception information and the first project-controlled frame in the stack.
-
-For a dump, rely on the captured thread/frame/register state and any exception metadata the adapter can recover from the artifact.
-
-### Need to inspect code around RIP/IP
-
-Use `debug_disassemble` with the current frame's `instructionPointerReference`. Keep the instruction count small enough to preserve context quality.
-
-Use `debug_read_memory` only for a specific bounded memory range that is relevant to the diagnosis. Prefer typed variables and expressions when they already expose the needed value.
-
-## Phase 4: Interpret Windows CodeLLDB pause correctly
-
-A user-requested `debug_pause` on Windows may be implemented by CodeLLDB/LLDB using `DebugBreak`.
-
-The result can therefore contain:
+Use a live data breakpoint instead of repeatedly stepping:
 
 ```text
-requestedAction: pause
-stopped.reason: exception
-stopped.description: Exception 0x80000003 ...
+1. debug_snapshot()
+2. debug_data_breakpoint_info(name=..., variablesReference=..., frameId=...)
+3. debug_set_data_breakpoints([{dataId=..., accessType="write"}])
+4. debug_continue(threadId=...)
+5. debug_snapshot()
+6. identify the write site and value transition
+7. clear with debug_set_data_breakpoints(breakpoints=[])
 ```
 
-When `requestedAction` is `pause`, do not classify that raw `0x80000003` stop as an application crash by itself. Preserve the raw event, but interpret it as the debugger's pause mechanism unless other evidence shows an independent crash.
+Never use watchpoints on a postmortem dump.
 
-The top frame may be a Windows wait/sleep function such as `NtDelayExecution`. Walk the stack to the relevant project frame if needed.
+### Known suspicious function
 
-This pause rule does not apply to an independently produced crash dump: a dump's captured exception context is evidence from the crashed process, not a pause request issued by this bridge.
+Use `debug_set_function_breakpoints` and continue to the smallest relevant stop. Remove it after the evidence is collected.
 
-## Phase 5: Form a root-cause claim
+### Conditional source stop
 
-A strong diagnosis should contain all of the following:
+Use `debug_set_source_breakpoints` for `condition`, `hitCondition`, `logMessage`, or `column` instead of encoding complex polling logic in the agent.
 
-- the exact reproducible action or dump artifact,
-- the debugger stop reason or postmortem crash context,
-- the project frame/source line where the problematic state becomes visible,
-- the relevant variable/register/memory evidence,
-- the call-stack relationship to the failure,
-- why the evidence supports the proposed root cause rather than merely correlating with it.
+### Exact instruction stop
 
-Prefer a narrow live-debugging claim such as:
+Use `debug_set_instruction_breakpoints` only in a live session and only after an instruction reference/address has been established.
+
+### Specific expression
+
+Use `debug_evaluate` for a narrow expression in an authorized live target. Remember that debugger expression evaluation may have side effects depending on language/debugger.
+
+### Bounded memory
+
+Use `debug_read_memory` only when variables, exception details, and source/disassembly do not already answer the question.
+
+## Root-cause claim standard
+
+A strong final diagnosis should state:
+
+- how the state was captured (live stop or dump),
+- the debugger stop/exception evidence,
+- the first relevant project frame and source line,
+- the variable/register/instruction evidence tied to the failing operation,
+- the most likely cause and its confidence,
+- what alternative explanation remains if confidence is not high,
+- what was done to verify the fix.
+
+Example of appropriately bounded wording:
 
 ```text
-`counter` changes from 35 to 42 at main.cpp:8. A write data breakpoint stops on that instruction, so this statement is the first observed write that produces the unexpected value.
+The dump shows EXCEPTION_ACCESS_VIOLATION in `crash_here` at native-dump.cpp:43. The pointer argument is null and the current instruction dereferences the register carrying that pointer, so a null dereference is the strongest explanation for this captured crash.
 ```
 
-Prefer a narrow dump claim such as:
+Avoid unsupported wording such as “definitely heap corruption” when only a crash address is known.
 
-```text
-The minidump resolves the crashing thread to `crash_here` in native-dump.cpp. The top project frame has an instruction pointer inside that function and the pointer argument is null, so the access violation is consistent with a null dereference at the captured instruction.
-```
-
-Avoid unsupported statements such as "this must be a memory corruption bug" when the debugger evidence does not establish that.
-
-## Phase 6: Fix and verify
+## Fix and verify
 
 When source changes are appropriate:
 
-1. Apply the smallest code fix that addresses the demonstrated cause.
-2. Rebuild the target with the same debug configuration.
-3. For live debugging, start a fresh debugger session rather than relying on stale module/symbol state.
-4. Recreate the same breakpoints/watchpoints or exception filters when relevant.
-5. Reproduce the original scenario.
-6. Confirm the bad stop/value or crash no longer occurs.
-7. Capture a final `debug_snapshot` at the corresponding live state when useful.
-8. Run the project's normal tests in addition to debugger verification.
+1. apply the smallest fix that addresses the demonstrated cause,
+2. rebuild with matching debug information,
+3. start a fresh live debugger session,
+4. reproduce the same input/action,
+5. confirm the original crash/stop or bad value no longer occurs,
+6. capture a final `debug_snapshot` or `debug_diagnose_stop` when useful,
+7. run the project’s normal tests too.
 
-For a dump-only investigation, verification requires reproducing the original crash scenario with the rebuilt binary or analyzing a newly generated dump. An old dump cannot prove that a source fix worked.
-
-Do not mark the issue fixed solely because the program survived one run.
-
-## Cleanup
-
-Before finishing:
-
-- clear temporary data/function/instruction/source breakpoints when useful,
-- call `debug_disconnect`; use `terminateDebuggee=false` for dump sessions,
-- summarize the debugger evidence and verification performed.
-
-## Compact live crash-diagnosis sequence
-
-For a native crash with a known executable and no known line:
-
-```text
-1. debug_start_codelldb()
-2. debug_set_exception_breakpoints(filters=[...]) when appropriate
-3. debug_launch_codelldb(program=...)
-4. wait for the relevant stop
-5. debug_snapshot(includeModules=true, includeExceptionInfo=true)
-6. inspect project frames and relevant locals
-7. debug_disassemble(...) only when source-level evidence is insufficient
-8. patch source
-9. rebuild
-10. restart debugger and reproduce
-11. debug_snapshot(...)
-12. debug_disconnect()
-```
-
-## Compact crash-dump sequence
-
-```text
-1. debug_open_dump(dumpPath=..., program=..., sourceMap=...)
-2. inspect the returned thread, stack, top project frame, registers and modules
-3. debug_snapshot(threadId=..., includeModules=true) if another thread needs inspection
-4. debug_disassemble(...) around the captured instruction pointer when useful
-5. debug_read_memory(...) only for a narrow address range needed by the diagnosis
-6. form an evidence-bounded root-cause claim
-7. patch source
-8. rebuild and reproduce the scenario to verify; generate a new dump if it still crashes
-9. debug_disconnect(terminateDebuggee=false)
-```
-
-## Compact unexpected-write sequence
-
-```text
-1. stop where the variable is in scope
-2. debug_snapshot()
-3. debug_data_breakpoint_info(name=..., variablesReference=..., frameId=...)
-4. debug_set_data_breakpoints([{dataId=..., accessType="write"}])
-5. debug_continue(threadId=...)
-6. debug_snapshot()
-7. identify the write site and new value
-8. clear the data breakpoint
-```
+For dump-only investigations, verify using a rebuilt live reproduction or a newly generated dump. Do not mark the bug fixed because an old dump can still be explained.
