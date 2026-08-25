@@ -25,6 +25,68 @@ Qwen Code (or another MCP client)
 
 The bridge is not tied to one language or debugger. It speaks standard DAP framing and exposes structured debugger operations as MCP tools.
 
+## Qwen Code extension
+
+Starting with **v0.5**, this repository is also shaped as a native Qwen Code extension:
+
+```text
+qwen-extension.json
+skills/
+└─ native-runtime-debug/
+   └─ SKILL.md
+```
+
+The extension manifest starts the local `qwen-dap-mcp` stdio MCP server from the extension directory. The bundled `native-runtime-debug` Skill teaches Qwen Code how to combine the tools into evidence-driven native debugging workflows.
+
+The manifest deliberately does **not** set `trust`, so Qwen Code retains its normal extension/MCP consent and review flow.
+
+### Local extension setup
+
+The source repository currently expects a local build before linking:
+
+```bash
+git clone https://github.com/SLP-DEV1/qwen-dap-mcp.git
+cd qwen-dap-mcp
+npm install --ignore-scripts
+npm run check
+npm run build
+qwen extensions link .
+```
+
+Restart Qwen Code if needed, then verify:
+
+```text
+/mcp
+/skills
+```
+
+The Skill can be invoked explicitly with:
+
+```text
+/native-runtime-debug
+```
+
+or Qwen Code can choose it automatically when a request matches its description.
+
+A prebuilt self-contained release archive is a later packaging step; until then, build-and-link is the supported extension-development workflow.
+
+### Skill behavior
+
+The bundled Skill standardizes:
+
+- CodeLLDB discovery and startup,
+- launch versus authorized local attach,
+- first-stop `debug_snapshot` inspection,
+- crash/exception diagnosis,
+- conditional/function/instruction breakpoint selection,
+- two-stage data-breakpoint/watchpoint setup,
+- Windows `DebugBreak` pause interpretation,
+- evidence-based root-cause claims,
+- source fix → rebuild → reproduce → verify,
+- cleanup and debugger disconnect.
+
+The same Skill is also kept under `.qwen/skills/native-runtime-debug/SKILL.md` for project-local development in this repository. CI verifies that the project and extension copies remain identical.
+
 ## MCP tools
 
 | MCP tool | Purpose |
@@ -87,7 +149,7 @@ The result is intentionally bounded with configurable stack, variable, module an
 
 ## Advanced breakpoints and watchpoints
 
-v0.4 adds richer stop control using standard DAP requests.
+v0.4 added richer stop control using standard DAP requests.
 
 ### Conditional / hit-count / log source breakpoints
 
@@ -170,7 +232,9 @@ stopped.reason: exception
 stopped.description: Exception 0x80000003 ...
 ```
 
-That is a successful pause, not an application crash. Preserving the raw event is useful for debugging while the `requestedAction` field makes the user's/agent's intent unambiguous.
+That is a successful requested pause, not an application crash by itself. Preserving the raw event is useful for debugging while the `requestedAction` field makes the agent's intent unambiguous.
+
+The bundled Skill contains this interpretation explicitly so Qwen does not misclassify a user-requested pause as a native crash.
 
 ## CodeLLDB on Windows
 
@@ -214,7 +278,7 @@ See [docs/CODELLDB_WINDOWS.md](docs/CODELLDB_WINDOWS.md) for setup and the real 
 
 The Windows integration workflow builds a small C++ program with MSVC debug symbols and drives a real CodeLLDB process over DAP stdio.
 
-The current v0.4 integration test verifies all of the following against CodeLLDB 1.12.x:
+The current integration test verifies all of the following against CodeLLDB 1.12.x:
 
 - launch of an MSVC-built executable,
 - verified source breakpoint,
@@ -263,7 +327,7 @@ This is a local debugging bridge, not a remote debugger service.
 - DAP adapters are spawned with `shell: false`.
 - DAP reverse requests such as `runInTerminal` are **rejected by default**.
 - CodeLLDB launches use `terminal: "console"` so they do not depend on terminal-spawning reverse requests.
-- Keep the Qwen Code MCP entry **untrusted** (`trust: false`) so debugger tool calls remain reviewable.
+- The extension manifest does not bypass Qwen's MCP trust/consent flow.
 - `debug_evaluate` may have side effects depending on the debugger/language.
 - `debug_read_memory` is read-only and limited to at most 64 KiB per MCP call.
 - The bridge does not expose a memory-write MCP tool.
@@ -278,7 +342,7 @@ This is a local debugging bridge, not a remote debugger service.
 ## Install for development
 
 ```bash
-npm install
+npm install --ignore-scripts
 npm run check
 npm run build
 ```
@@ -295,9 +359,9 @@ For development without building:
 npm run dev
 ```
 
-## Connect it to Qwen Code
+## Manual MCP configuration
 
-After building this repository, add a project-scoped stdio MCP server from the project where you want to debug:
+If you do not want to link the repository as a Qwen extension, you can still add only the MCP server after building:
 
 ```bash
 qwen mcp add --scope project qwen-dap-mcp node /absolute/path/to/qwen-dap-mcp/dist/index.js
@@ -339,12 +403,22 @@ The lower-level thread, stack, scope, variable, module, disassembly and memory t
 
 ## Testing
 
-Normal CI runs the TypeScript build, CodeLLDB profile tests, and an end-to-end mock DAP adapter test on Node 20 and 22.
+Normal CI runs the TypeScript build, CodeLLDB profile tests, the Qwen extension/Skill manifest tests, and an end-to-end mock DAP adapter test on Node 20 and 22.
+
+The extension tests verify:
+
+- `qwen-extension.json` and `package.json` versions match,
+- the extension starts the local server through `${extensionPath}`,
+- no manifest `trust` bypass is present,
+- the project and bundled Skill copies stay identical,
+- the Skill references the core runtime-debugging workflow tools.
 
 A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSVC debug symbols, downloads the latest Windows CodeLLDB release, starts `codelldb.exe` over stdio and validates the native inspection and breakpoint-control paths. Changes to the DAP session, CodeLLDB profile, MCP tools, native smoke test or package metadata automatically trigger that workflow.
 
 ## Current limitations
 
+- Source-repo extension use currently requires `npm install` + build before `qwen extensions link .`
+- No prebuilt self-contained Qwen extension release asset yet
 - No HTTP listener or remote exposure
 - No `runInTerminal` reverse-request execution
 - No memory-write MCP tool
@@ -378,17 +452,28 @@ A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSV
 - Pause support with raw-stop preservation ✅
 - Real Windows assertions for conditional/function/instruction/data breakpoints and pause ✅
 
-### v0.5 — agent workflow layer
+### v0.5 — Qwen agent workflow integration ✅
 
-- Qwen Code debugging Skill
-- Crash-diagnosis workflow
-- Build → launch → diagnose → patch → rebuild → verify loop
+- Native Qwen extension manifest ✅
+- Bundled `native-runtime-debug` Skill ✅
+- Project-local Skill copy for repository development ✅
+- Crash/exception diagnosis workflow ✅
+- Unexpected-write/watchpoint workflow ✅
+- Build → launch → diagnose → patch → rebuild → verify guidance ✅
+- Windows DebugBreak pause interpretation in the Skill ✅
+- Extension/Skill consistency tests ✅
+
+### v0.6 — packaging and debugger breadth
+
+- Prebuilt self-contained Qwen extension release assets
 - Additional adapter profiles for common C/C++ setups
-- Evidence collection for MCP latency / event-streaming limitations
+- Crash-dump / core-dump workflow
+- Multi-session support investigation
+- MCP stepping-latency and event-streaming measurements
 
 ## Development status
 
-**Experimental, but backed by a real native integration test.** The generic protocol framing and session orchestration are covered by a mock DAP end-to-end test, while the CodeLLDB profile is exercised against a real MSVC-built C++ executable on GitHub Actions Windows runners, including hardware watchpoints and pause behavior.
+**Experimental, but backed by a real native integration test and a Qwen-native workflow layer.** The generic protocol framing and session orchestration are covered by a mock DAP end-to-end test, the CodeLLDB profile is exercised against a real MSVC-built C++ executable on GitHub Actions Windows runners, and the bundled Qwen Skill codifies the evidence-driven debugging flow for agent use.
 
 ## License
 
