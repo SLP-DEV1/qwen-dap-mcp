@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'src/dap/session.ts'
       - 'src/adapters/codelldb.ts'
       - 'src/tools/register-debug-tools.ts'
       - 'test/codelldb-real-smoke.ts'
