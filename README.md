@@ -2,7 +2,7 @@
 
 A small, debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for agentic runtime debugging.
 
-The initial goal is deliberately narrow: prove that Qwen Code can consume structured runtime-debugging state through its existing first-class MCP extension surface before proposing a larger native DAP integration in Qwen Code core.
+The project explores whether coding agents can consume structured runtime-debugging state through an existing MCP extension surface instead of requiring a debugger protocol implementation in every agent core.
 
 This project is inspired by the discussion around [QwenLM/qwen-code#10051](https://github.com/QwenLM/qwen-code/issues/10051).
 
@@ -23,15 +23,15 @@ Qwen Code (or another MCP client)
    authorized debug target
 ```
 
-The bridge is not tied to one language or debugger. It speaks standard DAP framing and forwards structured debugger operations as MCP tools.
+The bridge is not tied to one language or debugger. It speaks standard DAP framing and exposes structured debugger operations as MCP tools.
 
-## MVP tools
+## MCP tools
 
 | MCP tool | Purpose |
 | --- | --- |
 | `debug_codelldb_info` | Discover CodeLLDB on the local machine |
 | `debug_start_codelldb` | Auto-discover and initialize CodeLLDB |
-| `debug_launch_codelldb` | Launch a native target with a safe CodeLLDB profile |
+| `debug_launch_codelldb` | Launch a native target with the CodeLLDB profile |
 | `debug_attach_codelldb` | Attach CodeLLDB to an authorized local native process |
 | `debug_start` | Spawn and initialize a generic DAP adapter |
 | `debug_launch` | Launch a target and complete DAP configuration |
@@ -44,17 +44,52 @@ The bridge is not tied to one language or debugger. It speaks standard DAP frami
 | `debug_scopes` | Read frame scopes |
 | `debug_variables` | Expand variables |
 | `debug_evaluate` | Evaluate an expression |
+| `debug_modules` | List loaded executable images and libraries |
+| `debug_disassemble` | Disassemble instructions around a DAP memory reference |
+| `debug_read_memory` | Read a bounded memory range and return base64 + hex bytes |
+| `debug_exception_info` | Read structured exception information for a stopped thread |
+| `debug_snapshot` | Capture an agent-friendly runtime snapshot in one tool call |
 | `debug_status` | Inspect current session state |
 | `debug_events` | Read recent asynchronous DAP events |
 | `debug_disconnect` | Disconnect and stop the adapter |
 
+## `debug_snapshot`
+
+`debug_snapshot` is the preferred inspection primitive for an agent after a breakpoint, step, or exception. It reduces multiple debugger round trips into one bounded MCP result.
+
+By default it captures:
+
+- the most recent stopped reason,
+- the selected thread,
+- a bounded stack trace,
+- the current/top stack frame,
+- source path, line and instruction pointer when available,
+- frame scopes,
+- local variables / arguments,
+- registers when the adapter exposes a Registers scope,
+- disassembly around the current instruction pointer,
+- structured exception information when the stop reason is `exception`.
+
+Loaded modules are optional because module lists can be large:
+
+```text
+debug_snapshot(includeModules=true, moduleCount=50)
+```
+
+The result is intentionally bounded with configurable stack, variable, module and disassembly limits so an agent does not accidentally pull an unbounded debugger state tree into context.
+
 ## CodeLLDB on Windows
 
-CodeLLDB is the first real debugger profile implemented by this project.
+CodeLLDB is the first real debugger profile implemented and continuously tested by this project.
 
-CodeLLDB **1.11.0 or newer** is required because that release added direct stdio DAP support. The bridge can locate `codelldb.exe` from `CODELLDB_PATH`, common VS Code-compatible extension directories, or `PATH`.
+CodeLLDB **1.11.0 or newer** is required because that release added direct stdio DAP support. The bridge can locate `codelldb.exe` from:
 
-Typical Qwen Code flow:
+- an explicit `adapterPath`,
+- `CODELLDB_PATH`,
+- common VS Code / VS Code Insiders / Cursor / Windsurf / VS Code OSS extension directories,
+- or `PATH`.
+
+Typical agent workflow:
 
 ```text
 1. debug_codelldb_info()
@@ -65,20 +100,40 @@ Typical Qwen Code flow:
        { source="C:\\project\\src\\main.cpp", lines=[42] }
      ]
    )
-4. debug_threads()
-5. debug_stack(threadId=...)
-6. debug_scopes(frameId=...)
-7. debug_variables(variablesReference=...)
-8. debug_evaluate(expression="value", frameId=...)
-9. debug_step(action="next", threadId=...)
-10. debug_disconnect()
+4. debug_snapshot(includeModules=true)
+5. debug_evaluate(expression="value", frameId=...)
+6. debug_step(action="next", threadId=...)
+7. debug_snapshot()
+8. debug_continue(threadId=...)
+9. debug_disconnect()
 ```
 
 The CodeLLDB launch helper forces `terminal: "console"`, keeping debuggee I/O inside DAP and avoiding `runInTerminal` reverse requests.
 
-See [docs/CODELLDB_WINDOWS.md](docs/CODELLDB_WINDOWS.md) for setup and a real native smoke-test workflow.
+See [docs/CODELLDB_WINDOWS.md](docs/CODELLDB_WINDOWS.md) for setup and the real native smoke-test workflow.
 
-## Safety posture of the MVP
+## Real CodeLLDB validation
+
+The Windows integration workflow builds a small C++ program with MSVC debug symbols and drives a real CodeLLDB process over DAP stdio.
+
+The current v0.3 integration test verifies all of the following against CodeLLDB 1.12.x:
+
+- launch of an MSVC-built executable,
+- verified source breakpoint,
+- stopped event and thread selection,
+- source/line mapping and instruction pointer,
+- stack trace,
+- locals,
+- expression evaluation,
+- loaded modules,
+- disassembly around the instruction pointer,
+- bounded memory reads,
+- register scope capture,
+- combined runtime snapshots.
+
+A representative CI run captured 5 modules, 11 disassembled instructions, 16 bytes of executable memory, local variables `delta` and `counter`, and register state in a single snapshot workflow.
+
+## Safety posture
 
 This is a local debugging bridge, not a remote debugger service.
 
@@ -87,7 +142,9 @@ This is a local debugging bridge, not a remote debugger service.
 - DAP reverse requests such as `runInTerminal` are **rejected by default**.
 - CodeLLDB launches use `terminal: "console"` so they do not depend on terminal-spawning reverse requests.
 - Keep the Qwen Code MCP entry **untrusted** (`trust: false`) so debugger tool calls remain reviewable.
-- `debug_evaluate` may have side effects depending on the debugger/language. Use it only with software and processes you are authorized to debug.
+- `debug_evaluate` may have side effects depending on the debugger/language.
+- `debug_read_memory` is read-only and limited to at most 64 KiB per MCP call.
+- Use launch/attach/inspection tools only with software and processes you are authorized to debug.
 
 ## Requirements
 
@@ -117,9 +174,7 @@ npm run dev
 
 ## Connect it to Qwen Code
 
-Qwen Code supports local stdio MCP servers through `mcpServers`.
-
-After building this repository, add a project-scoped server from the project where you want to debug:
+After building this repository, add a project-scoped stdio MCP server from the project where you want to debug:
 
 ```bash
 qwen mcp add --scope project qwen-dap-mcp node /absolute/path/to/qwen-dap-mcp/dist/index.js
@@ -144,80 +199,71 @@ Restart Qwen Code after adding the server, then use `/mcp` to verify that the to
 
 ## Generic DAP workflow
 
-Exact launch configuration is adapter-specific. Conceptually an agent can perform:
+Exact launch configuration is adapter-specific. A generic DAP-capable agent can perform:
 
 ```text
 1. debug_start(adapterCommand=..., adapterId=...)
 2. debug_launch(configuration={...}, breakpoints=[...])
-3. debug_threads()
-4. debug_stack(threadId=...)
-5. debug_scopes(frameId=...)
-6. debug_variables(variablesReference=...)
-7. debug_evaluate(expression=..., frameId=...)
-8. debug_continue(...) or debug_step(...)
-9. debug_disconnect()
+3. debug_snapshot()
+4. debug_evaluate(...)
+5. debug_step(...) or debug_continue(...)
+6. debug_snapshot()
+7. debug_disconnect()
 ```
 
-This is enough to test the core hypothesis from QwenLM/qwen-code#10051: can an agent reliably diagnose runtime bugs when DAP state is exposed through MCP?
+The lower-level `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble` and `debug_read_memory` tools remain available when the agent needs targeted inspection.
 
 ## Testing
 
-The normal CI runs the TypeScript build, CodeLLDB profile tests, and an end-to-end mock DAP adapter test on Node 20 and 22.
+Normal CI runs the TypeScript build, CodeLLDB profile tests, and an end-to-end mock DAP adapter test on Node 20 and 22.
 
-A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSVC debug symbols, downloads the latest CodeLLDB release, starts `codelldb.exe` over stdio, hits a source breakpoint, reads stack/locals, and evaluates a local variable.
+A separate **CodeLLDB Windows Smoke** workflow builds a real C++ target with MSVC debug symbols, downloads the latest Windows CodeLLDB release, starts `codelldb.exe` over stdio and validates the native inspection path. Changes to the DAP session, CodeLLDB profile, MCP tools, native smoke test or package metadata automatically trigger that workflow.
 
-## What the current version intentionally does not do
+## Current limitations
 
 - No HTTP listener or remote exposure
 - No `runInTerminal` reverse-request execution
-- No registers/disassembly/memory MCP tools yet
-- No data or instruction breakpoints yet
+- No memory-write MCP tool
+- No conditional/function/data/instruction-breakpoint MCP tools yet
 - No multi-session support yet
+- No crash-dump/core-dump workflow yet
+- No additional built-in debugger profile beyond CodeLLDB yet
 - No Qwen-specific core patches
 
 ## Roadmap
 
-### v0.2 — CodeLLDB + native debugging foundation
+### v0.3 — native inspection ✅
 
 - CodeLLDB discovery and launch/attach profile ✅
 - Real Windows C++ smoke test ✅
-- Modules
-- Registers when exposed by the adapter
-- Disassembly
-- Memory read
-- Exception information
-- Better stopped-event snapshots
+- Loaded modules ✅
+- Registers through standard DAP scopes ✅
+- Disassembly ✅
+- Bounded memory reads ✅
+- Exception information ✅
+- Agent-friendly runtime snapshot ✅
+- Real CI assertions for the advanced inspection path ✅
 
-### v0.3 — richer breakpoint support
+### v0.4 — richer breakpoint and stop control
 
 - Conditional breakpoints
 - Function breakpoints
 - Data breakpoints / watchpoints
 - Instruction breakpoints
+- Exception breakpoint configuration
+- Pause support
 
-### v0.4 — agent workflow layer
+### v0.5 — agent workflow layer
 
 - Qwen Code debugging Skill
 - Crash-diagnosis workflow
 - Build → launch → diagnose → patch → rebuild → verify loop
 - Additional adapter profiles for common C/C++ setups
-
-## Why MCP first?
-
-The Qwen Code triage for issue #10051 explicitly suggested a community DAP-to-MCP bridge plus Skill before committing to a multi-quarter core DAP integration. A standalone bridge lets us collect real evidence about:
-
-- stepping latency,
-- event delivery,
-- tool-call round trips,
-- variable-tree size,
-- debugger-specific compatibility,
-- and which capabilities truly require native core support.
-
-That evidence can later support a much narrower and stronger Qwen Code design proposal.
+- Evidence collection for MCP latency / event-streaming limitations
 
 ## Development status
 
-**Experimental / proof of concept.** The protocol framing and session orchestration are covered by a mock DAP end-to-end test, and CodeLLDB now has a real Windows C++ integration smoke test.
+**Experimental, but backed by a real native integration test.** The generic protocol framing and session orchestration are covered by a mock DAP end-to-end test, while the CodeLLDB profile is exercised against a real MSVC-built C++ executable on GitHub Actions Windows runners.
 
 ## License
 
