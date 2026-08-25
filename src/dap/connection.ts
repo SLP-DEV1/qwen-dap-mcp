@@ -2,6 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
+import { resolveExistingDirectory } from '../local-path.js';
+import { logger } from '../logger.js';
 import { DapError, DapRequestError, DapTimeoutError } from './errors.js';
 
 type PendingRequest = {
@@ -56,8 +58,13 @@ export class DapConnection extends EventEmitter {
       throw new DapError('A DAP adapter is already running');
     }
 
+    const cwd = options.cwd
+      ? resolveExistingDirectory(options.cwd, 'DAP adapter working directory')
+      : undefined;
+    logger.debug('Starting DAP adapter', { command: options.command, ...(cwd ? { cwd } : {}) });
+
     const child = spawn(options.command, options.args ?? [], {
-      cwd: options.cwd,
+      cwd,
       env: { ...process.env, ...(options.env ?? {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
@@ -72,11 +79,13 @@ export class DapConnection extends EventEmitter {
     child.stderr.on('data', (chunk: string) => this.captureStderr(chunk));
 
     child.on('error', (error) => {
+      logger.error('DAP adapter process error', { command: options.command, error });
       this.rejectAll(new DapError(`DAP adapter process error: ${error.message}`, { cause: error }));
       this.emit('adapterError', error);
     });
 
     child.on('exit', (code, signal) => {
+      logger.info('DAP adapter exited', { pid: child.pid, code, signal });
       const detail = signal ? `signal ${signal}` : `exit code ${String(code)}`;
       this.rejectAll(new DapError(`DAP adapter exited with ${detail}`));
       this.emit('adapterExit', { code, signal });
@@ -85,6 +94,11 @@ export class DapConnection extends EventEmitter {
     await new Promise<void>((resolve, reject) => {
       const onSpawn = () => {
         cleanup();
+        logger.info('DAP adapter started', {
+          pid: child.pid,
+          command: options.command,
+          ...(cwd ? { cwd } : {}),
+        });
         resolve();
       };
       const onError = (error: Error) => {
@@ -112,6 +126,7 @@ export class DapConnection extends EventEmitter {
       return;
     }
 
+    logger.debug('Stopping DAP adapter', { pid: child.pid });
     if (!child.killed) {
       child.kill();
     }
@@ -124,6 +139,7 @@ export class DapConnection extends EventEmitter {
     // child.killed only means a signal was sent successfully; it does not mean
     // the process has exited. Escalate whenever the adapter is still alive.
     if (child.exitCode === null) {
+      logger.warn('DAP adapter did not exit after termination signal; escalating', { pid: child.pid });
       child.kill('SIGKILL');
     }
 
@@ -217,7 +233,9 @@ export class DapConnection extends EventEmitter {
       const match = /(?:^|\r\n)Content-Length:\s*(\d+)/i.exec(headerText);
       if (!match?.[1]) {
         this.buffer = this.buffer.subarray(headerEnd + HEADER_SEPARATOR.length);
-        this.emit('protocolError', new DapError(`Invalid DAP header: ${headerText}`));
+        const error = new DapError(`Invalid DAP header: ${headerText}`);
+        logger.warn('DAP protocol error', { error });
+        this.emit('protocolError', error);
         continue;
       }
 
@@ -235,12 +253,11 @@ export class DapConnection extends EventEmitter {
         const message = JSON.parse(payload) as DebugProtocol.ProtocolMessage;
         this.handleMessage(message);
       } catch (error) {
-        this.emit(
-          'protocolError',
-          new DapError(`Failed to parse DAP JSON payload: ${payload.slice(0, 500)}`, {
-            cause: error instanceof Error ? error : undefined,
-          }),
-        );
+        const protocolError = new DapError(`Failed to parse DAP JSON payload: ${payload.slice(0, 500)}`, {
+          cause: error instanceof Error ? error : undefined,
+        });
+        logger.warn('DAP protocol error', { error: protocolError });
+        this.emit('protocolError', protocolError);
       }
     }
   }
@@ -250,6 +267,7 @@ export class DapConnection extends EventEmitter {
       const response = message as DebugProtocol.Response;
       const pending = this.pending.get(response.request_seq);
       if (!pending) {
+        logger.debug('Received orphan DAP response', { requestSeq: response.request_seq, command: response.command });
         this.emit('orphanResponse', response);
         return;
       }
@@ -312,6 +330,7 @@ export class DapConnection extends EventEmitter {
     if (this.stderrLines.length > 100) {
       this.stderrLines.splice(0, this.stderrLines.length - 100);
     }
+    logger.debug('DAP adapter wrote to stderr', { lineCount: lines.length });
     this.emit('adapterStderr', chunk);
   }
 

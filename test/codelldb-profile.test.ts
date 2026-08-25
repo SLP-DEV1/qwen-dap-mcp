@@ -49,18 +49,40 @@ test('explicit adapter path wins over discovery', () => {
   }
 });
 
-test('CodeLLDB launch profile keeps debuggee I/O in the DAP console', () => {
-  const config = buildCodeLldbLaunchConfiguration({
-    program: './build/native-smoke.exe',
-    args: ['one', 'two'],
-    stopOnEntry: true,
-  });
+test('CodeLLDB launch profile validates the local program and keeps debuggee I/O in the DAP console', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qwen-dap-mcp-launch-'));
+  try {
+    const program = join(root, 'native-smoke.exe');
+    writeFileSync(program, 'fixture');
 
-  assert.equal(config.type, 'lldb');
-  assert.equal(config.request, 'launch');
-  assert.equal(config.terminal, 'console');
-  assert.equal(config.stopOnEntry, true);
-  assert.deepEqual(config.args, ['one', 'two']);
+    const config = buildCodeLldbLaunchConfiguration({
+      program,
+      args: ['one', 'two'],
+      stopOnEntry: true,
+    });
+
+    assert.equal(config.type, 'lldb');
+    assert.equal(config.request, 'launch');
+    assert.equal(config.terminal, 'console');
+    assert.equal(config.stopOnEntry, true);
+    assert.equal(config.program, program);
+    assert.equal(config.cwd, root);
+    assert.deepEqual(config.args, ['one', 'two']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CodeLLDB launch profile rejects a missing local program before contacting the adapter', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qwen-dap-mcp-launch-missing-'));
+  try {
+    assert.throws(
+      () => buildCodeLldbLaunchConfiguration({ program: join(root, 'missing.exe') }),
+      /Program executable does not exist/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('CodeLLDB attach profile uses a concrete PID', () => {

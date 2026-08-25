@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
+
 export type CodeLldbDiscoverySource = 'explicit' | 'environment' | 'extension' | 'path';
 
 export type CodeLldbDiscoveryResult = {
@@ -117,11 +119,8 @@ export function discoverCodeLldb(options: DiscoverCodeLldbOptions = {}): CodeLld
   const searched: string[] = [];
 
   if (options.explicitPath) {
-    const candidate = resolve(options.explicitPath);
+    const candidate = resolveExistingFile(options.explicitPath, 'CodeLLDB adapter');
     searched.push(candidate);
-    if (!isFile(candidate)) {
-      throw new Error(`CodeLLDB adapter does not exist at '${candidate}'`);
-    }
     return { command: candidate, source: 'explicit', searched };
   }
 
@@ -156,14 +155,17 @@ export function discoverCodeLldb(options: DiscoverCodeLldbOptions = {}): CodeLld
 }
 
 export function buildCodeLldbLaunchConfiguration(options: CodeLldbLaunchOptions): Record<string, unknown> {
-  const program = resolve(options.program);
+  const program = resolveExistingFile(options.program, 'Program executable');
+  const cwd = options.cwd
+    ? resolveExistingDirectory(options.cwd, 'Working directory')
+    : dirname(program);
   return {
     type: 'lldb',
     request: 'launch',
     name: 'qwen-dap-mcp CodeLLDB launch',
     program,
     args: options.args ?? [],
-    cwd: resolve(options.cwd ?? dirname(program)),
+    cwd,
     ...(options.env ? { env: options.env } : {}),
     stopOnEntry: options.stopOnEntry ?? false,
     // Keep debuggee I/O inside DAP so the bridge never needs to honor runInTerminal.
@@ -172,12 +174,15 @@ export function buildCodeLldbLaunchConfiguration(options: CodeLldbLaunchOptions)
 }
 
 export function buildCodeLldbAttachConfiguration(options: CodeLldbAttachOptions): Record<string, unknown> {
+  const program = options.program
+    ? resolveExistingFile(options.program, 'Program image')
+    : undefined;
   return {
     type: 'lldb',
     request: 'attach',
     name: 'qwen-dap-mcp CodeLLDB attach',
     pid: options.pid,
-    ...(options.program ? { program: resolve(options.program) } : {}),
+    ...(program ? { program } : {}),
     stopOnEntry: options.stopOnEntry ?? true,
   };
 }

@@ -1,19 +1,10 @@
-import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolveExistingFile } from '../local-path.js';
 
 export type CodeLldbDumpOptions = {
   dumpPath: string;
   program?: string;
   sourceMap?: Record<string, string>;
 };
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
 
 function quoteLldbPath(path: string): string {
   // Forward slashes work on Windows in LLDB and avoid backslash escaping in
@@ -22,15 +13,10 @@ function quoteLldbPath(path: string): string {
 }
 
 export function buildCodeLldbDumpConfiguration(options: CodeLldbDumpOptions): Record<string, unknown> {
-  const dumpPath = resolve(options.dumpPath);
-  if (!isFile(dumpPath)) {
-    throw new Error(`Crash dump does not exist at '${dumpPath}'`);
-  }
-
-  const program = options.program ? resolve(options.program) : undefined;
-  if (program && !isFile(program)) {
-    throw new Error(`Program image does not exist at '${program}'`);
-  }
+  const dumpPath = resolveExistingFile(options.dumpPath, 'Crash dump');
+  const program = options.program
+    ? resolveExistingFile(options.program, 'Program image')
+    : undefined;
 
   // CodeLLDB's documented postmortem flow is an attach request where LLDB
   // creates a target from the core/minidump and no live process is attached.
