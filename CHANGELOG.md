@@ -2,6 +2,41 @@
 
 All notable prototype milestones are documented here.
 
+## 0.8.0 - 2026-08-26
+
+### Added
+
+- Agent-first `debug_this_crash` workflow with four modes:
+  - `current` diagnoses an already stopped live or postmortem session,
+  - `live` runs an initialized generic DAP launch/attach to the next stop or process exit,
+  - `codelldb` discovers/starts CodeLLDB, launches a local native executable and diagnoses the next stop in one MCP call,
+  - `dump` opens a native core/minidump and immediately diagnoses the recovered frozen state.
+- `debug_diagnose_stop` for bounded automatic crash/stop analysis with classification, confidence, debugger evidence, suspicious values, ranked hypotheses and suggested next checks.
+- `debug_source_disassembly` for explicit source-location and instruction-pointer correlation, including exact/nearest instruction and nearby machine-code context.
+- `debug_run_to_stop` composite live-debugging primitive that arms listeners before launch/attach, waits race-safely for `stopped`, `exited`, or `terminated`, and captures a bounded snapshot on stops.
+- Native crash-family classification for access violations / `EXC_BAD_ACCESS`, `SIGSEGV`, stack overflow, divide-by-zero / `SIGFPE`, illegal instruction / `SIGILL`, abort/assert failures, heap-corruption style diagnostics, generic exceptions/signals, and non-crash debugger stops.
+- Evidence collection for null-like pointer candidates and common debug-allocator poison patterns without treating those clues as unconditional proof of root cause.
+- Structured source/disassembly correlation and root-cause hypotheses for null dereferences, invalid object lifetime, invalid memory access, stack exhaustion, zero divisors, bad control flow, explicit abort/assert paths, heap corruption and generic reported exceptions.
+- Regression tests for diagnosis classification, poison/null evidence, non-crash stops, exception preservation, source/disassembly nearest-instruction fallback, and the run-to-stop workflow.
+
+### Changed
+
+- Refactored the CodeLLDB dump-opening sequence into a reusable `openDump()` workflow so raw postmortem inspection and `debug_this_crash(mode="dump")` share exactly the same frozen-session semantics.
+- Updated server instructions and both copies of the bundled `native-runtime-debug` Skill to prefer high-level diagnosis tools before manual low-level DAP orchestration.
+- Reworked the README around the agent-first v0.8 workflow, diagnosis output model, source/disassembly reasoning and evidence-bounded root-cause claims.
+- High-level composite workflows remain protected by the existing reentrant lifecycle gate so an unrelated MCP request cannot reset/replace the shared adapter while diagnosis is in progress.
+
+### Fixed
+
+- Fixed structured logger cycle detection so repeated non-circular shared object references are serialized normally instead of being mislabeled as `[Circular]`; real ancestor cycles, including cyclic `Error.cause`, remain safely bounded.
+
+### Verified
+
+- Node.js 20 and 22 build/test/package matrix passes.
+- Real Windows CodeLLDB live DAP smoke passes against an MSVC-built C++ target.
+- Real Windows minidump smoke passes after generating a native crash dump with PDB symbols and reopening it through CodeLLDB.
+- Generated self-contained extension archive installs successfully in Qwen Code.
+
 ## 0.7.1
 
 ### Fixed
