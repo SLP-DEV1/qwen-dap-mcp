@@ -81,6 +81,37 @@ export function baselineFingerprint(baseline: VerificationBaseline): string {
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 16);
 }
 
+export function validateAutonomousAgentState(state: AutonomousAgentState): void {
+  if (state.schemaVersion !== 1) {
+    throw new Error(`Unsupported autonomous agent state schema version: ${state.schemaVersion}`);
+  }
+  if (!Number.isInteger(state.maxIterations) || state.maxIterations < 1 || state.maxIterations > 10) {
+    throw new Error(`Invalid autonomous agent maxIterations: ${state.maxIterations}. Expected an integer from 1 to 10.`);
+  }
+  if (!Number.isInteger(state.iteration) || state.iteration < 1 || state.iteration > state.maxIterations) {
+    throw new Error(
+      `Invalid autonomous agent iteration: ${state.iteration}. Expected an integer from 1 to maxIterations (${state.maxIterations}).`,
+    );
+  }
+  if (state.history.length > 24) {
+    throw new Error(`Invalid autonomous agent history length: ${state.history.length}. Maximum is 24 entries.`);
+  }
+
+  const expectedRootFingerprint = baselineFingerprint(state.rootBaseline);
+  if (state.rootFingerprint !== expectedRootFingerprint) {
+    throw new Error(
+      `Autonomous agent state root fingerprint mismatch: expected ${expectedRootFingerprint}, got ${state.rootFingerprint}.`,
+    );
+  }
+
+  const expectedActiveFingerprint = baselineFingerprint(state.activeBaseline);
+  if (state.activeFingerprint !== expectedActiveFingerprint) {
+    throw new Error(
+      `Autonomous agent state active fingerprint mismatch: expected ${expectedActiveFingerprint}, got ${state.activeFingerprint}.`,
+    );
+  }
+}
+
 function boundedMaxIterations(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return 3;
   return Math.min(10, Math.max(1, Math.trunc(value)));
@@ -240,9 +271,8 @@ export function advanceAutonomousCycle(
   verification: VerificationResult,
   currentDiagnosis?: IntelligentCrashDiagnosis,
 ): AutonomousAgentDecision {
-  if (previous.schemaVersion !== 1) {
-    throw new Error(`Unsupported autonomous agent state schema version: ${previous.schemaVersion}`);
-  }
+  validateAutonomousAgentState(previous);
+
   const historyEntry = verificationHistory(previous, verification, currentDiagnosis);
   const history = [...previous.history, historyEntry].slice(-24);
 
