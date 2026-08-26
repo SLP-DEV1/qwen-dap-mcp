@@ -200,6 +200,13 @@ export function resolveLldbDapRemoteEndpoint(options: LldbDapRemoteAttachOptions
   return buildRemoteTcpEndpoint(options.host, options.port, options.policyEnv);
 }
 
+/**
+ * lldb-dap only gained native gdb-remote host/port attach fields in newer
+ * releases. Ubuntu 24.04 still ships lldb-dap 18, which ignores those fields
+ * and falls back to process-name attach. Generate one fixed attach command from
+ * the already validated TCP endpoint so old and new adapters work without
+ * exposing user-supplied LLDB command strings.
+ */
 export function buildLldbDapRemoteAttachConfiguration(options: LldbDapRemoteAttachOptions): Record<string, unknown> {
   const endpoint = resolveLldbDapRemoteEndpoint(options);
   const program = options.program
@@ -210,9 +217,8 @@ export function buildLldbDapRemoteAttachConfiguration(options: LldbDapRemoteAtta
     type: 'lldb-dap',
     request: 'attach',
     name: 'qwen-dap-mcp lldb-dap remote attach',
-    'gdb-remote-host': endpoint.host,
-    'gdb-remote-port': endpoint.port,
     ...(program ? { program } : {}),
+    attachCommands: [`gdb-remote ${endpoint.target}`],
   };
 }
 
