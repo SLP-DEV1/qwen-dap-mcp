@@ -1,7 +1,7 @@
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapConnection, type DapAdapterStartOptions } from './connection.js';
-import { DapError } from './errors.js';
+import { DapError, DapTimeoutError } from './errors.js';
 import { assessSymbolHealth, type SymbolHealth } from './symbol-health.js';
 
 const MAX_READ_MEMORY_BYTES = 1024 * 1024;
@@ -29,6 +29,7 @@ export type SessionSnapshot = {
   adapterPid?: number;
   initialized: boolean;
   configured: boolean;
+  stateUncertain: boolean;
   activeRequest?: 'launch' | 'attach';
   adapterId?: string;
   capabilities?: DebugProtocol.Capabilities;
@@ -70,6 +71,11 @@ export type RuntimeSnapshot = {
   collectionErrors?: RuntimeSnapshotCollectionError[];
 };
 
+type StopWait = {
+  promise: Promise<DebugProtocol.Event>;
+  cancel: () => void;
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -78,7 +84,14 @@ function dedupeVariables(variables: DebugProtocol.Variable[]): DebugProtocol.Var
   const seen = new Set<string>();
   const output: DebugProtocol.Variable[] = [];
   for (const variable of variables) {
-    const key = `${variable.name}\u0000${variable.value}\u0000${variable.type ?? ''}\u0000${variable.variablesReference}`;
+    const key = [
+      variable.name,
+      variable.value,
+      variable.type ?? '',
+      String(variable.variablesReference),
+      variable.memoryReference ?? '',
+      variable.evaluateName ?? '',
+    ].join('\u0000');
     if (seen.has(key)) continue;
     seen.add(key);
     output.push(variable);
@@ -86,11 +99,25 @@ function dedupeVariables(variables: DebugProtocol.Variable[]): DebugProtocol.Var
   return output;
 }
 
+function latestActiveStoppedBody(records: readonly unknown[]): DebugProtocol.StoppedEvent['body'] | undefined {
+  for (const record of [...records].reverse()) {
+    const candidate = record as { event?: unknown; body?: unknown };
+    if (candidate.event === 'continued' || candidate.event === 'exited' || candidate.event === 'terminated') {
+      return undefined;
+    }
+    if (candidate.event === 'stopped') {
+      return candidate.body as DebugProtocol.StoppedEvent['body'] | undefined;
+    }
+  }
+  return undefined;
+}
+
 export class DapSession {
   readonly connection = new DapConnection();
 
   private initialized = false;
   private configured = false;
+  private stateUncertain = false;
   private activeRequest?: 'launch' | 'attach';
   private adapterId?: string;
   private capabilities?: DebugProtocol.Capabilities;
@@ -131,6 +158,7 @@ export class DapSession {
       this.capabilities = (response.body ?? {}) as DebugProtocol.Capabilities;
       this.adapterId = options.adapterId;
       this.initialized = true;
+      this.stateUncertain = false;
       return this.capabilities;
     } catch (error) {
       await this.connection.stop();
@@ -152,10 +180,9 @@ export class DapSession {
 
   async setSourceBreakpoints(source: string, breakpoints: DebugProtocol.SourceBreakpoint[]): Promise<DebugProtocol.Breakpoint[]> {
     this.assertInitialized();
-    const response = await this.connection.sendRequest(
+    const response = await this.sendStateChangingRequest(
       'setBreakpoints',
       { source: { path: source }, breakpoints, sourceModified: false } satisfies DebugProtocol.SetBreakpointsArguments,
-      this.requestTimeoutMs,
     );
     return ((response.body as DebugProtocol.SetBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
   }
@@ -163,10 +190,9 @@ export class DapSession {
   async setFunctionBreakpoints(breakpoints: DebugProtocol.FunctionBreakpoint[]): Promise<DebugProtocol.Breakpoint[]> {
     this.assertInitialized();
     this.assertCapability('supportsFunctionBreakpoints', 'setFunctionBreakpoints');
-    const response = await this.connection.sendRequest(
+    const response = await this.sendStateChangingRequest(
       'setFunctionBreakpoints',
       { breakpoints } satisfies DebugProtocol.SetFunctionBreakpointsArguments,
-      this.requestTimeoutMs,
     );
     return ((response.body as DebugProtocol.SetFunctionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
   }
@@ -174,10 +200,9 @@ export class DapSession {
   async setInstructionBreakpoints(breakpoints: DebugProtocol.InstructionBreakpoint[]): Promise<DebugProtocol.Breakpoint[]> {
     this.assertInitialized();
     this.assertCapability('supportsInstructionBreakpoints', 'setInstructionBreakpoints');
-    const response = await this.connection.sendRequest(
+    const response = await this.sendStateChangingRequest(
       'setInstructionBreakpoints',
       { breakpoints } satisfies DebugProtocol.SetInstructionBreakpointsArguments,
-      this.requestTimeoutMs,
     );
     return ((response.body as DebugProtocol.SetInstructionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
   }
@@ -197,10 +222,9 @@ export class DapSession {
   async setDataBreakpoints(breakpoints: DebugProtocol.DataBreakpoint[]): Promise<DebugProtocol.Breakpoint[]> {
     this.assertConfigured();
     this.assertCapability('supportsDataBreakpoints', 'setDataBreakpoints');
-    const response = await this.connection.sendRequest(
+    const response = await this.sendStateChangingRequest(
       'setDataBreakpoints',
       { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,
-      this.requestTimeoutMs,
     );
     this.dataBreakpoints = breakpoints.map((breakpoint) => ({ ...breakpoint }));
     return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
@@ -216,22 +240,27 @@ export class DapSession {
       filters,
       ...(filterOptions === undefined ? {} : { filterOptions }),
     };
-    const response = await this.connection.sendRequest('setExceptionBreakpoints', args, this.requestTimeoutMs);
+    const response = await this.sendStateChangingRequest('setExceptionBreakpoints', args);
     return ((response.body as DebugProtocol.SetExceptionBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
   }
 
   async pause(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
-    if (stopped) void stopped.catch(() => undefined);
+    const stopped = waitForStop ? this.createThreadStopWait(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.promise.catch(() => undefined);
 
-    const response = await this.connection.sendRequest(
-      'pause',
-      { threadId } satisfies DebugProtocol.PauseArguments,
-      this.requestTimeoutMs,
-    );
+    let response: DebugProtocol.Response;
+    try {
+      response = await this.sendStateChangingRequest(
+        'pause',
+        { threadId } satisfies DebugProtocol.PauseArguments,
+      );
+    } catch (error) {
+      stopped?.cancel();
+      throw error;
+    }
     if (!stopped) return { requestedAction: 'pause', response: response.body ?? {} };
-    const event = await stopped;
+    const event = await stopped.promise;
     return {
       requestedAction: 'pause',
       response: response.body ?? {},
@@ -241,31 +270,41 @@ export class DapSession {
 
   async continueExecution(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
-    if (stopped) void stopped.catch(() => undefined);
+    const stopped = waitForStop ? this.createThreadStopWait(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.promise.catch(() => undefined);
 
-    const response = await this.connection.sendRequest(
-      'continue',
-      { threadId } satisfies DebugProtocol.ContinueArguments,
-      this.requestTimeoutMs,
-    );
+    let response: DebugProtocol.Response;
+    try {
+      response = await this.sendStateChangingRequest(
+        'continue',
+        { threadId } satisfies DebugProtocol.ContinueArguments,
+      );
+    } catch (error) {
+      stopped?.cancel();
+      throw error;
+    }
     if (!stopped) return response.body ?? {};
-    const event = await stopped;
+    const event = await stopped.promise;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
 
   async step(action: 'next' | 'stepIn' | 'stepOut', threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
-    if (stopped) void stopped.catch(() => undefined);
+    const stopped = waitForStop ? this.createThreadStopWait(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.promise.catch(() => undefined);
 
-    const response = await this.connection.sendRequest(
-      action,
-      { threadId } satisfies DebugProtocol.NextArguments,
-      this.requestTimeoutMs,
-    );
+    let response: DebugProtocol.Response;
+    try {
+      response = await this.sendStateChangingRequest(
+        action,
+        { threadId } satisfies DebugProtocol.NextArguments,
+      );
+    } catch (error) {
+      stopped?.cancel();
+      throw error;
+    }
     if (!stopped) return response.body ?? {};
-    const event = await stopped;
+    const event = await stopped.promise;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
 
@@ -304,7 +343,7 @@ export class DapSession {
   async evaluate(expression: string, frameId?: number, context: DebugProtocol.EvaluateArguments['context'] = 'watch'): Promise<DebugProtocol.EvaluateResponse['body']> {
     this.assertConfigured();
     const args: DebugProtocol.EvaluateArguments = { expression, context, ...(frameId === undefined ? {} : { frameId }) };
-    const response = await this.connection.sendRequest('evaluate', args, this.requestTimeoutMs);
+    const response = await this.sendStateChangingRequest('evaluate', args);
     return (response.body ?? { result: '', variablesReference: 0 }) as DebugProtocol.EvaluateResponse['body'];
   }
 
@@ -350,8 +389,7 @@ export class DapSession {
     const threadList = await this.threads();
     if (threadList.length === 0) throw new DapError('The debugger returned no threads for debug_snapshot.');
 
-    const lastStopped = [...this.connection.recentEvents].reverse().find((record) => record.event === 'stopped');
-    const stoppedBody = lastStopped?.body as DebugProtocol.StoppedEvent['body'] | undefined;
+    const stoppedBody = latestActiveStoppedBody(this.connection.recentEvents);
     const selectedThreadId = options.threadId ?? stoppedBody?.threadId ?? threadList[0]?.id;
     const thread = threadList.find((candidate) => candidate.id === selectedThreadId) ?? threadList[0];
     if (!thread) throw new DapError('Unable to select a thread for debug_snapshot.');
@@ -439,6 +477,7 @@ export class DapSession {
       ...(this.connection.pid === undefined ? {} : { adapterPid: this.connection.pid }),
       initialized: this.initialized,
       configured: this.configured,
+      stateUncertain: this.stateUncertain,
       ...(this.activeRequest === undefined ? {} : { activeRequest: this.activeRequest }),
       ...(this.adapterId === undefined ? {} : { adapterId: this.adapterId }),
       ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),
@@ -462,6 +501,7 @@ export class DapSession {
     await this.connection.stop();
     this.initialized = false;
     this.configured = false;
+    this.stateUncertain = false;
     this.activeRequest = undefined;
     this.adapterId = undefined;
     this.capabilities = undefined;
@@ -470,6 +510,7 @@ export class DapSession {
 
   private async beginDebugRequest(request: 'launch' | 'attach', configuration: Record<string, unknown>, breakpoints: SourceBreakpointGroup[]): Promise<unknown> {
     this.assertInitialized();
+    if (this.stateUncertain) throw new DapError('DAP session state is uncertain after a timed-out mutation. Reset the session before launch/attach.');
     this.configured = false;
     this.activeRequest = request;
 
@@ -487,10 +528,11 @@ export class DapSession {
           breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
         }
         if (this.capabilities?.supportsConfigurationDoneRequest) {
-          await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+          await this.sendStateChangingRequest('configurationDone', {});
         }
-        const response = await this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
+        const response = await this.sendStateChangingRequest(request, configuration, debugRequestTimeoutMs);
         this.configured = true;
+        this.stateUncertain = false;
         return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
       } catch (error) {
         this.configured = false;
@@ -500,7 +542,7 @@ export class DapSession {
     }
 
     const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);
-    const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
+    const requestPromise = this.sendStateChangingRequest(request, configuration, debugRequestTimeoutMs);
     const requestFailure = new Promise<never>((_resolve, reject) => {
       void requestPromise.catch(reject);
     });
@@ -517,11 +559,12 @@ export class DapSession {
         breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
       }
       if (this.capabilities?.supportsConfigurationDoneRequest) {
-        await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+        await this.sendStateChangingRequest('configurationDone', {});
       }
 
       const response = await requestPromise;
       this.configured = true;
+      this.stateUncertain = false;
       return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
     } catch (error) {
       this.configured = false;
@@ -530,11 +573,65 @@ export class DapSession {
     }
   }
 
-  private waitForThreadStop(threadId: number, timeoutMs: number): Promise<DebugProtocol.Event> {
-    return this.connection.waitForEvent('stopped', timeoutMs, (event) => {
+  private async sendStateChangingRequest(
+    command: string,
+    args?: unknown,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<DebugProtocol.Response> {
+    try {
+      return await this.connection.sendRequest(command, args, timeoutMs);
+    } catch (error) {
+      if (error instanceof DapTimeoutError) this.stateUncertain = true;
+      throw error;
+    }
+  }
+
+  private createThreadStopWait(threadId: number, timeoutMs: number): StopWait {
+    let active = true;
+    let timer!: NodeJS.Timeout;
+    let rejectPromise!: (error: Error) => void;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      this.connection.off('event:stopped', onStopped);
+      this.connection.off('adapterExit', onAdapterExit);
+      this.connection.off('adapterError', onAdapterError);
+    };
+    const finish = (event?: DebugProtocol.Event, error?: Error) => {
+      if (!active) return;
+      active = false;
+      cleanup();
+      if (error) rejectPromise(error);
+      else resolvePromise(event!);
+    };
+    let resolvePromise!: (event: DebugProtocol.Event) => void;
+    const onStopped = (event: DebugProtocol.Event) => {
       const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
-      return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
+      if (body?.allThreadsStopped !== true && body?.threadId !== undefined && body.threadId !== threadId) return;
+      finish(event);
+    };
+    const onAdapterExit = () => finish(undefined, new DapError("DAP adapter exited while waiting for event 'stopped'"));
+    const onAdapterError = (error: unknown) => finish(
+      undefined,
+      error instanceof Error ? error : new DapError("DAP adapter failed while waiting for event 'stopped'"),
+    );
+
+    const promise = new Promise<DebugProtocol.Event>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+      timer = setTimeout(
+        () => finish(undefined, new DapTimeoutError("DAP event 'stopped'", timeoutMs)),
+        timeoutMs,
+      );
+      this.connection.on('event:stopped', onStopped);
+      this.connection.on('adapterExit', onAdapterExit);
+      this.connection.on('adapterError', onAdapterError);
     });
+
+    return {
+      promise,
+      cancel: () => finish(undefined, new DapError("DAP event 'stopped' wait cancelled because the associated request failed.")),
+    };
   }
 
   private assertCapability(capability: keyof DebugProtocol.Capabilities, requestName: string): void {
@@ -547,6 +644,9 @@ export class DapSession {
 
   private assertConfigured(): void {
     this.assertInitialized();
+    if (this.stateUncertain) {
+      throw new DapError('DAP session state is uncertain after a timed-out state-changing request. Call debug_disconnect/debug_start or reset the session before further debugger operations.');
+    }
     if (!this.configured) throw new DapError('The debuggee has not been launched or attached yet.');
   }
 }
