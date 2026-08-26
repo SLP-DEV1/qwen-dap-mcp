@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 
 import { compareRuntimeSnapshots } from '../diagnostics/runtime-diff.js';
 import { DapError } from '../dap/errors.js';
+import { runWithDapOperationContext } from '../dap/operation-context.js';
 import type { DapSessionRegistry } from '../dap/session-registry.js';
 import type { RuntimeSnapshotOptions } from '../dap/session.js';
 import { debugCompareRunsOutputSchema, structuredResult } from './agent-output.js';
@@ -68,6 +69,7 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
       inputSchema: z.object({
         baselineSessionId: sessionIdSchema.describe('Session representing the known-good or baseline runtime state.'),
         candidateSessionId: sessionIdSchema.describe('Session representing the failing or changed runtime state.'),
+        timeoutMs: z.number().int().min(250).max(120_000).default(30_000).describe('Aggregate deadline for collecting both snapshots. Cancellation propagates to pending DAP requests/event waits in this operation context.'),
         snapshot: snapshotSchema.default(defaultSnapshotOptions),
       }).superRefine((value, context) => {
         if (value.baselineSessionId === value.candidateSessionId) {
@@ -81,7 +83,7 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
       outputSchema: debugCompareRunsOutputSchema,
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
     },
-    async ({ baselineSessionId, candidateSessionId, snapshot }) => {
+    async ({ baselineSessionId, candidateSessionId, timeoutMs, snapshot }) => {
       try {
         if (!sessions.has(baselineSessionId)) {
           throw new DapError(`Unknown baseline DAP session '${baselineSessionId}'. Create it with debug_sessions first.`);
@@ -97,23 +99,29 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
           includeExceptionInfo: snapshot.includeExceptionInfo ?? true,
         };
 
-        const [baseline, candidate] = await Promise.all([
-          captureSessionSnapshot(sessions, baselineSessionId, options),
-          captureSessionSnapshot(sessions, candidateSessionId, options),
-        ]);
+        return await runWithDapOperationContext(
+          { label: `compare-runs:${baselineSessionId}:${candidateSessionId}`, timeoutMs },
+          async (operation) => {
+            const [baseline, candidate] = await Promise.all([
+              captureSessionSnapshot(sessions, baselineSessionId, options),
+              captureSessionSnapshot(sessions, candidateSessionId, options),
+            ]);
+            operation.throwIfAborted();
 
-        return structuredResult({
-          baselineSessionId,
-          candidateSessionId,
-          baseline,
-          candidate,
-          diff: compareRuntimeSnapshots(baseline.snapshot, candidate.snapshot),
-          guidance: [
-            'Treat firstMeaningfulDifference as a prioritization hint, not proof that the value caused the failure.',
-            'Prefer changed/added/removed semantic values over unstable raw-address differences.',
-            'If the suspicious value needs temporal evidence, follow up with writer/value tracing rather than inferring causality from this static comparison alone.',
-          ],
-        });
+            return structuredResult({
+              baselineSessionId,
+              candidateSessionId,
+              baseline,
+              candidate,
+              diff: compareRuntimeSnapshots(baseline.snapshot, candidate.snapshot),
+              guidance: [
+                'Treat firstMeaningfulDifference as a prioritization hint, not proof that the value caused the failure.',
+                'Prefer changed/added/removed semantic values over unstable raw-address differences.',
+                'If the suspicious value needs temporal evidence, follow up with writer/value tracing rather than inferring causality from this static comparison alone.',
+              ],
+            });
+          },
+        );
       } catch (error) {
         return errorResult(error);
       }
