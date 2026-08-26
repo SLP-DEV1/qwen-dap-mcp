@@ -43,4 +43,8 @@ Use this page as the map for `qwen-dap-mcp`. The root [README](../README.md) is 
 - [`llms.txt`](../llms.txt) — compact documentation map for language-model tooling.
 - [`glama.json`](../glama.json) — Glama-compatible server metadata.
 
-If a guide and the current implementation disagree, treat that as a documentation bug and open an issue with the version, adapter, platform, and reproduction details.
+## Need help?
+
+For a reproducible bug, open a [bug report](../.github/ISSUE_TEMPLATE/bug_report.yml). For a focused capability proposal, use the [feature request template](../.github/ISSUE_TEMPLATE/feature_request.yml). Security-sensitive reports should follow [SECURITY.md](../SECURITY.md) instead of a public issue.
+
+If a guide and the current implementation disagree, treat that as a documentation bug and include the version, adapter, platform, and reproduction details.
