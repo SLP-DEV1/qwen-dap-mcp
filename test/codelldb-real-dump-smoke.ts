@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { buildCodeLldbDumpConfiguration } from '../src/adapters/codelldb-dump.js';
 import { DapSession } from '../src/dap/session.js';
 import { analyzeRuntimeSnapshot } from '../src/diagnostics/analyze-snapshot.js';
+import { startAutonomousCycle } from '../src/diagnostics/autonomous-cycle.js';
 import {
   buildIntelligentDiagnosis,
   selectProjectFrame,
@@ -115,7 +116,7 @@ try {
   assert.equal(
     frameSelection.selected.frame.source?.path?.toLowerCase(),
     source.toLowerCase(),
-    'Expected v0.9 frame selection to choose the project crash frame from the real dump',
+    'Expected intelligent frame selection to choose the project crash frame from the real dump',
   );
   assert.equal(frameSelection.selected.projectControlled, true);
   assert.equal(frameSelection.selected.confidence, 'high');
@@ -144,13 +145,28 @@ try {
     'Expected the intelligent diagnosis to include the verification phase',
   );
 
+  const autonomous = startAutonomousCycle(intelligentDiagnosis, 3);
+  assert.equal(autonomous.state.schemaVersion, 1);
+  assert.equal(autonomous.state.iteration, 1);
+  assert.equal(autonomous.state.maxIterations, 3);
+  assert.equal(autonomous.state.rootFingerprint, autonomous.state.activeFingerprint);
+  assert.equal(autonomous.state.history[0]?.phase, 'diagnosis');
+  assert.equal(autonomous.shouldContinue, true);
+  assert.ok(
+    autonomous.state.status === 'needs-fix' || autonomous.state.status === 'needs-evidence',
+    `Expected a bounded autonomous next state from the real dump, got ${autonomous.state.status}`,
+  );
+  assert.ok(autonomous.nextActions.length > 0, 'Expected an autonomous next-action decision from the real dump');
+
   console.log('CodeLLDB crash-dump smoke: PASS');
   console.log(`threads: ${threads.length}`);
   console.log(`selected thread: ${selectedThread.id} ${selectedThread.name}`);
   console.log(`project frame: ${projectFrame.name}`);
   console.log(`source: ${projectFrame.source?.path ?? '<none>'}:${projectFrame.line}`);
-  console.log(`v0.9 frame index: ${frameSelection.selected.index}`);
-  console.log(`v0.9 frame confidence: ${frameSelection.selected.confidence}`);
+  console.log(`frame index: ${frameSelection.selected.index}`);
+  console.log(`frame confidence: ${frameSelection.selected.confidence}`);
+  console.log(`autonomous fingerprint: ${autonomous.state.rootFingerprint}`);
+  console.log(`autonomous status: ${autonomous.state.status}`);
   console.log(`instruction pointer: ${projectFrame.instructionPointerReference}`);
   console.log(`locals: ${locals.map((variable) => `${variable.name}=${variable.value}`).join(', ')}`);
   console.log(`modules: ${modules.length}`);
