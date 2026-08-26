@@ -1,3 +1,4 @@
+import { DapError } from '../dap/errors.js';
 import { resolveExistingFile } from '../local-path.js';
 
 export type CodeLldbDumpOptions = {
@@ -7,6 +8,12 @@ export type CodeLldbDumpOptions = {
 };
 
 function quoteLldbPath(path: string): string {
+  // These paths become part of one LLDB command string. Quoting protects
+  // spaces and quotes, while control characters are rejected so a filesystem
+  // name cannot create a second command/line in the LLDB command interpreter.
+  if (/[\0\r\n]/.test(path)) {
+    throw new DapError('LLDB target paths must not contain NUL, carriage-return, or newline characters');
+  }
   // Forward slashes work on Windows in LLDB and avoid backslash escaping in
   // the command interpreter. Quotes are escaped explicitly for unusual paths.
   return `"${path.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
