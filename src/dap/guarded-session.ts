@@ -7,6 +7,7 @@ import {
   createHolGuardEvaluator,
   requireHolGuardAdapterStart,
   type HolGuardEvaluator,
+  type HolGuardExecutionContext,
 } from './hol-guard-policy.js';
 import { normalizePostmortemSnapshot } from './postmortem-normalization.js';
 import type { DapPolicyMode } from './request-policy.js';
@@ -25,8 +26,8 @@ export type GuardedDapSessionOptions = {
 
 /**
  * DapSession with an explicit frozen postmortem mode, serialized lifecycle,
- * and optional HOL Guard enforcement at the two process/code-execution choke
- * points: outgoing mutating DAP requests and adapter process start.
+ * and optional HOL Guard enforcement at the process/code-execution choke
+ * points: outgoing protected DAP requests and adapter process start.
  *
  * CodeLLDB exposes core/minidump inspection through its normal DAP attach
  * surface, so the base session cannot infer that no live process exists.
@@ -42,27 +43,47 @@ export class GuardedDapSession extends DapSession {
   private readonly lifecycleContext = new AsyncLocalStorage<symbol>();
   private activeLifecycleOperation?: { owner: symbol; name: string };
   private readonly holGuardEvaluator: HolGuardEvaluator;
+  private holGuardExecutionContext?: HolGuardExecutionContext;
 
   constructor(options: GuardedDapSessionOptions = {}) {
     super();
     this.holGuardEvaluator = options.holGuardEvaluator ?? createHolGuardEvaluator();
     this.connection.setRequestPolicy(
-      createGuardedDapRequestPolicy(this.holGuardEvaluator, options.dapPolicyMode),
+      createGuardedDapRequestPolicy(
+        this.holGuardEvaluator,
+        options.dapPolicyMode,
+        () => this.holGuardExecutionContext,
+      ),
     );
   }
 
   override async start(options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
     return this.runExclusiveLifecycle('start', async () => {
       // DapConnection.start() directly spawns the adapter and intentionally sits
-      // outside sendRequest(). Gate it here before reset/spawn can create a side
-      // effect. Environment values are not forwarded to the policy bridge.
-      requireHolGuardAdapterStart(this.holGuardEvaluator, {
+      // outside sendRequest(). Gate it before reset/spawn can create a side
+      // effect. Environment values never leave Node; HOL Guard sees only a
+      // deterministic hash plus key names so approval reuse is bound to the
+      // adapter's effective launch environment without disclosing secrets.
+      const executionContext = await requireHolGuardAdapterStart(this.holGuardEvaluator, {
         command: options.command,
         ...(options.args ? { args: options.args } : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
+        ...(options.env ? { env: options.env } : {}),
       });
+
+      this.holGuardExecutionContext = undefined;
       this.postmortem = false;
-      return super.start(options);
+      try {
+        const capabilities = await super.start(options);
+        // Bind every later protected DAP request to the exact adapter/cwd/env
+        // that successfully initialized. DAP launch arguments are additionally
+        // included in the per-request artifact hash by the Python bridge.
+        this.holGuardExecutionContext = executionContext;
+        return capabilities;
+      } catch (error) {
+        this.holGuardExecutionContext = undefined;
+        throw error;
+      }
     });
   }
 
@@ -84,6 +105,7 @@ export class GuardedDapSession extends DapSession {
     return this.runExclusiveLifecycle('disconnect', async () => {
       await super.disconnect(terminateDebuggee);
       this.postmortem = false;
+      this.holGuardExecutionContext = undefined;
     });
   }
 
@@ -91,6 +113,7 @@ export class GuardedDapSession extends DapSession {
     return this.runExclusiveLifecycle('reset', async () => {
       await super.reset();
       this.postmortem = false;
+      this.holGuardExecutionContext = undefined;
     });
   }
 
