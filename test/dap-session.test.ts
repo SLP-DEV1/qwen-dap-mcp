@@ -126,6 +126,39 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
   assert.equal(session.snapshot().adapterRunning, false);
 });
 
+test('GDB configures pending breakpoints before launch', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+
+  await session.start({
+    ...mockStartOptions(),
+    adapterId: 'gdb',
+    env: { MOCK_INITIALIZED_ON_INITIALIZE: '1' },
+  });
+
+  const commands: string[] = [];
+  session.connection.waitForEvent = (() => {
+    throw new Error('GDB launch must not wait for a second initialized event');
+  }) as typeof session.connection.waitForEvent;
+  session.connection.sendRequest = (async (command: string) => {
+    commands.push(command);
+    if (command === 'setBreakpoints') {
+      return { body: { breakpoints: [{ verified: false, reason: 'pending' }] } } as never;
+    }
+    return { body: {} } as never;
+  }) as typeof session.connection.sendRequest;
+
+  const launch = await session.launch(
+    { program: '/tmp/gdb-app' },
+    [{ source: '/tmp/main.cpp', lines: [42] }],
+  );
+
+  assert.deepEqual(commands, ['setBreakpoints', 'configurationDone', 'launch']);
+  assert.equal((launch as { request: string }).request, 'launch');
+  assert.equal(session.snapshot().configured, true);
+  assert.equal(session.snapshot().activeRequest, 'launch');
+});
+
 test('launch accepts initialized emitted immediately after initialize', async (t) => {
   const session = new DapSession();
   t.after(async () => session.reset());

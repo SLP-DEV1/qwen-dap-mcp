@@ -456,6 +456,31 @@ export class DapSession {
     this.activeRequest = request;
 
     const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);
+
+    // GNU GDB 15+ follows the corrected DAP ordering implemented upstream:
+    // initialize -> configuration requests -> configurationDone -> launch.
+    // Source breakpoints are intentionally allowed to be pending before GDB
+    // knows the executable. CodeLLDB/lldb-dap retain the traditional path
+    // below where launch/attach starts first and initialized gates config.
+    if (this.adapterId === 'gdb') {
+      try {
+        const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
+        for (const group of breakpoints) {
+          breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
+        }
+        if (this.capabilities?.supportsConfigurationDoneRequest) {
+          await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+        }
+        const response = await this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
+        this.configured = true;
+        return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
+      } catch (error) {
+        this.configured = false;
+        this.activeRequest = undefined;
+        throw error;
+      }
+    }
+
     const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);
     const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
     const requestFailure = new Promise<never>((_resolve, reject) => {
