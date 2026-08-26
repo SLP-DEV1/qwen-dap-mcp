@@ -43,12 +43,39 @@ test('request-local routing remains isolated across concurrent async calls', asy
   const betaTask = registry.runWithSession('beta', async () => {
     assert.equal(registry.currentSessionId(), 'beta');
     assert.equal(routed.isPostmortem(), false);
+    assert.equal(registry.activeRequests('alpha'), 1);
+    assert.equal(registry.activeRequests('beta'), 1);
     releaseAlpha();
   });
 
   await Promise.all([alphaTask, betaTask]);
+  assert.equal(registry.activeRequests('alpha'), 0);
+  assert.equal(registry.activeRequests('beta'), 0);
   assert.equal(registry.get('alpha').isPostmortem(), true);
   assert.equal(registry.get('beta').isPostmortem(), false);
+});
+
+test('registry refuses to close a session while a routed request is active', async () => {
+  const registry = new DapSessionRegistry({ maxSessions: 3 });
+  registry.create('alpha');
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const active = registry.runWithSession('alpha', async () => {
+    await gate;
+  });
+
+  assert.equal(registry.list().find((entry) => entry.sessionId === 'alpha')?.activeRequests, 1);
+  await assert.rejects(
+    registry.close('alpha'),
+    /Cannot close DAP session 'alpha' while 1 routed debug request is still active/,
+  );
+  assert.equal(registry.has('alpha'), true);
+
+  release();
+  await active;
+  assert.equal(registry.activeRequests('alpha'), 0);
+  assert.deepEqual(await registry.close('alpha'), { sessionId: 'alpha', removed: true });
 });
 
 test('registry bounds session count, validates IDs, and keeps default slot stable', async () => {
