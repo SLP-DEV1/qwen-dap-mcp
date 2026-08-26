@@ -1,0 +1,148 @@
+name: Apply v0.12.1 hardening
+
+on:
+  push:
+    branches:
+      - hardening/v0.12.1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: hardening/v0.12.1
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Apply hardening patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json, re
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          pkg_path = Path('package.json')
+          pkg = json.loads(pkg_path.read_text(encoding='utf-8'))
+          files = pkg.setdefault('files', [])
+          if 'NOTICE' not in files:
+              try:
+                  idx = files.index('LICENSE') + 1
+              except ValueError:
+                  idx = len(files)
+              files.insert(idx, 'NOTICE')
+          pkg_path.write_text(json.dumps(pkg, indent=2) + '\n', encoding='utf-8')
+
+          docker = read('Dockerfile')
+          docker = docker.replace('COPY package.json ./', 'COPY package.json package-lock.json ./')
+          docker = docker.replace('RUN npm install --ignore-scripts', 'RUN npm ci --ignore-scripts')
+          docker = docker.replace('RUN npm install --omit=dev --ignore-scripts', 'RUN npm ci --omit=dev --ignore-scripts')
+          docker = docker.replace('COPY README.md LICENSE qwen-extension.json server.json ./', 'COPY README.md LICENSE NOTICE qwen-extension.json server.json ./')
+          write('Dockerfile', docker)
+
+          builder = read('scripts/build-extension-package.mjs')
+          needle = "  cp(path.join(projectRoot, 'LICENSE'), path.join(outputRoot, 'LICENSE')),\n"
+          replacement = needle + "  cp(path.join(projectRoot, 'NOTICE'), path.join(outputRoot, 'NOTICE')),\n"
+          if "path.join(projectRoot, 'NOTICE')" not in builder:
+              if needle not in builder:
+                  raise SystemExit('extension LICENSE copy anchor not found')
+              builder = builder.replace(needle, replacement)
+          write('scripts/build-extension-package.mjs', builder)
+
+          for wf in Path('.github/workflows').glob('*.yml'):
+              if wf.name == 'apply-v0121-hardening.yml':
+                  continue
+              text = wf.read_text(encoding='utf-8')
+              text = text.replace('npm install --ignore-scripts', 'npm ci --ignore-scripts')
+              wf.write_text(text, encoding='utf-8')
+
+          ci = read('.github/workflows/ci.yml')
+          ci = ci.replace("'dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE'", "'dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE', 'NOTICE'")
+          write('.github/workflows/ci.yml', ci)
+
+          publish_path = '.github/workflows/publish-registries.yml'
+          publish = read(publish_path)
+          publish = publish.replace("'dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE'", "'dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE', 'NOTICE'")
+          old_block = '''      - name: Install mcp-publisher\n        if: ${{ inputs.publish_mcp }}\n        shell: bash\n        run: |\n          curl --fail --location --silent --show-error \\\n            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \\\n            | tar xz mcp-publisher\n          ./mcp-publisher --help >/dev/null\n'''
+          new_block = '''      - name: Install verified mcp-publisher\n        if: ${{ inputs.publish_mcp }}\n        shell: bash\n        env:\n          MCP_PUBLISHER_VERSION: '1.8.1'\n          MCP_PUBLISHER_SHA256: 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc'\n        run: |\n          archive='mcp-publisher_linux_amd64.tar.gz'\n          url="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/${archive}"\n          curl --fail --location --silent --show-error --output "$archive" "$url"\n          echo "${MCP_PUBLISHER_SHA256}  ${archive}" | sha256sum --check -\n          tar xzf "$archive" mcp-publisher\n          rm "$archive"\n          ./mcp-publisher --help >/dev/null\n'''
+          if old_block not in publish:
+              raise SystemExit('mcp-publisher install block not found')
+          publish = publish.replace(old_block, new_block)
+          write(publish_path, publish)
+
+          annotations_path = 'src/tools/tool-annotations.ts'
+          annotations = read(annotations_path)
+          annotations = annotations.replace(
+              "export const DEBUG_SESSION_CONTROL_ANNOTATIONS = {\n  readOnlyHint: false,\n  destructiveHint: false,\n  idempotentHint: false,\n  openWorldHint: false,\n} as const;",
+              "export const DEBUG_SESSION_CONTROL_ANNOTATIONS = {\n  readOnlyHint: false,\n  destructiveHint: true,\n  idempotentHint: false,\n  openWorldHint: true,\n} as const;",
+          )
+          annotations = annotations.replace(
+              "export const LOCAL_TARGET_EXECUTION_ANNOTATIONS = {\n  readOnlyHint: false,\n  destructiveHint: true,\n  idempotentHint: false,\n  openWorldHint: false,\n} as const;",
+              "export const LOCAL_TARGET_EXECUTION_ANNOTATIONS = {\n  readOnlyHint: false,\n  destructiveHint: true,\n  idempotentHint: false,\n  openWorldHint: true,\n} as const;",
+          )
+          write(annotations_path, annotations)
+
+          readme_path = 'README.md'
+          readme = read(readme_path)
+          replacement = '''## MCP toolsets\n\nThe default `agent` toolset deliberately exposes only the nine high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).\n\n### Default `agent` tools\n\n| Tool | Purpose |\n| --- | --- |\n| `debug_this_crash` | High-level live/CodeLLDB/dump diagnosis, verification, and autonomous orchestration |\n| `debug_diagnose_stop` | Intelligent diagnosis of the current stopped state |\n| `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |\n| `debug_run_to_stop` | Launch/attach and race-safely wait for stop/exit/termination |\n| `debug_open_dump` | Open a native core/minidump for read-only postmortem inspection |\n| `debug_snapshot` | Capture a bounded raw runtime snapshot |\n| `debug_status` | Read current session status |\n| `debug_continue` | Resume an authorized live target to the next stop |\n| `debug_disconnect` | Disconnect and tear down the debugger session |\n\nThe `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB lifecycle primitives.\n\n'''
+          readme, count = re.subn(r'## Main MCP tools\n.*?(?=## Verification model\n)', replacement, readme, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'expected one Main MCP tools section, replaced {count}')
+          readme = readme.replace('npm install --ignore-scripts\nnpm run check', 'npm ci --ignore-scripts\nnpm run check')
+          write(readme_path, readme)
+
+          for doc in [Path('CONTRIBUTING.md'), *Path('docs').glob('*.md')]:
+              text = doc.read_text(encoding='utf-8')
+              text = text.replace('npm install --ignore-scripts', 'npm ci --ignore-scripts')
+              doc.write_text(text, encoding='utf-8')
+
+          changelog_path = 'CHANGELOG.md'
+          changelog = read(changelog_path)
+          if '## 0.12.0 - 2026-08-26' not in changelog:
+              anchor = 'All notable prototype milestones are documented here.\n\n'
+              if anchor not in changelog:
+                  raise SystemExit('CHANGELOG intro anchor not found')
+              prefix = '''## Unreleased\n\n### Changed / hardened\n\n- Improved the default agent MCP tool metadata with explicit usage guidance, parameter semantics, and behavior annotations.\n- Added Glama build metadata/container validation and community discovery links.\n- Restored canonical Apache-2.0 license text and moved project attribution to `NOTICE` for stricter scanner compatibility.\n- Include `NOTICE` consistently in npm, Qwen extension, and container artifacts.\n- Added a committed dependency lockfile and switched reproducible CI/release/container installs to `npm ci`.\n- Pinned `mcp-publisher` to v1.8.1 and verify the official Linux amd64 SHA256 before execution.\n\n## 0.12.0 - 2026-08-26\n\n### Added\n\n- Added the compact default `agent` MCP toolset while retaining the complete low-level debugger surface through `QWEN_DAP_MCP_TOOLSET=full`.\n- Added reproducible Crash Lab fixtures for null-pointer, divide-by-zero, and bad-call-target failures.\n- Added a benchmark scaffold for source-only, raw DAP, and qwen-dap-mcp comparison runs without fabricated results.\n- Added the 30-45 second demo storyboard and release documentation for the v0.12 agent workflow.\n\n### Distribution / verified\n\n- Published `@slp-dev1/qwen-dap-mcp@0.12.0` to npm and `io.github.SLP-DEV1/qwen-dap-mcp` to the official MCP Registry.\n- GitHub Release, Node 20/22 CI, Qwen package smoke, real Windows CodeLLDB live smoke, and real Windows minidump smoke passed for the release.\n\n## 0.11.4 - 2026-08-26\n\n### Fixed / verified\n\n- Normalized recognized Windows postmortem SEH exception codes so real CodeLLDB minidumps retain crash-like classification.\n- Verified the production dump-open path against a real generated Windows minidump before advancing to v0.12.\n\n'''
+              changelog = changelog.replace(anchor, anchor + prefix)
+          write(changelog_path, changelog)
+
+          test_path = 'test/release-workflow.test.ts'
+          test_text = read(test_path)
+          test_text = test_text.replace(
+              "  assert.match(workflow, /npm pack --dry-run --json/);\n",
+              "  assert.match(workflow, /npm pack --dry-run --json/);\n  assert.match(workflow, /'NOTICE'/);\n  assert.match(workflow, /MCP_PUBLISHER_VERSION: '1\\.8\\.1'/);\n  assert.match(workflow, /a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc/);\n  assert.match(workflow, /sha256sum --check/);\n",
+          )
+          write(test_path, test_text)
+          PY
+
+      - name: Generate dependency lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Verify clean install and checks
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+          docker build --tag qwen-dap-mcp:hardening .
+
+      - name: Commit project changes and remove helper workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-v0121-hardening.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: harden packaging and release pipeline for v0.12.1'
+          git push origin HEAD:hardening/v0.12.1
