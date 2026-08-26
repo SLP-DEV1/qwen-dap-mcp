@@ -1,0 +1,124 @@
+name: Cleanup merged branches
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cleanup-merged-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale merged branches
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            const { data: repository } = await github.rest.repos.get({ owner, repo });
+            const defaultBranch = repository.default_branch;
+
+            if (context.eventName === 'push' && context.ref !== `refs/heads/${defaultBranch}`) {
+              core.info(`Skipping non-default-branch push: ${context.ref}`);
+              return;
+            }
+
+            const openPulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const openHeads = new Set(
+              openPulls
+                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
+                .map((pr) => pr.head.ref),
+            );
+
+            const closedPulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'closed',
+              base: defaultBranch,
+              per_page: 100,
+            });
+
+            const latestMergedHead = new Map();
+            for (const pr of closedPulls) {
+              if (!pr.merged_at) continue;
+              if (pr.head.repo?.full_name !== `${owner}/${repo}`) continue;
+              if (pr.head.ref === defaultBranch) continue;
+
+              const previous = latestMergedHead.get(pr.head.ref);
+              if (!previous || Date.parse(pr.merged_at) > Date.parse(previous.merged_at)) {
+                latestMergedHead.set(pr.head.ref, pr);
+              }
+            }
+
+            async function currentBranch(branch) {
+              try {
+                const [ref, branchInfo] = await Promise.all([
+                  github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` }),
+                  github.rest.repos.getBranch({ owner, repo, branch }),
+                ]);
+                return { sha: ref.data.object.sha, protected: branchInfo.data.protected };
+              } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+            }
+
+            async function deleteExactBranch(branch, expectedSha, reason) {
+              if (branch === defaultBranch) return;
+              if (openHeads.has(branch)) {
+                core.info(`Keeping ${branch}: it is used by an open pull request.`);
+                return;
+              }
+
+              const current = await currentBranch(branch);
+              if (!current) return;
+              if (current.protected) {
+                core.info(`Keeping ${branch}: branch is protected.`);
+                return;
+              }
+              if (current.sha !== expectedSha) {
+                core.info(`Keeping ${branch}: current SHA ${current.sha} differs from merged head ${expectedSha}.`);
+                return;
+              }
+
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              core.info(`Deleted ${branch}: ${reason}.`);
+            }
+
+            for (const [branch, pr] of latestMergedHead) {
+              await deleteExactBranch(branch, pr.head.sha, `merged PR #${pr.number}`);
+            }
+
+            // These two branches were temporary connector smoke branches. They are
+            // deleted only when their current commit is already an ancestor of main.
+            for (const branch of ['noop-check', 'noop-temp']) {
+              if (openHeads.has(branch)) continue;
+              const current = await currentBranch(branch);
+              if (!current || current.protected) continue;
+
+              const comparison = await github.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+                owner,
+                repo,
+                basehead: `${branch}...${defaultBranch}`,
+              });
+
+              if (comparison.data.status !== 'ahead' || comparison.data.behind_by !== 0) {
+                core.info(`Keeping ${branch}: it is not a clean ancestor of ${defaultBranch}.`);
+                continue;
+              }
+
+              await deleteExactBranch(branch, current.sha, `verified ancestor of ${defaultBranch}`);
+            }
