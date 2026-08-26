@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a reproducible debugger, MCP, packaging, or crash-analysis problem
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove secrets, private source, sensitive dump contents, and identifying local paths before posting logs.
+  - type: input
+    id: version
+    attributes:
+      label: qwen-dap-mcp version
+      placeholder: v0.11.1
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS / architecture
+      placeholder: Windows 11 x64
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: 22.x
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: DAP adapter / version
+      placeholder: CodeLLDB 1.x
+    validations:
+      required: true
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      options:
+        - Live launch
+        - Live attach
+        - Crash dump / minidump
+        - Autonomous debug workflow
+        - Packaging / installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Give the smallest reliable sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs / debugger evidence
+      description: Include relevant stderr output or DAP evidence. Remove secrets and private data.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed secrets, confidential source, and sensitive dump data.
+          required: true
