@@ -2,6 +2,38 @@
 
 All notable prototype milestones are documented here.
 
+## 0.9.0 - 2026-08-26
+
+### Added
+
+- Intelligent project-frame selection for `debug_this_crash`, `debug_diagnose_stop`, and `debug_source_disassembly` instead of assuming the raw `stack[0]` frame is application code.
+- Bounded frame scoring using explicit `analysis.projectRoots` / `projectModules`, the launched executable, source information, and conservative runtime/system-module heuristics.
+- `projectFrame` and `frameSelection` diagnosis sections that preserve the raw debugger fault frame separately from the first likely project-controlled frame and explain why each frame was scored or skipped.
+- Operand ↔ register ↔ pointer-local correlation for x86/x64 and common ARM register naming, including register-alias normalization, memory-operand detection, and numeric local/register value matching.
+- `likelyFaultOperand.faultingFrame` so a selected non-top project frame is explicitly distinguished from the literal faulting machine frame.
+- Bounded `callChain` analysis with project callers, runtime-boundary depth, repeated recursion/re-entry candidates, pointer-like value provenance, and an evidence-ranked root-cause candidate.
+- Conservative caller-provenance confidence: distinctive poison/debug values can provide strong lifetime evidence while repeated null values remain low confidence because unrelated pointers may all be null.
+- `fixWorkflow` with an evidence-backed candidate source location and the phases diagnose → fix → rebuild → reproduce → verify.
+- Reusable `verificationBaseline` signatures for the original crash family, selected project location, hypothesis kinds, and suspicious values.
+- `debug_this_crash(..., workflow={stage:"verify", baseline:...})` verification with `fixed`, `not-fixed`, `changed-failure`, and `inconclusive` verdicts.
+- Regression coverage for Windows-runtime frame skipping, operand/register/local correlation, caller provenance, same-crash reproduction, clean-exit verification, and conservative non-crash verification behavior.
+
+### Changed
+
+- Existing high-level crash tools became smarter without adding another MCP tool or a general command executor.
+- Source edits and rebuilds remain the responsibility of the host coding agent/project build system; qwen-dap-mcp supplies debugger evidence, fix direction, reproduction state, and verification comparison.
+- A clean reproduced process exit with code 0 is strong fix evidence; breakpoint, entry, pause, step, or other non-crash stopped states are deliberately `inconclusive` until the complete original scenario reaches a terminal outcome.
+- Project-frame selection confidence means “likely project code”, not proof that the selected frame caused the bug.
+- Instructions from a selected non-top project frame are treated as call-site/context evidence rather than automatically as the literal crash instruction.
+- Both bundled `native-runtime-debug` Skill copies and MCP server instructions now teach project-frame reasoning, operand/data-flow interpretation, bounded caller provenance, and the verification-baseline loop.
+
+### Verified
+
+- Node.js 20 and 22 build/test/package matrix passes on the final feature head and merged `main`.
+- Generated self-contained Qwen extension archive builds and installs successfully.
+- Real Windows CodeLLDB live DAP smoke passes against an MSVC-built native target.
+- Real Windows minidump smoke generates a native `.dmp` with PDB symbols, reopens it through real CodeLLDB, and validates the v0.9 project-frame selection, intelligent diagnosis, fix workflow, and verification baseline against the recovered debugger state.
+
 ## 0.8.0 - 2026-08-26
 
 ### Added
