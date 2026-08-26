@@ -61,9 +61,8 @@ export class GuardedDapSession extends DapSession {
     return this.runExclusiveLifecycle('start', async () => {
       // DapConnection.start() directly spawns the adapter and intentionally sits
       // outside sendRequest(). Gate it before reset/spawn can create a side
-      // effect. Environment values never leave Node; HOL Guard sees only a
-      // deterministic hash plus key names so approval reuse is bound to the
-      // adapter's effective launch environment without disclosing secrets.
+      // effect. HOL Guard sees a fingerprint of the effective adapter environment
+      // and the exact resolved executable identity, not raw adapter env values.
       const executionContext = await requireHolGuardAdapterStart(this.holGuardEvaluator, {
         command: options.command,
         ...(options.args ? { args: options.args } : {}),
@@ -74,10 +73,16 @@ export class GuardedDapSession extends DapSession {
       this.holGuardExecutionContext = undefined;
       this.postmortem = false;
       try {
-        const capabilities = await super.start(options);
+        // When HOL Guard is enabled, spawn the canonical executable path that was
+        // hashed and approved rather than resolving the original PATH command a
+        // second time after the policy decision.
+        const guardedOptions = executionContext.adapterResolvedCommand
+          ? { ...options, command: executionContext.adapterResolvedCommand }
+          : options;
+        const capabilities = await super.start(guardedOptions);
         // Bind every later protected DAP request to the exact adapter/cwd/env
-        // that successfully initialized. DAP launch arguments are additionally
-        // included in the per-request artifact hash by the Python bridge.
+        // that successfully initialized. Sanitized per-request arguments are
+        // included separately in the HOL Guard approval identity.
         this.holGuardExecutionContext = executionContext;
         return capabilities;
       } catch (error) {
