@@ -241,6 +241,7 @@ export class DapConnection extends EventEmitter {
     eventName: string,
     timeoutMs = 15_000,
     predicate?: (event: DebugProtocol.Event) => boolean,
+    includeRecent = false,
   ): Promise<DebugProtocol.Event> {
     return new Promise((resolve, reject) => {
       const eventKey = `event:${eventName}`;
@@ -272,6 +273,31 @@ export class DapConnection extends EventEmitter {
       this.on(eventKey, handler);
       this.on('adapterExit', onAdapterExit);
       this.on('adapterError', onAdapterError);
+
+      // Some valid DAP adapters (notably GNU GDB) emit `initialized`
+      // immediately after the initialize response, before launch/attach.
+      // Register the live listener first, then inspect this transport's
+      // bounded event history so an event cannot race between the two.
+      if (includeRecent) {
+        const recent = [...this.eventHistory].reverse().find((record) => {
+          if (record.event !== eventName) return false;
+          const candidate = {
+            seq: 0,
+            type: 'event' as const,
+            event: record.event,
+            ...(record.body === undefined ? {} : { body: record.body }),
+          } satisfies DebugProtocol.Event;
+          return !predicate || predicate(candidate);
+        });
+        if (recent) {
+          handler({
+            seq: 0,
+            type: 'event',
+            event: recent.event,
+            ...(recent.body === undefined ? {} : { body: recent.body }),
+          });
+        }
+      }
     });
   }
 

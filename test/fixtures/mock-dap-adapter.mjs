@@ -49,6 +49,7 @@ function handle(request) {
           { filter: 'mock_throw', label: 'Mock throw', default: false, supportsCondition: true },
         ],
       });
+      if (process.env.MOCK_INITIALIZED_ON_INITIALIZE === '1') event('initialized');
       break;
     case 'launch':
     case 'attach':
@@ -57,7 +58,7 @@ function handle(request) {
         break;
       }
       launchRequest = request;
-      event('initialized');
+      if (process.env.MOCK_INITIALIZED_ON_INITIALIZE !== '1') event('initialized');
       break;
     case 'setBreakpoints':
       response(request, { breakpoints: verifiedBreakpoints(request.arguments?.breakpoints ?? []) });

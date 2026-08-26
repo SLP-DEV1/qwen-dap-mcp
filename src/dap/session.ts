@@ -456,7 +456,7 @@ export class DapSession {
     this.activeRequest = request;
 
     const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);
-    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs);
+    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);
     const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
     const requestFailure = new Promise<never>((_resolve, reject) => {
       void requestPromise.catch(reject);

@@ -126,6 +126,28 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
   assert.equal(session.snapshot().adapterRunning, false);
 });
 
+test('launch accepts initialized emitted immediately after initialize', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+
+  await session.start({
+    ...mockStartOptions(),
+    env: { MOCK_INITIALIZED_ON_INITIALIZE: '1' },
+  });
+  assert.ok(
+    session.snapshot().recentEvents.some((event) => event.event === 'initialized'),
+    'mock adapter should emit initialized before launch',
+  );
+
+  const launch = await session.launch(
+    { program: '/tmp/early-initialized-app' },
+    [{ source: '/tmp/main.cpp', lines: [42] }],
+  );
+  assert.equal((launch as { request: string }).request, 'launch');
+  assert.equal(session.snapshot().configured, true);
+  assert.equal(session.snapshot().activeRequest, 'launch');
+});
+
 test('failed launch aligns initialized timeout, observes the parallel request, and clears stale session state', async (t) => {
   const session = new DapSession();
   t.after(async () => session.reset());
