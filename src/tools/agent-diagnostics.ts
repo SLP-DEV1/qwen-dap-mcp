@@ -6,6 +6,7 @@ import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/
 import { analyzeRuntimeSnapshot, correlateSourceDisassembly } from '../diagnostics/analyze-snapshot.js';
 import {
   advanceAutonomousCycle,
+  refreshAutonomousEvidence,
   startAutonomousCycle,
   type AutonomousAgentState,
 } from '../diagnostics/autonomous-cycle.js';
@@ -22,6 +23,7 @@ import {
 import { DapError } from '../dap/errors.js';
 import type { RuntimeSnapshot, RuntimeSnapshotOptions, SourceBreakpointGroup } from '../dap/session.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
+import { logger } from '../logger.js';
 import { openDump, type OpenDumpOptions } from './register-dump-tools.js';
 import { runToStop } from './run-to-stop.js';
 
@@ -170,20 +172,36 @@ async function captureFrameEvidence(
   options: RuntimeSnapshotOptions,
   includeDisassembly: boolean,
 ): Promise<FrameEvidence> {
-  const scopes = await session.scopes(frame.id);
   const maxVariables = options.maxVariablesPerScope ?? 100;
+  const collectionErrors: string[] = [];
+  let scopes: DebugProtocol.Scope[] = [];
+  try {
+    scopes = await session.scopes(frame.id);
+  } catch (error) {
+    collectionErrors.push(`scopes: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   const localScopes = scopes.filter((scope) => /locals?|arguments?|parameters?/i.test(scope.name));
   const registerScope = scopes.find((scope) => /register/i.test(scope.name));
 
   const locals: DebugProtocol.Variable[] = [];
   for (const scope of localScopes.slice(0, 3)) {
     if (scope.variablesReference <= 0) continue;
-    locals.push(...await session.variables(scope.variablesReference, 0, maxVariables));
+    try {
+      locals.push(...await session.variables(scope.variablesReference, 0, maxVariables));
+    } catch (error) {
+      collectionErrors.push(`${scope.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
-  const registers = registerScope && registerScope.variablesReference > 0
-    ? await session.variables(registerScope.variablesReference, 0, maxVariables)
-    : [];
+  let registers: DebugProtocol.Variable[] = [];
+  if (registerScope && registerScope.variablesReference > 0) {
+    try {
+      registers = await session.variables(registerScope.variablesReference, 0, maxVariables);
+    } catch (error) {
+      collectionErrors.push(`registers: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   let disassembly: DebugProtocol.DisassembledInstruction[] | undefined;
   if (includeDisassembly && frame.instructionPointerReference) {
@@ -197,18 +215,18 @@ async function captureFrameEvidence(
         0,
         true,
       );
-    } catch {
-      // Some adapters advertise disassembly but cannot resolve a particular frame/IP.
-      // The intelligent diagnosis remains useful from stack/variables alone.
+    } catch (error) {
+      collectionErrors.push(`disassembly: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   return {
     index,
     frame,
-    locals: dedupeVariables(locals).slice(0, maxVariables),
+    locals: dedupeVariables(locals).slice(0, maxVariables * Math.max(1, Math.min(3, localScopes.length))),
     registers: dedupeVariables(registers).slice(0, maxVariables),
     ...(disassembly === undefined ? {} : { disassembly }),
+    ...(collectionErrors.length === 0 ? {} : { collectionErrors }),
   };
 }
 
@@ -252,6 +270,9 @@ async function diagnoseSnapshot(
         locals: snapshot.locals,
         registers: snapshot.registers,
         ...(snapshot.disassembly === undefined ? {} : { disassembly: snapshot.disassembly }),
+        ...(snapshot.collectionErrors?.length
+          ? { collectionErrors: snapshot.collectionErrors.map((item) => `${item.operation}: ${item.message}`) }
+          : {}),
       });
       continue;
     }
@@ -328,6 +349,30 @@ function workflowMetadata(
       };
     }
 
+    // Evidence collection is not a fix attempt. Refresh the baseline/selection
+    // without incrementing the iteration or consuming the autonomous budget.
+    if (agentState.status === 'needs-evidence') {
+      if (!diagnosis) {
+        return {
+          stage,
+          verification: compareVerificationBaseline(agentState.activeBaseline, undefined, terminal),
+          autonomousAgent: {
+            protocolVersion: 2,
+            state: agentState,
+            shouldContinue: true,
+            nextActions: [],
+            stopReason: 'Evidence refresh did not produce a stopped-state diagnosis; repeat the evidence collection with a complete crash stop.',
+          },
+        };
+      }
+      return {
+        stage,
+        verificationBaseline: diagnosis.verificationBaseline,
+        fixWorkflow: diagnosis.fixWorkflow,
+        autonomousAgent: refreshAutonomousEvidence(agentState, diagnosis),
+      };
+    }
+
     const verification = compareVerificationBaseline(agentState.activeBaseline, diagnosis, terminal);
     return {
       stage,
@@ -354,6 +399,17 @@ function workflowMetadata(
       ? { verification: compareVerificationBaseline(baseline, diagnosis, terminal) }
       : {}),
   };
+}
+
+async function resetOwnedSessionAfterFailure(session: GuardedDapSession, error: unknown): Promise<never> {
+  try {
+    await session.reset();
+  } catch (cleanupError) {
+    logger.warn('Failed to reset owned CodeLLDB session after high-level workflow failure', {
+      cleanupError: cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+    });
+  }
+  throw error;
 }
 
 export function registerAgentDiagnosticTools(server: McpServer, session: GuardedDapSession): void {
@@ -383,7 +439,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Correlate Source and Disassembly',
       description:
-        'Select the first likely project-controlled frame, correlate its instruction pointer with nearby disassembly, and bind instruction operands back to registers and pointer-like locals when possible.',
+        'Select the first likely project-controlled frame, return both raw fault-frame and selected project-frame source/disassembly correlations, and bind project-frame instruction operands back to registers and pointer-like locals when possible.',
       inputSchema: z.object({
         threadId: z.number().int().positive().optional(),
         stackLevels: z.number().int().positive().max(100).default(12),
@@ -417,12 +473,21 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               ...(snapshot.disassembly === undefined ? {} : { disassembly: snapshot.disassembly }),
             }
           : await captureFrameEvidence(session, selectedFrame, selection.selected.index, snapshotOptions, true);
+        const projectSnapshot: RuntimeSnapshot = {
+          ...snapshot,
+          frame: selectedFrame,
+          locals: evidence.locals,
+          registers: evidence.registers,
+          disassembly: evidence.disassembly ?? [],
+        };
 
         return result({
           frameSelection: selection,
           faultCorrelation: correlateSourceDisassembly(snapshot),
+          projectCorrelation: correlateSourceDisassembly(projectSnapshot),
           projectFrame: selectedFrame,
           operandAnalysis: analyzeInstructionOperands(evidence),
+          ...(evidence.collectionErrors?.length ? { collectionErrors: evidence.collectionErrors } : {}),
         });
       } catch (error) {
         return errorResult(error);
@@ -438,12 +503,10 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
         'High-level debugging-agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. workflow.stage="autonomous" adds a bounded serialized agent loop with formal action dependencies, runtime root-cause backtracking, verification quality scoring, crash fingerprints, changed-failure re-baselining, and deterministic fixed/blocked/budget-exhausted stop conditions.',
       inputSchema: z.object({
         mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current'),
-
         request: z.enum(['launch', 'attach']).default('launch'),
         configuration: jsonRecord.optional(),
         breakpoints: z.array(breakpointGroupSchema).optional(),
         timeoutMs: z.number().int().min(1000).max(120000).default(30000),
-
         program: z.string().min(1).optional(),
         args: z.array(z.string()).optional(),
         cwd: z.string().optional(),
@@ -451,10 +514,8 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
         stopOnEntry: z.boolean().default(false),
         adapterPath: z.string().min(1).optional(),
         requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000),
-
         dumpPath: z.string().min(1).optional(),
         sourceMap: z.record(z.string(), z.string()).optional(),
-
         snapshot: snapshotSchema.optional(),
         analysis: analysisSchema.optional(),
         workflow: workflowSchema.optional(),
@@ -531,8 +592,6 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
           if (mode === 'codelldb') {
             if (!program) throw new DapError("debug_this_crash mode='codelldb' requires program.");
 
-            // Validate program/cwd before spawning CodeLLDB. A bad local input
-            // should fail as a preflight error and leave the session idle.
             const launchConfiguration = buildCodeLldbLaunchConfiguration({
               program,
               ...(args ? { args } : {}),
@@ -543,40 +602,48 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
             const adapter = discoverCodeLldb({
               ...(adapterPath ? { explicitPath: adapterPath } : {}),
             });
-            const capabilities = await session.start({
-              command: adapter.command,
-              adapterId: 'lldb',
-              ...(cwd ? { cwd } : {}),
-              requestTimeoutMs,
-            });
-            const run = await runToStop(session, {
-              request: 'launch',
-              configuration: launchConfiguration,
-              ...(breakpoints ? { breakpoints: breakpoints as SourceBreakpointGroup[] } : {}),
-              timeoutMs,
-              snapshot: {
-                ...snapshotOptions,
-                includeDisassembly: true,
-                includeModules: true,
-                includeExceptionInfo: true,
-              },
-            });
-            const diagnosis = run.snapshot
-              ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
-              : undefined;
-            const terminal = run.snapshot
-              ? undefined
-              : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
-            return {
-              mode,
-              adapter,
-              capabilities,
-              run,
-              diagnosis: diagnosis
-                ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
-              workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
-              status: session.snapshot(),
-            };
+
+            let adapterStarted = false;
+            try {
+              const capabilities = await session.start({
+                command: adapter.command,
+                adapterId: 'lldb',
+                ...(cwd ? { cwd } : {}),
+                requestTimeoutMs,
+              });
+              adapterStarted = true;
+              const run = await runToStop(session, {
+                request: 'launch',
+                configuration: launchConfiguration,
+                ...(breakpoints ? { breakpoints: breakpoints as SourceBreakpointGroup[] } : {}),
+                timeoutMs,
+                snapshot: {
+                  ...snapshotOptions,
+                  includeDisassembly: true,
+                  includeModules: true,
+                  includeExceptionInfo: true,
+                },
+              });
+              const diagnosis = run.snapshot
+                ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
+                : undefined;
+              const terminal = run.snapshot
+                ? undefined
+                : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
+              return {
+                mode,
+                adapter,
+                capabilities,
+                run,
+                diagnosis: diagnosis
+                  ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+                workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
+                status: session.snapshot(),
+              };
+            } catch (error) {
+              if (adapterStarted) return await resetOwnedSessionAfterFailure(session, error);
+              throw error;
+            }
           }
 
           if (!configuration) throw new DapError("debug_this_crash mode='live' requires configuration for the initialized DAP session.");
