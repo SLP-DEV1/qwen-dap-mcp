@@ -1,8 +1,9 @@
 {
-  "name": "qwen-dap-mcp",
-  "version": "0.11.0",
-  "description": "A small DAP-to-MCP bridge for agentic runtime debugging, designed to work with Qwen Code and other MCP clients.",
+  "name": "@slp-dev1/qwen-dap-mcp",
+  "version": "0.11.1",
+  "description": "Native runtime and crash-dump debugging for coding agents through a local DAP-to-MCP bridge.",
   "type": "module",
+  "main": "./dist/index.js",
   "bin": {
     "qwen-dap-mcp": "./dist/index.js"
   },
@@ -11,6 +12,7 @@
     "README.md",
     "LICENSE",
     "qwen-extension.json",
+    "server.json",
     "skills"
   ],
   "scripts": {
@@ -21,6 +23,7 @@
     "test:codelldb:dump": "tsx test/codelldb-real-dump-smoke.ts",
     "package:extension": "node scripts/build-extension-package.mjs",
     "check": "npm run build && npm test && npm run package:extension",
+    "prepublishOnly": "npm run check",
     "start": "node dist/index.js"
   },
   "engines": {
@@ -36,12 +39,27 @@
     "lldb",
     "core-dump",
     "minidump",
+    "crash-debugging",
     "postmortem-debugging",
+    "qwen",
     "qwen-code",
     "qwen-extension",
+    "coding-agent",
     "agentic-debugging"
   ],
   "license": "Apache-2.0",
+  "mcpName": "io.github.SLP-DEV1/qwen-dap-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SLP-DEV1/qwen-dap-mcp.git"
+  },
+  "homepage": "https://github.com/SLP-DEV1/qwen-dap-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/SLP-DEV1/qwen-dap-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
     "@vscode/debugprotocol": "^1.68.0",

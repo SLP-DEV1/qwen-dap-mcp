@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SLP-DEV1/qwen-dap-mcp",
+  "title": "Qwen DAP MCP",
+  "description": "Native runtime and crash-dump debugging through a local DAP-to-MCP bridge for coding agents.",
+  "repository": {
+    "url": "https://github.com/SLP-DEV1/qwen-dap-mcp",
+    "source": "github"
+  },
+  "version": "0.11.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@slp-dev1/qwen-dap-mcp",
+      "version": "0.11.1",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

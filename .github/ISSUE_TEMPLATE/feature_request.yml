@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a focused debugger, DAP, MCP, or crash-analysis improvement
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Debugging problem
+      description: What concrete workflow or limitation should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Reproducible workflow / example
+      description: Show the debugger scenario, target, adapter, or crash-analysis flow where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior change.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Relevant DAP / debugger evidence
+      description: Optional sanitized protocol details, adapter capabilities, or example output.
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries
+      options:
+        - label: This request can preserve local stdio transport and the existing bounded safety model.
+          required: true
+        - label: I searched existing issues and pull requests for similar work.
+          required: true
