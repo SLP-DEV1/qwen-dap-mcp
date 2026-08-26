@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
-import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
+import {
+  captureAllThreadHangEvidence,
+  registerHangDiagnosticTool,
+} from '../src/tools/hang-diagnostics.js';
 
 function stackFrame(id: number, name: string): DebugProtocol.StackFrame {
   return { id, name, line: 1, column: 1 };
@@ -82,6 +85,7 @@ test('debug_this_hang pauses remaining threads when the existing stop is not glo
     requestTimeoutMs: 30_000,
     observeMs: 5_000,
     pauseTimeoutMs: 10_000,
+    captureTimeoutMs: 30_000,
     maxThreads: 32,
     stackLevels: 24,
     maxVariablesPerFrame: 50,
@@ -104,4 +108,36 @@ test('debug_this_hang pauses remaining threads when the existing stop is not glo
     safeParse(value: unknown): { success: boolean };
   };
   assert.equal(schema.safeParse(result.structuredContent).success, true);
+});
+
+test('all-thread evidence collection returns partial evidence at the global capture deadline', async () => {
+  const threads: DebugProtocol.Thread[] = [
+    { id: 1, name: 'stalled adapter request' },
+    { id: 2, name: 'not reached' },
+  ];
+  let stackCalls = 0;
+  const session = {
+    threads: async () => threads,
+    stackTrace: async (_threadId: number) => {
+      stackCalls += 1;
+      return await new Promise<DebugProtocol.StackFrame[]>(() => undefined);
+    },
+    scopes: async () => [],
+    variables: async () => [],
+  };
+
+  const evidence = await Promise.race([
+    captureAllThreadHangEvidence(session as never, {
+      maxThreads: 2,
+      captureTimeoutMs: 20,
+    }),
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error('capture deadline was not enforced')), 500);
+    }),
+  ]);
+
+  assert.equal(evidence.length, 2);
+  assert.equal(stackCalls, 1);
+  assert.match(evidence[0]?.collectionErrors?.join(' ') ?? '', /capture deadline exceeded/i);
+  assert.match(evidence[1]?.collectionErrors?.join(' ') ?? '', /capture deadline exceeded/i);
 });
