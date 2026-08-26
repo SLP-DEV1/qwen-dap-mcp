@@ -36,7 +36,7 @@ Modern GDB DAP differs from CodeLLDB and `lldb-dap` in an important ordering det
 initialize -> initialized -> setBreakpoints -> configurationDone -> launch
 ```
 
-Source breakpoints can therefore be reported as pending before GDB knows the executable and become resolved when `launch` loads and starts the program. The bridge handles this ordering only for the GDB adapter path while preserving the existing CodeLLDB/`lldb-dap` lifecycle.
+Source breakpoints can therefore be reported as pending before GDB knows the executable and become resolved when `launch` loads and starts the program. The bridge handles this ordering only for the GDB adapter path while preserving the existing CodeLLDB/`lldb-dap` lifecycle. The Linux smoke workflow exercises this sequence against the distribution GDB instead of relying only on mocked protocol ordering.
 
 ## High-level crash workflow
 
