@@ -163,7 +163,7 @@ test('project-frame selection skips system/runtime frames and prefers explicit p
   assert.equal(selection.skippedRuntimeFrames, 2);
 });
 
-test('operand analysis binds a faulting memory register back to a pointer local', () => {
+test('operand analysis binds a selected-frame memory register back to a pointer local', () => {
   const frame = {
     id: 3,
     name: 'Widget::render',
@@ -192,13 +192,14 @@ test('operand analysis binds a faulting memory register back to a pointer local'
   assert.equal(analysis.mnemonic, 'mov');
   assert.equal(analysis.likelyFaultOperand?.register, 'rax');
   assert.equal(analysis.likelyFaultOperand?.value, '0x0');
-  assert.equal(analysis.likelyFaultOperand?.confidence, 'high');
+  assert.equal(analysis.likelyFaultOperand?.confidence, 'medium');
+  assert.equal(analysis.likelyFaultOperand?.faultingFrame, false);
   assert.equal(analysis.variableBindings[0]?.variable, 'widgetPtr');
   assert.equal(analysis.variableBindings[0]?.register, 'rax');
   assert.equal(analysis.variableBindings[0]?.confidence, 'high');
 });
 
-test('call-chain analysis traces pointer-like values through project callers', () => {
+test('call-chain analysis traces distinctive poison values through project callers', () => {
   const stack = [
     {
       id: 10,
@@ -250,6 +251,31 @@ test('call-chain analysis traces pointer-like values through project callers', (
   assert.equal(chain.provenance[0]?.confidence, 'high');
 });
 
+test('null values repeated across callers remain low-confidence provenance', () => {
+  const stack = [
+    { id: 20, name: 'callee', source: { path: '/work/src/a.cpp' }, line: 10, column: 1 },
+    { id: 21, name: 'caller', source: { path: '/work/src/b.cpp' }, line: 20, column: 1 },
+  ];
+  const selection = selectProjectFrame(stack, { projectRoots: ['/work'] });
+  const chain = analyzeCallChain(selection, [
+    {
+      index: 0,
+      frame: stack[0]!,
+      locals: [{ name: 'leftPtr', value: '0x0', type: 'Node *', variablesReference: 0 }],
+      registers: [],
+    },
+    {
+      index: 1,
+      frame: stack[1]!,
+      locals: [{ name: 'rightPtr', value: '0x0', type: 'Node *', variablesReference: 0 }],
+      registers: [],
+    },
+  ]);
+
+  assert.equal(chain.provenance[0]?.confidence, 'low');
+  assert.equal(chain.rootCauseCandidate.confidence, 'medium');
+});
+
 test('intelligent diagnosis emits a verification baseline and detects the same reproduced crash', () => {
   const snapshot = baseSnapshot();
   snapshot.exception = {
@@ -273,6 +299,7 @@ test('intelligent diagnosis emits a verification baseline and detects the same r
 
   assert.equal(diagnosis.projectFrame.function, 'crash_here');
   assert.equal(diagnosis.operandAnalysis.likelyFaultOperand?.register, 'rax');
+  assert.equal(diagnosis.operandAnalysis.likelyFaultOperand?.faultingFrame, true);
   assert.equal(diagnosis.fixWorkflow.status, 'proposal-only');
   assert.equal(diagnosis.fixWorkflow.phases.map((phase) => phase.phase).join(','), 'diagnose,fix,rebuild,reproduce,verify');
 
@@ -301,4 +328,49 @@ test('verification marks a clean reproduction exit as fixed with high confidence
 
   assert.equal(verification.verdict, 'fixed');
   assert.equal(verification.confidence, 'high');
+});
+
+test('verification does not treat a non-crash breakpoint stop as proof of a fix', () => {
+  const crashSnapshot = baseSnapshot();
+  crashSnapshot.exception = {
+    exceptionId: 'EXCEPTION_ACCESS_VIOLATION',
+    description: 'Access violation reading address 0x0',
+    breakMode: 'unhandled',
+  };
+  const crashDiagnosis = buildIntelligentDiagnosis(
+    crashSnapshot,
+    analyzeRuntimeSnapshot(crashSnapshot),
+    selectProjectFrame(crashSnapshot.stack, { projectRoots: ['/tmp'] }),
+    [{
+      index: 0,
+      frame: crashSnapshot.frame,
+      locals: crashSnapshot.locals,
+      registers: crashSnapshot.registers,
+      disassembly: crashSnapshot.disassembly,
+    }],
+  );
+
+  const breakpointSnapshot = baseSnapshot();
+  breakpointSnapshot.stopped = { reason: 'breakpoint', threadId: 1, allThreadsStopped: true };
+  breakpointSnapshot.exception = undefined;
+  const breakpointDiagnosis = buildIntelligentDiagnosis(
+    breakpointSnapshot,
+    analyzeRuntimeSnapshot(breakpointSnapshot),
+    selectProjectFrame(breakpointSnapshot.stack, { projectRoots: ['/tmp'] }),
+    [{
+      index: 0,
+      frame: breakpointSnapshot.frame,
+      locals: breakpointSnapshot.locals,
+      registers: breakpointSnapshot.registers,
+      disassembly: breakpointSnapshot.disassembly,
+    }],
+  );
+
+  const verification = compareVerificationBaseline(
+    crashDiagnosis.verificationBaseline,
+    breakpointDiagnosis,
+  );
+
+  assert.equal(verification.verdict, 'inconclusive');
+  assert.equal(verification.confidence, 'low');
 });
