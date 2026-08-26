@@ -14,6 +14,7 @@ on:
       - 'test/qwen-skill.test.ts'
       - 'test/release-workflow.test.ts'
       - 'scripts/build-extension-package.mjs'
+      - 'scripts/hol-guard-dap-policy.py'
       - 'tsconfig.json'
       - '.github/workflows/extension-package-smoke.yml'
       - '.github/workflows/release-extension.yml'
@@ -42,6 +43,7 @@ jobs:
           mkdir -p release
           tar -C release/extension -czf release/qwen-dap-mcp.tar.gz .
           test "$(tar -tzf release/qwen-dap-mcp.tar.gz | grep -Ec '^\./qwen-extension\.json$')" -eq 1
+          test "$(tar -tzf release/qwen-dap-mcp.tar.gz | grep -Ec '^\./scripts/hol-guard-dap-policy\.py$')" -eq 1
           if tar -tvzf release/qwen-dap-mcp.tar.gz | awk '$1 ~ /^[lh]/ { found=1 } END { exit found ? 0 : 1 }'; then
             echo 'Archive unexpectedly contains a symbolic or hard link.' >&2
             exit 1
