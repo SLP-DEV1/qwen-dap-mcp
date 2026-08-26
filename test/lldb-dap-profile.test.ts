@@ -50,7 +50,7 @@ test('LLDB_DAP_PATH provides deterministic environment discovery', () => {
   }
 });
 
-test('lldb-dap launch profile uses the upstream configuration shape and internal console', () => {
+test('lldb-dap launch profile uses the upstream version-neutral configuration shape', () => {
   const root = mkdtempSync(join(tmpdir(), 'qwen-dap-mcp-lldb-dap-launch-'));
   try {
     const program = join(root, 'native-smoke');
@@ -66,7 +66,8 @@ test('lldb-dap launch profile uses the upstream configuration shape and internal
     assert.equal(config.request, 'launch');
     assert.equal(config.program, program);
     assert.equal(config.cwd, root);
-    assert.equal(config.console, 'internalConsole');
+    assert.equal('console' in config, false);
+    assert.equal('runInTerminal' in config, false);
     assert.equal(config.stopOnEntry, true);
     assert.deepEqual(config.args, ['one', 'two']);
     assert.deepEqual(config.env, { FOO: '1' });
