@@ -205,12 +205,12 @@ const OWNER_RE = /(?:owner|thread|tid|handle)/i;
 const BUFFER_RE = /(?:buffer|buf|node|object|obj|context|ctx|state|queue|list|map|tree|head|tail|this|self)/i;
 
 function normalizedHex(value: string): string | undefined {
-  const match = value.match(/0x[0-9a-f]+/i);
-  if (!match) return undefined;
+  const matched = value.match(/0x[0-9a-f]+/i)?.[0];
+  if (!matched) return undefined;
   try {
-    return `0x${BigInt(match[0]).toString(16)}`;
+    return `0x${BigInt(matched).toString(16)}`;
   } catch {
-    return match[0].toLowerCase();
+    return matched.toLowerCase();
   }
 }
 
