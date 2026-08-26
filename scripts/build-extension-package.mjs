@@ -82,7 +82,10 @@ if (!registryPackage) {
 }
 
 await rm(outputRoot, { recursive: true, force: true });
-await mkdir(path.join(outputRoot, 'dist'), { recursive: true });
+await Promise.all([
+  mkdir(path.join(outputRoot, 'dist'), { recursive: true }),
+  mkdir(path.join(outputRoot, 'scripts'), { recursive: true }),
+]);
 
 const result = await build({
   entryPoints: [path.join(projectRoot, 'dist', 'index.js')],
@@ -114,6 +117,10 @@ await Promise.all([
   cp(path.join(projectRoot, 'skills'), path.join(outputRoot, 'skills'), {
     recursive: true,
   }),
+  cp(
+    path.join(projectRoot, 'scripts', 'hol-guard-dap-policy.py'),
+    path.join(outputRoot, 'scripts', 'hol-guard-dap-policy.py'),
+  ),
   cp(
     path.join(projectRoot, 'qwen-extension.json'),
     path.join(outputRoot, 'qwen-extension.json'),
