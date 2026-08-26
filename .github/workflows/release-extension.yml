@@ -59,8 +59,7 @@ jobs:
           fi
           sha256sum release/qwen-dap-mcp.tar.gz | tee release/qwen-dap-mcp.sha256.txt
 
-      - name: Install Qwen Code for archive smoke test
-        if: steps.version.outputs.exists == 'false'
+      - name: Install Qwen Code for smoke tests
         run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
 
       - name: Verify archive installs as a Qwen extension
@@ -73,6 +72,18 @@ jobs:
           qwen extensions install "$PWD/release/qwen-dap-mcp.tar.gz" --consent
           qwen extensions list | tee release/qwen-extensions-list.txt
           grep -F 'qwen-dap-mcp' release/qwen-extensions-list.txt
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const manifestPath = path.join(process.env.HOME, ".qwen", "extensions", "qwen-dap-mcp", "qwen-extension.json");
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            const expected = process.env.EXPECTED_VERSION;
+            if (manifest.version !== expected) {
+              throw new Error(`archive installed version ${manifest.version}, expected ${expected}`);
+            }
+          '
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Publish GitHub release
         if: steps.version.outputs.exists == 'false'
@@ -88,4 +99,50 @@ jobs:
 
       - name: Release already exists
         if: steps.version.outputs.exists == 'true'
-        run: echo "${{ steps.version.outputs.tag }} already exists; nothing to publish."
+        run: echo "${{ steps.version.outputs.tag }} already exists; verifying it instead of publishing again."
+
+      - name: Verify published release metadata
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          ACTUAL_TAG="$(jq -r '.tag_name' <<<"$RELEASE_JSON")"
+          TARGET_COMMIT="$(jq -r '.target_commitish' <<<"$RELEASE_JSON")"
+          IS_DRAFT="$(jq -r '.draft' <<<"$RELEASE_JSON")"
+          IS_PRERELEASE="$(jq -r '.prerelease' <<<"$RELEASE_JSON")"
+
+          test "$ACTUAL_TAG" = "$TAG"
+          test "$TARGET_COMMIT" = "$GITHUB_SHA"
+          test "$IS_DRAFT" = 'false'
+          test "$IS_PRERELEASE" = 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Verify published GitHub release installs exact version
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/qwen-published-release-home"
+          mkdir -p "$HOME"
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          qwen --version
+          qwen extensions install SLP-DEV1/qwen-dap-mcp --consent
+          qwen extensions list | tee "$RUNNER_TEMP/qwen-published-extensions-list.txt"
+
+          grep -F "qwen-dap-mcp" "$RUNNER_TEMP/qwen-published-extensions-list.txt"
+          grep -F "Qwen DAP MCP (${VERSION})" "$RUNNER_TEMP/qwen-published-extensions-list.txt"
+          grep -F "Release tag: ${TAG}" "$RUNNER_TEMP/qwen-published-extensions-list.txt"
+
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const manifestPath = path.join(process.env.HOME, ".qwen", "extensions", "qwen-dap-mcp", "qwen-extension.json");
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            const expected = process.env.EXPECTED_VERSION;
+            if (manifest.version !== expected) {
+              throw new Error(`published release installed version ${manifest.version}, expected ${expected}`);
+            }
+          '
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
