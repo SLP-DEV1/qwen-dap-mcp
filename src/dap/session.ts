@@ -19,6 +19,7 @@ export type SessionSnapshot = {
   initialized: boolean;
   configured: boolean;
   activeRequest?: 'launch' | 'attach';
+  adapterId?: string;
   capabilities?: DebugProtocol.Capabilities;
   recentEvents: readonly unknown[];
   recentAdapterStderr: readonly string[];
@@ -79,6 +80,7 @@ export class DapSession {
   private initialized = false;
   private configured = false;
   private activeRequest?: 'launch' | 'attach';
+  private adapterId?: string;
   private capabilities?: DebugProtocol.Capabilities;
   private dataBreakpoints: DebugProtocol.DataBreakpoint[] = [];
   private requestTimeoutMs = 15_000;
@@ -115,6 +117,7 @@ export class DapSession {
         this.requestTimeoutMs,
       );
       this.capabilities = (response.body ?? {}) as DebugProtocol.Capabilities;
+      this.adapterId = options.adapterId;
       this.initialized = true;
       return this.capabilities;
     } catch (error) {
@@ -419,6 +422,7 @@ export class DapSession {
       initialized: this.initialized,
       configured: this.configured,
       ...(this.activeRequest === undefined ? {} : { activeRequest: this.activeRequest }),
+      ...(this.adapterId === undefined ? {} : { adapterId: this.adapterId }),
       ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),
       recentEvents: this.connection.recentEvents.slice(-25),
       recentAdapterStderr: this.connection.recentStderr.slice(-25),
@@ -441,6 +445,7 @@ export class DapSession {
     this.initialized = false;
     this.configured = false;
     this.activeRequest = undefined;
+    this.adapterId = undefined;
     this.capabilities = undefined;
     this.dataBreakpoints = [];
   }

@@ -30,8 +30,6 @@ try {
     adapterId: 'gdb',
     requestTimeoutMs: 30_000,
   });
-  assert.equal(capabilities.supportsDataBreakpoints, true, 'GDB DAP did not advertise data-breakpoint/watchpoint support');
-
   const stoppedPromise = session.connection.waitForEvent('stopped', 30_000);
   const launchResult = await session.launch(
     buildGdbDapLaunchConfiguration({ program, stopOnEntry: false }),
@@ -68,7 +66,8 @@ try {
     },
   });
 
-  assert.equal(writer.hitConfirmed, true, `Expected a GDB data-breakpoint stop, got ${JSON.stringify(writer.outcome)}`);
+  assert.equal(writer.strategy, 'gdb-watch', `Expected the bounded GDB watch fallback, got ${writer.strategy}`);
+  assert.equal(writer.hitConfirmed, true, `Expected a GDB watchpoint stop, got ${JSON.stringify(writer.outcome)}`);
   assert.ok(writer.writerFrame, 'Writer workflow returned no writer frame');
   assert.match(writer.writerFrame.name, /mutate_value/i, `Expected mutate_value writer, got '${writer.writerFrame.name}'`);
 
