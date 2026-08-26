@@ -119,11 +119,19 @@ function diagnosticText(snapshot: RuntimeSnapshot): string {
 function exceptionFatality(snapshot: RuntimeSnapshot): boolean | undefined {
   const mode = snapshot.exception?.breakMode;
   if (mode === 'unhandled' || mode === 'userUnhandled') return true;
-  // In a live session `always` commonly means a configured first-chance stop.
+
+  const exceptionText = collectText(snapshot.exception).join(' ').toLowerCase();
+  // Upstream lldb-dap reports synchronous POSIX crash signals through the DAP
+  // exception surface with breakMode=always. That value describes debugger
+  // stop policy, not whether SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGABRT is benign.
+  // Keep generic configured/first-chance exceptions conservative, but do not
+  // downgrade an explicit fatal-signal family merely because LLDB always stops
+  // when that signal is raised. crashLikely still means likely, not proven
+  // process termination; verification requires completing the reproduction.
+  if (/\bsig(?:segv|bus|ill|fpe|abrt|stkflt)\b/.test(exceptionText)) return true;
+
   // A frozen postmortem snapshot cannot be continued to determine handling, so
-  // do not let that adapter break-mode downgrade a recognized crash family.
-  // Returning undefined keeps generic/unknown exceptions conservative while
-  // allowing explicit access-violation/SIGSEGV/etc. evidence to remain crash-likely.
+  // do not let adapter break-mode downgrade a recognized crash family there.
   if (snapshot.postmortem && (mode === 'always' || mode === 'never')) return undefined;
   if (mode === 'always' || mode === 'never') return false;
   return undefined;
