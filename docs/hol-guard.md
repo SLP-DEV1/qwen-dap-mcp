@@ -32,7 +32,7 @@ On Windows PowerShell:
 $env:QWEN_DAP_MCP_HOL_GUARD = "1"
 ```
 
-qwen-dap-mcp tries to locate `hol-guard` on `PATH` and, for normal pipx installs, uses the Python interpreter beside the resolved HOL Guard executable. If discovery is not possible, point qwen-dap-mcp at the interpreter that has HOL Guard installed:
+qwen-dap-mcp tries to locate `hol-guard` on `PATH` and, for normal pipx installs, uses the Python interpreter beside the resolved HOL Guard executable. The selected interpreter is resolved to a canonical executable file before the policy evaluator is created. If discovery is not possible, point qwen-dap-mcp at the interpreter that has HOL Guard installed:
 
 ```powershell
 $env:QWEN_DAP_MCP_HOL_GUARD_PYTHON = "C:\path\to\hol-guard\Scripts\python.exe"
@@ -93,15 +93,17 @@ When HOL Guard is enabled, qwen-dap-mcp resolves the adapter executable before a
 
 For DAP `launch`, a request-level `cwd` takes precedence over the adapter working directory so approvals are tied to the actual debuggee workspace when one is supplied.
 
+The HOL Guard policy runtime itself also has an explicit trust root. qwen-dap-mcp resolves the selected Python interpreter and bundled bridge script to canonical files, records their SHA-256 identities when the evaluator is created, and verifies those identities again before each policy evaluation. A changed interpreter or bridge file is rejected rather than silently becoming part of the approval path.
+
 ## Secret handling
 
-Raw adapter environment values are not included in the HOL Guard payload. qwen-dap-mcp sends a deterministic environment hash plus variable names.
+Raw adapter environment values are not included in the HOL Guard payload. qwen-dap-mcp sends a deterministic environment hash plus variable names so adapter-environment changes still invalidate the relevant authority without exposing the values themselves.
 
-Protected DAP argument objects are sanitized in Node before they reach the Python bridge. Values under environment containers such as `env` / `environment` and common credential fields such as `token`, `apiKey`, `password`, `authorization`, `clientSecret`, and `privateKey` are replaced with deterministic SHA-256 markers. The hash keeps exact-approval invalidation semantics while the original secret remains available only to the real DAP transport.
+Protected DAP argument objects are sanitized in Node before they reach the Python bridge. Values under environment containers such as `env` / `environment` and common credential fields such as `token`, `apiKey`, `password`, `authorization`, `clientSecret`, and `privateKey` are replaced with keyed HMAC-SHA256 redaction markers. The HMAC key is generated randomly for each MCP server process, which preserves equality/change detection within that process while preventing raw deterministic secret digests from becoming an offline dictionary oracle. The original secret remains available only to the real DAP transport.
 
-Sensitive adapter CLI forms such as `--token value`, `--api-key=value`, `TOKEN=value`, and equivalent common secret flags are handled the same way. The adapter itself still receives its original arguments after policy approval.
+Sensitive adapter CLI forms such as `--token value`, `--api-key=value`, `TOKEN=value`, and equivalent common secret flags are handled the same way. The adapter itself still receives its original arguments after policy approval. Because the redaction key is process-local, a saved authority that embeds a secret-derived marker may require reapproval after the MCP server restarts instead of reusing a stable secret fingerprint across processes.
 
-The HOL Guard Python subprocess also receives a restricted environment instead of inheriting the MCP server's complete `process.env`. It gets the OS/Python variables required to start plus `HOL_GUARD_*` configuration, but unrelated credentials such as cloud/API keys are not forwarded implicitly.
+The HOL Guard Python subprocess receives a restricted environment instead of inheriting the MCP server's complete `process.env`. It gets only the OS/Python values required to start plus `HOL_GUARD_*` configuration; unrelated credentials such as cloud/API keys are not forwarded implicitly. `PYTHONPATH` and `PYTHONHOME` are stripped explicitly, and the bridge is launched with Python isolated mode (`-I`) so inherited import-path customization cannot shadow HOL Guard modules.
 
 ## Approval reuse and TOCTOU hardening
 
@@ -109,7 +111,7 @@ On HOL Guard versions that expose `fresh_authority_provider`, the bridge supplie
 
 The integration feature-detects this API so HOL Guard 2.2 remains supported while newer releases receive the strongest available post-claim revalidation.
 
-The adapter-start boundary has an additional local TOCTOU check: the approved executable is re-hashed immediately before the spawn-capable path is entered. A mismatch blocks the start.
+The adapter-start boundary has an additional local TOCTOU check: the approved executable is re-hashed immediately before the spawn-capable path is entered. A mismatch blocks the start. The Python interpreter and policy bridge receive the same fail-closed identity treatment before each HOL Guard evaluation.
 
 ## Runtime and failure behavior
 
@@ -119,6 +121,8 @@ When HOL Guard integration is enabled, these conditions fail closed instead of f
 
 - HOL Guard is older than 2.2,
 - HOL Guard cannot be imported from the selected Python environment,
+- the configured Python interpreter cannot be resolved to an executable file,
+- the canonical Python interpreter or bundled bridge changes after evaluator initialization,
 - the adapter executable cannot be resolved after an allow decision,
 - the approved adapter executable changes before spawn,
 - the bridge process fails or times out,
@@ -135,7 +139,8 @@ The repository has multiple test layers:
 1. TypeScript boundary tests prove denied protected requests produce zero DAP/process side effects and do not consume DAP sequence numbers.
 2. Privacy tests prove secret values are absent from HOL Guard actions while the real DAP transport receives the untouched request/adapter arguments.
 3. Adapter-identity tests verify canonical path, binary hash, environment hash, and exact spawn path behavior.
-4. `HOL Guard Compatibility` CI installs real HOL Guard, verifies the imported runtime APIs, and runs the packaged Python bridge against both the minimum supported `hol-guard==2.2.0` and the latest published version. A scheduled weekly run detects upstream compatibility changes even when qwen-dap-mcp itself has not changed.
+4. Trust-root tests verify isolated Python execution, import-path stripping, and interpreter/bridge identity pinning.
+5. `HOL Guard Compatibility` CI installs real HOL Guard, verifies the imported runtime APIs, and runs the packaged Python bridge against both the minimum supported `hol-guard==2.2.0` and the latest published version. A scheduled weekly run detects upstream compatibility changes even when qwen-dap-mcp itself has not changed.
 
 You can run the real smoke locally after installing HOL Guard:
 
@@ -145,17 +150,17 @@ npm run test:hol-guard:real
 
 ## Built-in inspect-only mode
 
-For workflows that never need target-control requests, the strongest local posture is:
+For workflows that never need live target-control requests, the strongest local posture is:
 
 ```powershell
 $env:QWEN_DAP_MCP_DAP_POLICY = "inspect-only"
 $env:QWEN_DAP_MCP_HOL_GUARD = "1"
 ```
 
-`inspect-only` is an authoritative local allowlist and therefore denies executable/mutating operations before HOL Guard is consulted. HOL Guard still protects the separate adapter-start process boundary.
+`inspect-only` is an authoritative local allowlist and therefore denies executable/mutating operations before HOL Guard is consulted. It permits only recognized read-only postmortem core/minidump setup shapes needed to establish a frozen dump session; generic/live launch and PID attach remain denied. HOL Guard still protects the separate adapter-start process boundary.
 
 Do not enable `inspect-only` for a workflow that must establish a live launch/attach or another denied DAP control operation; use the standard DAP policy with HOL Guard instead.
 
 ## Integration boundary
 
-HOL Guard currently exposes the runtime primitives used here as Python modules rather than a versioned Node API. qwen-dap-mcp isolates those imports inside one bundled Python bridge, requires HOL Guard 2.2+, feature-detects newer authority APIs, and continuously tests the minimum and current published versions. If HOL Guard later provides a stable external policy endpoint, the bridge can move to that endpoint without changing the DAP-side security boundaries.
+HOL Guard currently exposes the runtime primitives used here as Python modules rather than a versioned Node API. qwen-dap-mcp isolates those imports inside one bundled Python bridge, requires HOL Guard 2.2+, feature-detects newer authority APIs, pins the bridge runtime identity, and continuously tests the minimum and current published versions. If HOL Guard later provides a stable external policy endpoint, the bridge can move to that endpoint without changing the DAP-side security boundaries.

@@ -129,7 +129,7 @@ LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/ve
 
 When enabled, HOL Guard is consulted **before** a protected DAP request can allocate sequence state or cross `writeMessage()`, and **before** a debugger adapter process can be spawned. Mutating or executable actions such as `evaluate`, `launch`, `attach`, target control, state/memory writes, and breakpoint mutation are gated; read-only inspection such as stacks, scopes, variables, modules, source, disassembly, and memory reads stays on the fast path.
 
-Approvals are bound to the effective workspace, privacy-sanitized DAP arguments, adapter command/arguments, canonical executable path, executable SHA-256, and a fingerprint of the effective adapter environment. Secret-bearing DAP fields and common credential CLI forms are replaced with deterministic SHA-256 markers before they enter the HOL Guard bridge, while the real debugger transport retains the original values.
+Approvals are bound to the effective workspace, privacy-sanitized DAP arguments, adapter command/arguments, canonical executable path, executable SHA-256, and a fingerprint of the effective adapter environment. Secret-bearing DAP fields and common credential CLI forms are replaced with per-process HMAC-SHA256 redaction markers before they enter the HOL Guard bridge, while the real debugger transport retains the original values. The selected Python interpreter and bundled bridge script are canonicalized and hash-bound, Python runs with `-I`, and `PYTHONPATH` / `PYTHONHOME` are stripped from the policy subprocess.
 
 The integration supports HOL Guard `allow`, `warn`, `review`, `require-reapproval`, `sandbox-required`, and `block` outcomes. Review/reapproval decisions create real Approval Center requests, denied actions produce no DAP write or adapter spawn, and supported HOL Guard versions revalidate saved authority at the execution boundary.
 
@@ -409,7 +409,8 @@ The hang repro succeeds only when the process remains blocked until its bounded 
 - no arbitrary memory-write MCP primitive,
 - optional HOL Guard 2.2+ policy gate for adapter spawn and mutating/executable DAP actions,
 - HOL Guard approvals bound to canonical adapter identity, executable hash, workspace, arguments, and environment fingerprint,
-- secret-bearing DAP/adapter values are hashed before entering the HOL Guard policy bridge,
+- secret-bearing DAP/adapter values are HMAC-redacted with a per-process key before entering the HOL Guard policy bridge,
+- HOL Guard Python/bridge identities are pinned, Python runs in isolated mode, and inherited Python import paths are stripped,
 - `debug_this_hang` launch/attach/pause operations use the same guarded DAP boundaries,
 - deadlock/wait classifications are bounded heuristics and never fabricate a lock-owner cycle,
 - Pointer-Provenance v2 treats cross-thread address equality as correlation evidence, not ownership proof,
