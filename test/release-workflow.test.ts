@@ -24,7 +24,9 @@ test('published release verification is serialized inside the release workflow',
   assert.ok(metadataIndex > publishIndex, 'release metadata must be checked only after publish');
   assert.ok(installIndex > metadataIndex, 'published release install must happen after metadata validation');
 
+  assert.match(releaseWorkflow, /if \[ "\$\{\{ steps\.version\.outputs\.exists \}\}" = 'false' \]; then/);
   assert.match(releaseWorkflow, /test "\$TARGET_COMMIT" = "\$GITHUB_SHA"/);
+  assert.match(releaseWorkflow, /preserving historical release target/);
   assert.match(releaseWorkflow, /grep -F "Qwen DAP MCP \(\$\{VERSION\}\)"/);
   assert.match(releaseWorkflow, /grep -F "Release tag: \$\{TAG\}"/);
   assert.match(releaseWorkflow, /manifest\.version !== expected/);
