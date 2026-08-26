@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DapError } from './errors.js';
@@ -19,6 +19,9 @@ export type HolGuardExecutionContext = {
   cwd?: string;
   adapterCommand?: string;
   adapterArgs?: string[];
+  adapterResolvedCommand?: string;
+  adapterExecutableHash?: string;
+  adapterIdentityHash?: string;
   envKeys?: string[];
   envHash?: string;
 };
@@ -58,14 +61,92 @@ export type HolGuardPolicyOptions = {
   bridgePath?: string;
 };
 
-// evaluate can execute arbitrary expressions, launch starts a target, and
-// attach can bind the agent to the wrong live process. Read-only inspection
-// stays on the zero-overhead path.
-const HOL_GUARD_COMMANDS = new Set(['evaluate', 'launch', 'attach']);
+// Keep true inspection calls on the in-process fast path. Requests that can
+// execute code, mutate debuggee/debugger state, or change process lifecycle are
+// evaluated before DAP sequence allocation or transport writes.
+const HOL_GUARD_COMMANDS = new Set([
+  'attach',
+  'configurationDone',
+  'continue',
+  'disconnect',
+  'evaluate',
+  'goto',
+  'launch',
+  'next',
+  'pause',
+  'restart',
+  'restartFrame',
+  'reverseContinue',
+  'setBreakpoints',
+  'setDataBreakpoints',
+  'setExceptionBreakpoints',
+  'setExpression',
+  'setFunctionBreakpoints',
+  'setInstructionBreakpoints',
+  'setVariable',
+  'stepBack',
+  'stepIn',
+  'stepOut',
+  'terminate',
+  'terminateThreads',
+  'writeMemory',
+]);
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const ADAPTER_IDENTITY_VERSION = 'qwen-dap-mcp-adapter-v1';
+const REDACTED_MARKER = '__qwenDapMcpRedacted';
+
+const BRIDGE_ENV_KEYS = new Set([
+  'APPDATA',
+  'COMSPEC',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LOCALAPPDATA',
+  'PATH',
+  'PATHEXT',
+  'PROGRAMDATA',
+  'PYTHONIOENCODING',
+  'PYTHONPATH',
+  'PYTHONUTF8',
+  'SYSTEMDRIVE',
+  'SYSTEMROOT',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERPROFILE',
+  'VIRTUAL_ENV',
+  'WINDIR',
+]);
+
+const SENSITIVE_ARGUMENT_KEYS = new Set([
+  'accesstoken',
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'clientsecret',
+  'cookie',
+  'cookies',
+  'credential',
+  'credentials',
+  'password',
+  'passwd',
+  'privatekey',
+  'refreshtoken',
+  'secret',
+  'secretkey',
+  'sessiontoken',
+  'token',
+]);
+
+const ENVIRONMENT_ARGUMENT_KEYS = new Set(['env', 'environment', 'environmentvariables']);
 
 function parseEnabled(value: string | undefined): boolean {
   if (value === undefined || value.trim() === '') return false;
@@ -167,18 +248,30 @@ function parseDecision(stdout: string): HolGuardDecision {
   };
 }
 
+export function buildHolGuardBridgeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const output: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const normalized = key.toUpperCase();
+    if (BRIDGE_ENV_KEYS.has(normalized) || normalized.startsWith('HOL_GUARD_')) {
+      output[key] = value;
+    }
+  }
+  return output;
+}
+
 function runBridge(
   pythonCommand: string,
   bridgePath: string,
   timeoutMs: number,
   action: HolGuardAction,
 ): Promise<HolGuardDecision> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     const child = spawn(pythonCommand, [bridgePath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: buildHolGuardBridgeEnvironment(),
     });
     let stdout = '';
     let stderr = '';
@@ -190,7 +283,7 @@ function runBridge(
       settled = true;
       clearTimeout(timer);
       if (error) reject(error);
-      else resolve(decision!);
+      else resolvePromise(decision!);
     };
     const append = (current: string, chunk: Buffer | string): string => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
@@ -260,6 +353,158 @@ export function buildHolGuardEnvironmentFingerprint(
   };
 }
 
+function normalizedArgumentKey(key: string): string {
+  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+}
+
+function canonicalJson(value: unknown, seen = new Set<object>()): string {
+  if (value === null || typeof value !== 'object') {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? String(value) : serialized;
+  }
+  if (seen.has(value)) throw new DapError('DAP arguments contain a cycle and cannot be evaluated safely');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => canonicalJson(item, seen)).join(',')}]`;
+    }
+    const record = value as Record<string, unknown>;
+    const entries = Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key], seen)}`);
+    return `{${entries.join(',')}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function redactedValue(value: unknown): Record<string, unknown> {
+  const digest = createHash('sha256')
+    .update(canonicalJson(value), 'utf8')
+    .digest('hex');
+  return {
+    [REDACTED_MARKER]: true,
+    sha256: `sha256:${digest}`,
+    valueType: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
+  };
+}
+
+function sanitizeValue(value: unknown, keyHint?: string): unknown {
+  const normalizedKey = keyHint === undefined ? undefined : normalizedArgumentKey(keyHint);
+  if (normalizedKey && SENSITIVE_ARGUMENT_KEYS.has(normalizedKey)) {
+    return redactedValue(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeValue(item));
+  }
+  if (!value || typeof value !== 'object') return value;
+
+  const record = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    const normalized = normalizedArgumentKey(key);
+    if (ENVIRONMENT_ARGUMENT_KEYS.has(normalized) && item && typeof item === 'object' && !Array.isArray(item)) {
+      const environment: Record<string, unknown> = {};
+      for (const [envKey, envValue] of Object.entries(item as Record<string, unknown>)) {
+        environment[envKey] = redactedValue(envValue);
+      }
+      output[key] = environment;
+    } else {
+      output[key] = sanitizeValue(item, key);
+    }
+  }
+  return output;
+}
+
+export function sanitizeDapArgumentsForHolGuard(args: unknown): unknown {
+  return sanitizeValue(args);
+}
+
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  if (process.platform !== 'win32') return env[name];
+  const target = name.toUpperCase();
+  const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === target);
+  return key === undefined ? undefined : env[key];
+}
+
+function executableNames(command: string, env: NodeJS.ProcessEnv): string[] {
+  if (process.platform !== 'win32' || extname(command)) return [command];
+  const extensions = (envValue(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return [command, ...extensions.map((extension) => `${command}${extension}`)];
+}
+
+function executableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    if (process.platform !== 'win32') accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function realExecutable(path: string): string | undefined {
+  if (!executableFile(path)) return undefined;
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+export function resolveAdapterExecutable(
+  command: string,
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const baseCwd = cwd ? resolve(cwd) : process.cwd();
+  const pathLike = isAbsolute(command) || command.includes('/') || command.includes('\\');
+  if (pathLike) {
+    const base = isAbsolute(command) ? command : resolve(baseCwd, command);
+    for (const candidate of executableNames(base, env)) {
+      const found = realExecutable(candidate);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  const pathValue = envValue(env, 'PATH') ?? '';
+  for (const pathEntry of pathValue.split(delimiter)) {
+    const directory = pathEntry
+      ? (isAbsolute(pathEntry) ? pathEntry : resolve(baseCwd, pathEntry))
+      : baseCwd;
+    for (const name of executableNames(command, env)) {
+      const found = realExecutable(resolve(directory, name));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function hashExecutable(path: string): string {
+  const digest = createHash('sha256').update(readFileSync(path)).digest('hex');
+  return `sha256:${digest}`;
+}
+
+function buildAdapterIdentityHash(context: HolGuardExecutionContext): string {
+  const material = {
+    version: ADAPTER_IDENTITY_VERSION,
+    command: context.adapterCommand ?? null,
+    args: context.adapterArgs ?? [],
+    resolvedCommand: context.adapterResolvedCommand ?? null,
+    executableHash: context.adapterExecutableHash ?? null,
+    cwd: context.cwd ?? null,
+    envHash: context.envHash ?? null,
+    envKeys: context.envKeys ?? [],
+  };
+  const digest = createHash('sha256').update(JSON.stringify(material), 'utf8').digest('hex');
+  return `sha256:${digest}`;
+}
+
 function decisionReason(decision: HolGuardDecision): string {
   const approvalHint = decision.reviewCommand
     ? `; approval: ${decision.reviewCommand}`
@@ -321,7 +566,7 @@ export function createGuardedDapRequestPolicy(
     return evaluator.evaluate({
       kind: 'dap-request',
       command: context.command,
-      ...(context.args === undefined ? {} : { args: context.args }),
+      ...(context.args === undefined ? {} : { args: sanitizeDapArgumentsForHolGuard(context.args) }),
       ...executionContext,
     }).then((decision) => {
       if (decision.allow) return { allow: true } as const;
@@ -345,13 +590,23 @@ export async function requireHolGuardAdapterStart(
   options: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> },
 ): Promise<HolGuardExecutionContext> {
   const environment = buildHolGuardEnvironmentFingerprint(options.env);
-  const context: HolGuardExecutionContext = {
+  const baseContext: HolGuardExecutionContext = {
     ...(options.cwd ? { cwd: options.cwd } : {}),
     adapterCommand: options.command,
     adapterArgs: options.args ?? [],
     ...environment,
   };
-  if (!evaluator.enabled) return context;
+  if (!evaluator.enabled) return baseContext;
+
+  const effectiveEnv: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}) };
+  const resolvedCommand = resolveAdapterExecutable(options.command, options.cwd, effectiveEnv);
+  const executableHash = resolvedCommand ? hashExecutable(resolvedCommand) : undefined;
+  const context: HolGuardExecutionContext = {
+    ...baseContext,
+    ...(resolvedCommand ? { adapterResolvedCommand: resolvedCommand } : {}),
+    ...(executableHash ? { adapterExecutableHash: executableHash } : {}),
+  };
+  context.adapterIdentityHash = buildAdapterIdentityHash(context);
 
   let decision: HolGuardDecision;
   try {
@@ -369,6 +624,16 @@ export async function requireHolGuardAdapterStart(
 
   if (!decision.allow) {
     throw new DapError(`HOL Guard blocked DAP adapter start: ${decisionReason(decision)}`);
+  }
+  if (!resolvedCommand || !executableHash) {
+    throw new DapError(
+      `HOL Guard allowed adapter start but executable identity could not be resolved for '${options.command}'`,
+    );
+  }
+
+  const currentHash = hashExecutable(resolvedCommand);
+  if (currentHash !== executableHash) {
+    throw new DapError('HOL Guard adapter executable changed after policy approval; refusing to spawn it');
   }
   return context;
 }
