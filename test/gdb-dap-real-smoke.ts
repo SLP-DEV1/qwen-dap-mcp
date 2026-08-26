@@ -42,6 +42,9 @@ try {
     requestTimeoutMs: 30_000,
   });
   const stoppedPromise = session.connection.waitForEvent('stopped', 30_000);
+  // Observe the parallel waiter immediately so a launch/configuration failure
+  // cannot turn its later timeout into an unhandled rejection in node:test/CI.
+  void stoppedPromise.catch(() => undefined);
   const launchResult = await session.launch(
     buildGdbDapLaunchConfiguration({ program, stopOnEntry: false }),
     [{ source, lines: [11] }],
