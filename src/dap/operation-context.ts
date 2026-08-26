@@ -8,6 +8,7 @@ export type DapOperationContextOptions = {
   signal?: AbortSignal;
 };
 
+const DEADLINE_ABORT_SKEW_MS = 5;
 let nextOperationId = 0;
 const operationStorage = new AsyncLocalStorage<DapOperationContext>();
 
@@ -54,7 +55,10 @@ export class DapOperationContext {
     }
 
     if (this.deadlineAt !== undefined && !this.signal.aborted) {
-      const delay = Math.max(1, this.deadlineAt - Date.now());
+      // Fire the aggregate operation abort just before child request/event timers
+      // derived from the same deadline. This keeps one authoritative cancellation
+      // reason while remaining conservatively inside the requested deadline.
+      const delay = Math.max(1, this.deadlineAt - Date.now() - DEADLINE_ABORT_SKEW_MS);
       this.timeout = setTimeout(() => {
         this.abort(`deadline exceeded for ${this.label}`);
       }, delay);
