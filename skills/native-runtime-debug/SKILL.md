@@ -7,13 +7,11 @@ description: Diagnose native C/C++ runtime bugs and crash dumps with qwen-dap-mc
 
 Use `qwen-dap-mcp` to reason from structured debugger evidence instead of guessing from logs. This skill is for software, crash artifacts, and authorized local targets the user owns or is permitted to debug.
 
-## Prefer the v0.9 agent workflow
+## Prefer the autonomous crash workflow
 
-For crash-oriented tasks, prefer `debug_this_crash` over manually chaining low-level DAP calls.
+For crash-fixing tasks, prefer one high-level loop through `debug_this_crash` instead of manually chaining many DAP calls.
 
-### Reproduce a local native crash
-
-Use:
+Start with:
 
 ```text
 debug_this_crash(
@@ -21,166 +19,136 @@ debug_this_crash(
   program=...,
   args=[...],
   cwd=...,
-  analysis={projectRoots:[...], callerDepth:2}
+  analysis={projectRoots:[...], callerDepth:2},
+  workflow={stage:"autonomous", maxIterations:3}
 )
 ```
 
-The bridge discovers/starts CodeLLDB, launches the executable, waits race-safely for stop/exit, captures bounded debugger state, selects the first likely project-controlled frame, correlates instruction operands with registers/locals, traces bounded caller provenance, and returns a fix/verification plan.
+The first autonomous call diagnoses the failure and returns `workflow.autonomousAgent`. Read:
 
-### Analyze an existing dump
+- `state.rootFingerprint`: immutable fingerprint of the original failure,
+- `state.activeFingerprint`: failure currently being fixed,
+- `state.iteration` / `maxIterations`: bounded fix-attempt budget,
+- `state.history`: diagnosis/verification history,
+- `state.status`: current loop state,
+- `nextActions`: ordered actions assigned to either `coding-agent` or `debugger`,
+- `shouldContinue`: whether the loop may continue,
+- `stopReason`: why the loop ended when present.
 
-Use:
+Follow `nextActions` in order. Use Qwen Code's normal authorized file-editing and build tools for `inspect-source`, `apply-fix`, and `rebuild`. qwen-dap-mcp intentionally does not expose an arbitrary shell or source-writing executor.
+
+After the requested edit/rebuild, reproduce the **same scenario** and pass the returned state back unchanged:
 
 ```text
 debug_this_crash(
-  mode="dump",
-  dumpPath=...,
+  mode="codelldb",
   program=...,
-  sourceMap={...},
-  analysis={projectRoots:[...]}
+  args=[...],
+  cwd=...,
+  analysis={projectRoots:[...], callerDepth:2},
+  workflow={
+    stage:"autonomous",
+    agentState:<workflow.autonomousAgent.state from previous call>
+  }
 )
 ```
 
-A dump is frozen postmortem state. Inspect it, form a diagnosis, patch/rebuild separately, then verify with a new live reproduction or a newly generated dump.
+Do not invent or edit the serialized state yourself. The MCP owns crash fingerprinting and loop transitions.
 
-### Diagnose an already stopped session
+### Autonomous state policy
 
-Use `debug_diagnose_stop()`.
+- `needs-fix`: inspect the evidence-backed source location, apply the smallest justified fix, rebuild, reproduce.
+- `retry-fix`: the same crash survived; revise the fix rather than claiming success.
+- `needs-evidence`: do not patch yet. Improve project hints / bounded caller evidence first.
+- `needs-reproduction`: the run stopped at a breakpoint, entry, pause, or another inconclusive state. Continue the original reproduction; do **not** consume another edit attempt.
+- `changed-failure`: the old active signature changed. The MCP preserves the original `rootFingerprint`, re-baselines the new source-backed crash as the active failure, and continues within the same budget.
+- `fixed`: stop editing. Report the source change and verification evidence.
+- `budget-exhausted`: stop automatic editing and report the iteration history.
+- `blocked`: stop because the available evidence is not trustworthy enough for another autonomous patch.
 
-When the stack contains runtime/system frames, pass project hints when known:
+After repeated identical `not-fixed` verification results, obey a `broaden-diagnosis` action before editing again. Inspect earlier caller/provenance evidence and the producer/ownership boundary rather than repeatedly adding guards at the final dereference.
+
+## What the intelligent diagnosis means
+
+Read the diagnosis in this order:
+
+1. `classification`: crash/stop family and confidence.
+2. `faultLocation`: raw debugger stop frame. It can be inside `ntdll`, `ucrtbase`, libc, libstdc++, an allocator, or another runtime.
+3. `projectFrame`: first likely application-controlled frame.
+4. `frameSelection`: scored stack-frame evidence and reasons runtime/system frames were skipped.
+5. `operandAnalysis`: selected instruction, referenced registers, memory operands, and register↔local bindings.
+6. `callChain`: project callers, runtime boundary, repeated frames, pointer provenance, and a root-cause candidate.
+7. `hypotheses`: ranked evidence-based explanations.
+8. `fixWorkflow`: candidate location and suggested change direction.
+9. `verificationBaseline`: compact failure signature used by manual verification and the autonomous state machine.
+
+A high project-frame confidence means “very likely project code”, not “proven root cause”. Do not turn a heuristic into certainty. Prefer wording such as “the debugger shows”, “consistent with”, or “strong candidate” until operand/data-flow and reproduction evidence agree.
+
+## Automatic project-frame selection
+
+The bridge prefers:
+
+- source paths under explicit `analysis.projectRoots`,
+- modules matching `analysis.projectModules` or the launched program,
+- source-backed non-runtime frames,
+- negative weights for known runtime/system modules and paths.
+
+When the stack begins in system/runtime code, pass project hints whenever known.
+
+For an already stopped session:
 
 ```text
 debug_diagnose_stop(
   analysis={
     projectRoots:["C:\\repo\\my-project"],
     projectModules:["myapp.exe"],
-    callerDepth:2
+    callerDepth:3
   }
 )
 ```
 
-### Focus on source/instruction data flow
-
-Use `debug_source_disassembly()` when the diagnosis needs a narrower machine-code view. In v0.9 it selects the first likely project frame and reports operand/register/local bindings when the values can be correlated.
-
-## Read the v0.9 diagnosis in this order
-
-1. `classification`
-   - Best crash/stop family from raw debugger evidence.
-   - Confidence is evidence strength, not proof.
-2. `faultLocation`
-   - Raw frame where the debugger stopped. This can legitimately be inside `ntdll`, `ucrtbase`, libc, libstdc++, or another runtime.
-3. `projectFrame`
-   - First likely application-controlled frame selected from the stack.
-   - Read its `confidence` and `reasons` before treating it as authoritative.
-4. `frameSelection`
-   - Scores every bounded frame and records why runtime/system frames were skipped.
-5. `operandAnalysis`
-   - Current/nearest instruction for the selected frame.
-   - Registers referenced by the instruction.
-   - Whether a register participates in a memory operand.
-   - Pointer-like locals whose numeric value matches a referenced register.
-6. `callChain`
-   - Runtime boundary depth.
-   - Project caller frames.
-   - Repeated frames that can indicate recursion/re-entry.
-   - Bounded pointer-value provenance across callers.
-   - A root-cause candidate with explicit confidence and rationale.
-7. `hypotheses`
-   - Ranked explanations from exception + variable + instruction evidence.
-8. `fixWorkflow`
-   - Candidate source location and evidence-backed change direction.
-9. `verificationBaseline`
-   - Compact failure signature to pass back after source fix/rebuild.
-
-Never turn a heuristic into a confirmed root-cause statement. Prefer “the debugger shows”, “consistent with”, or “strong candidate” until the failing operand/data path is actually tied to the crash.
-
-## Automatic project-frame selection
-
-The bridge scores frames using conservative signals:
-
-- source path under explicit `projectRoots`,
-- module matching `projectModules` or the launched `program`,
-- source information on otherwise non-runtime frames,
-- negative weighting for known runtime/system modules and paths.
-
-Explicit project hints are preferred. If they are absent, the bridge falls back to the first non-runtime frame with source information.
-
-A high frame-selection confidence means “this is very likely project code”; it does not by itself mean “this frame caused the bug”. Causality still comes from operands, values, callers, exception state, and reproduction.
+Use `debug_source_disassembly()` when you need a focused machine-code view of `projectFrame` and its operand/register/local mapping.
 
 ## Operand ↔ register ↔ variable reasoning
 
-Use `operandAnalysis` to avoid the classic false claim “RAX is zero, therefore null dereference”.
+Do not claim “RAX is zero, therefore null dereference” unless the instruction actually uses RAX in the relevant memory operand.
 
-A strong null-dereference chain looks like:
+A stronger chain is:
 
 ```text
-exception: access violation / SIGSEGV
-current instruction: memory operand uses RAX
-RAX: 0x0
-local User*: 0x0
-local value matches RAX
+access violation / SIGSEGV
+↓
+current instruction dereferences [RAX]
+↓
+RAX = 0x0
+↓
+local Widget* = 0x0
+↓
+local numeric value matches RAX
 ```
 
-If the selected project frame is not stack frame 0, its instruction is a project call-site/context instruction, not automatically the literal faulting machine instruction. `likelyFaultOperand.faultingFrame` distinguishes this case.
+If `projectFrame.index !== 0`, its instruction is project call-site/context evidence, not automatically the literal faulting machine instruction. Check `operandAnalysis.likelyFaultOperand.faultingFrame`.
 
-Poison/debug values such as `0xFEEEFEEE`, `0xDDDDDDDD`, `0xCDCDCDCD`, `0xCCCCCCCC`, or `0xDEADBEEF` can strengthen lifetime/uninitialized-memory hypotheses. They are still evidence, not standalone proof.
+Poison/debug patterns such as `0xFEEEFEEE`, `0xDDDDDDDD`, `0xCDCDCDCD`, `0xCCCCCCCC`, and `0xDEADBEEF` can strengthen lifetime/uninitialized-memory hypotheses, but still are not standalone proof.
 
 ## Call-chain cause analysis
 
-Use `callChain` to reason backwards from symptom to provenance.
+Use `callChain` to reason backwards from symptom to producer:
 
-- `runtimeBoundaryDepth > 0`: the raw crash occurred above project code; inspect the first project call site and arguments feeding the runtime.
-- `projectCallerFrames`: bounded caller candidates that may have produced the bad value.
-- `provenance`: the same pointer-like numeric value appeared in multiple project frames.
-- `repeatedFunctions`: repeated frames may support stack-overflow/recursion hypotheses.
+- `runtimeBoundaryDepth > 0`: raw fault sits above project code; inspect the first project call site and arguments feeding the runtime.
+- `projectCallerFrames`: bounded project callers that may have produced the bad value.
+- `provenance`: same pointer-like numeric value across frames.
+- `repeatedFunctions`: possible recursion/re-entry evidence.
 
-A repeated distinctive poison pointer can be strong provenance evidence. Repeated `0x0` values are intentionally low confidence because unrelated pointers can all be null.
+A distinctive poison value repeated through multiple callers can be high-confidence provenance. Repeated `0x0` values are intentionally low-confidence because unrelated pointers can independently be null.
 
-For heap corruption, remember that the allocator/runtime crash frame can occur long after the original invalid write. Prefer ASan/PageHeap/allocator diagnostics when a live reproduction is available.
+For heap corruption, allocator/runtime failure may occur well after the original invalid write/free. Prefer ASan, PageHeap, allocator diagnostics, or a targeted live data-breakpoint investigation when available.
 
-## Diagnose → Fix → Rebuild → Reproduce → Verify
+## Manual Diagnose → Fix → Rebuild → Reproduce → Verify
 
-`qwen-dap-mcp` provides the debugger evidence and verification baseline. It intentionally does **not** add a general shell executor or arbitrary source-writing mechanism.
+Use the manual workflow when you do not want the autonomous state machine.
 
-Use Qwen Code's normal authorized coding/build tools for source edits and builds.
-
-### Phase 1: Diagnose
-
-Run `debug_this_crash(...)` and preserve:
-
-- `classification`,
-- `faultLocation`,
-- `projectFrame`,
-- relevant `operandAnalysis`,
-- `callChain`,
-- highest-confidence hypothesis,
-- `verificationBaseline`.
-
-### Phase 2: Fix
-
-Read source around `fixWorkflow.candidateLocation`.
-
-Apply the smallest change supported by the evidence. Prefer fixing the producer/invariant/ownership boundary rather than only hiding the final symptom.
-
-Examples:
-
-- null dereference: restore the pointer/reference invariant at the earliest evidenced boundary,
-- lifetime bug: fix ownership or stale-reference use,
-- divide-by-zero: repair the divisor invariant and validate at the correct input boundary,
-- stack overflow: fix recursion termination/re-entry or excessive stack use,
-- abort/assert: repair the violated invariant, not the assertion itself,
-- heap corruption: find the first invalid write/free rather than patching the allocator crash site.
-
-### Phase 3: Rebuild
-
-Use the project's existing build system. Preserve matching debug symbols.
-
-Do not verify a rebuilt binary against stale symbols or an old binary/dump pairing.
-
-### Phase 4: Reproduce and verify
-
-Run the same scenario again and pass the original baseline:
+Diagnose with `debug_this_crash(...)`, read `fixWorkflow`, edit with normal coding tools, rebuild with matching debug symbols, then reproduce with the original baseline:
 
 ```text
 debug_this_crash(
@@ -195,20 +163,46 @@ debug_this_crash(
 )
 ```
 
-Interpret `workflow.verification.verdict` as follows:
+Interpret `workflow.verification.verdict`:
 
-- `fixed`: the reproduced scenario reached a clean successful terminal outcome, currently exit code 0.
-- `not-fixed`: the same crash family and matching project failure signature reproduced.
-- `changed-failure`: execution still crashed, but the failure signature changed; diagnose it as a potentially new/downstream bug.
-- `inconclusive`: there was not enough evidence to claim success or failure.
+- `fixed`: the complete reproduction reached a clean successful terminal outcome (currently a clean exit code 0).
+- `not-fixed`: the same failure signature reproduced.
+- `changed-failure`: execution still crashed but the failure signature changed.
+- `inconclusive`: there is not enough evidence to claim success or failure.
 
-A breakpoint, entry stop, pause, or other non-crash stopped state is **not proof of a fix**. Continue/reproduce the full original scenario until a successful terminal outcome or a crash signature is observed.
+A breakpoint, entry stop, pause, or step is not proof of a fix. Finish the original reproduction. After debugger verification, run the project's normal automated tests too.
 
-After debugger verification, run the project's normal automated tests too.
+## Crash dumps
+
+Analyze a dump with:
+
+```text
+debug_this_crash(
+  mode="dump",
+  dumpPath=...,
+  program=...,
+  sourceMap={...},
+  analysis={projectRoots:[...]}
+)
+```
+
+A dump is frozen postmortem state. Never call live execution/watchpoint operations on it. Valid inspection includes `debug_snapshot`, `debug_diagnose_stop`, `debug_source_disassembly`, `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble`, `debug_read_memory`, and `debug_exception_info` when supported.
+
+Never use these on a dump:
+
+- `debug_continue`
+- `debug_step`
+- `debug_pause`
+- `debug_data_breakpoint_info`
+- `debug_set_data_breakpoints`
+
+Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
+
+A dump can seed diagnosis, but verification after a source fix should use a rebuilt live reproduction or a newly generated dump, not the stale original artifact.
 
 ## Raw/live fallback tools
 
-Use lower-level tools only when the high-level diagnosis identifies a concrete follow-up question.
+Use lower-level tools only for a concrete unanswered question from the high-level diagnosis.
 
 Typical live fallback:
 
@@ -225,11 +219,9 @@ Typical live fallback:
 
 `debug_run_to_stop(...)` remains useful for an already initialized generic DAP adapter.
 
-## Targeted follow-ups
-
 ### Unexpected variable write
 
-Use a live data breakpoint instead of repeatedly stepping:
+Use a live data breakpoint rather than repeatedly stepping:
 
 ```text
 1. debug_snapshot()
@@ -237,64 +229,36 @@ Use a live data breakpoint instead of repeatedly stepping:
 3. debug_set_data_breakpoints([{dataId=..., accessType="write"}])
 4. debug_continue(threadId=...)
 5. debug_snapshot()
-6. identify the write site and value transition
+6. identify the write site/value transition
 7. debug_set_data_breakpoints(breakpoints=[])
 ```
 
-Never use watchpoints on a postmortem dump.
+### Other targeted controls
 
-### Known suspicious function
-
-Use `debug_set_function_breakpoints`, continue to the relevant stop, then clear the temporary breakpoint.
-
-### Conditional source stop
-
-Use `debug_set_source_breakpoints` for conditions, hit counts, columns, or log messages.
-
-### Exact instruction stop
-
-Use `debug_set_instruction_breakpoints` only in a live session after the instruction reference is established.
-
-### Specific expression
-
-Use `debug_evaluate` narrowly. Debugger expression evaluation can have side effects depending on language/debugger.
-
-### Bounded memory
-
-Use `debug_read_memory` only when variables, exception details, and source/disassembly do not already answer the question.
-
-## Postmortem rules
-
-A dump session is frozen/read-only. Never call these on a dump:
-
-- `debug_continue`
-- `debug_step`
-- `debug_pause`
-- `debug_data_breakpoint_info`
-- `debug_set_data_breakpoints`
-
-Valid inspection includes `debug_snapshot`, `debug_diagnose_stop`, `debug_source_disassembly`, `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble`, `debug_read_memory`, and `debug_exception_info` when supported.
-
-Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
+- `debug_set_function_breakpoints`: known suspicious function.
+- `debug_set_source_breakpoints`: conditional/hit-count/log source stop.
+- `debug_set_instruction_breakpoints`: exact live instruction stop after resolving an instruction reference.
+- `debug_evaluate`: narrow expression inspection; remember debugger evaluation can have side effects.
+- `debug_read_memory`: bounded memory only when structured variables/disassembly do not answer the question.
 
 ## Windows CodeLLDB pause caveat
 
-A requested `debug_pause` on Windows can surface as a `DebugBreak` / `0x80000003` exception-like stop. Do not classify that by itself as an application crash when it immediately follows a user-requested pause.
+A requested `debug_pause` on Windows can surface as a `DebugBreak` / `0x80000003` exception-like stop. Do not classify that alone as an application crash when it immediately follows a requested pause.
 
-This caveat does not apply to an independently captured crash dump.
+## Root-cause / autonomous completion standard
 
-## Root-cause claim standard
+A strong final result records:
 
-A strong final diagnosis states:
-
-- how the state was captured,
-- raw stop/exception evidence,
+- how state was captured,
+- raw exception/stop evidence,
 - raw fault frame,
-- first likely project frame and why it was selected,
-- operand/register/variable evidence tied to the relevant instruction,
-- caller/provenance evidence when available,
+- selected project frame and selection reasons,
+- operand/register/variable evidence,
+- caller/provenance evidence,
 - most likely cause and confidence,
-- remaining alternatives,
-- exact verification result after rebuild/reproduction.
+- source change actually made,
+- rebuild result,
+- autonomous iteration history or manual verification verdict,
+- exact clean reproduction evidence when claiming `fixed`.
 
-Do not call a bug fixed solely because the source looks plausible or because execution reached a breakpoint without crashing.
+Never call a bug fixed solely because the source looks plausible or because execution reached a breakpoint without crashing.
