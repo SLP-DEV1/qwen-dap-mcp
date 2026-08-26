@@ -62,6 +62,7 @@ export type VariableRegisterBinding = {
 };
 
 export type OperandAnalysis = {
+  frameIndex?: number;
   instruction?: DebugProtocol.DisassembledInstruction;
   mnemonic?: string;
   rawInstruction?: string;
@@ -73,6 +74,7 @@ export type OperandAnalysis = {
     value?: string;
     reason: string;
     confidence: DiagnosisConfidence;
+    faultingFrame: boolean;
   };
 };
 
@@ -182,24 +184,16 @@ function portableBasename(value: string): string {
 }
 
 function portableDirname(value: string): string | undefined {
-  if (/^[a-z]:[\\/]/i.test(value)) {
-    const result = path.win32.dirname(value);
-    return result === '.' ? undefined : result;
-  }
-  const result = path.dirname(value);
+  const result = /^[a-z]:[\\/]/i.test(value) ? path.win32.dirname(value) : path.dirname(value);
   return result === '.' ? undefined : result;
-}
-
-function moduleText(frame: DebugProtocol.StackFrame): string {
-  return String(frame.moduleId ?? '');
-}
-
-function moduleBasename(frame: DebugProtocol.StackFrame): string {
-  return portableBasename(moduleText(frame)).toLowerCase();
 }
 
 function sourcePath(frame: DebugProtocol.StackFrame): string | undefined {
   return frame.source?.path ?? frame.source?.name;
+}
+
+function moduleBasename(frame: DebugProtocol.StackFrame): string {
+  return portableBasename(String(frame.moduleId ?? '')).toLowerCase();
 }
 
 function confidenceFromScore(score: number): DiagnosisConfidence {
@@ -208,30 +202,18 @@ function confidenceFromScore(score: number): DiagnosisConfidence {
   return 'low';
 }
 
-function normalizeModuleHint(value: string): string {
-  return portableBasename(value).toLowerCase();
-}
-
 function projectHints(options: IntelligentDiagnosisOptions) {
   const roots = new Set<string>();
-  for (const root of options.projectRoots ?? []) {
-    const normalized = normalizedPath(root);
+  const addRoot = (value: string | undefined) => {
+    const normalized = normalizedPath(value);
     if (normalized) roots.add(normalized);
-  }
-  if (options.cwd) {
-    const normalized = normalizedPath(options.cwd);
-    if (normalized) roots.add(normalized);
-  }
-  if (options.program) {
-    const directory = portableDirname(options.program);
-    const normalized = normalizedPath(directory);
-    if (normalized) roots.add(normalized);
-  }
+  };
+  for (const root of options.projectRoots ?? []) addRoot(root);
+  addRoot(options.cwd);
+  if (options.program) addRoot(portableDirname(options.program));
 
-  const modules = new Set<string>();
-  for (const moduleName of options.projectModules ?? []) modules.add(normalizeModuleHint(moduleName));
-  if (options.program) modules.add(normalizeModuleHint(options.program));
-
+  const modules = new Set((options.projectModules ?? []).map((value) => portableBasename(value).toLowerCase()));
+  if (options.program) modules.add(portableBasename(options.program).toLowerCase());
   return { roots, modules };
 }
 
@@ -244,7 +226,6 @@ export function assessProjectFrames(
   options: IntelligentDiagnosisOptions = {},
 ): FrameAssessment[] {
   const hints = projectHints(options);
-
   return stack.map((frame, index) => {
     const reasons: string[] = [];
     let score = 0;
@@ -258,20 +239,15 @@ export function assessProjectFrames(
     if (source) {
       score += 25;
       reasons.push('frame has source information');
-      for (const root of hints.roots) {
-        if (pathWithinRoot(source, root)) {
-          score += 120;
-          reasons.push(`source is inside project root ${root}`);
-          break;
-        }
+      if ([...hints.roots].some((root) => pathWithinRoot(source, root))) {
+        score += 120;
+        reasons.push('source is inside an explicit/inferred project root');
       }
     }
-
     if (moduleName && hints.modules.has(moduleName)) {
       score += 100;
       reasons.push(`module ${moduleName} matches a project/program module hint`);
     }
-
     if (runtimeModule) {
       score -= 140;
       reasons.push(`module ${moduleName} looks like a runtime/system module`);
@@ -286,12 +262,11 @@ export function assessProjectFrames(
     }
     if (!source && !moduleName) score -= 10;
 
-    const projectControlled = score >= 30 && !runtimeModule && !runtimePath;
     return {
       index,
       frame,
       score,
-      projectControlled,
+      projectControlled: score >= 30 && !runtimeModule && !runtimePath,
       runtimeLikely,
       confidence: confidenceFromScore(score),
       reasons,
@@ -305,38 +280,34 @@ export function selectProjectFrame(
 ): ProjectFrameSelection {
   if (stack.length === 0) throw new Error('Cannot select a project frame from an empty stack.');
   const assessments = assessProjectFrames(stack, options);
-  const explicitHints = projectHints(options);
-  const usedExplicitProjectHint = explicitHints.roots.size > 0 || explicitHints.modules.size > 0;
-
-  let selected = assessments.find((assessment) => assessment.projectControlled);
-  if (!selected) {
-    selected = assessments.find((assessment) => !assessment.runtimeLikely && Boolean(sourcePath(assessment.frame)));
-  }
-  selected ??= assessments[0];
+  const hints = projectHints(options);
+  const selected = assessments.find((item) => item.projectControlled)
+    ?? assessments.find((item) => !item.runtimeLikely && Boolean(sourcePath(item.frame)))
+    ?? assessments[0];
   if (!selected) throw new Error('Unable to select a project frame.');
 
   return {
     selected,
     assessments,
     skippedRuntimeFrames: assessments.slice(0, selected.index).filter((item) => item.runtimeLikely).length,
-    usedExplicitProjectHint,
+    usedExplicitProjectHint: hints.roots.size > 0 || hints.modules.size > 0,
   };
 }
 
 function parseAddress(value: string | undefined): bigint | undefined {
   if (!value) return undefined;
   const normalized = value.trim().replace(/[`'_\s]/g, '');
-  const match = /(?:^|[^0-9a-f])0x([0-9a-f]+)(?:$|[^0-9a-f])/i.exec(` ${normalized} `);
-  if (match?.[1]) {
-    try { return BigInt(`0x${match[1]}`); } catch { return undefined; }
-  }
-  if (/^-?\d+$/.test(normalized)) {
-    try { return BigInt(normalized); } catch { return undefined; }
+  const hex = /0x([0-9a-f]+)/i.exec(normalized)?.[1];
+  try {
+    if (hex) return BigInt(`0x${hex}`);
+    if (/^-?\d+$/.test(normalized)) return BigInt(normalized);
+  } catch {
+    return undefined;
   }
   return undefined;
 }
 
-function poisonReason(value: string | undefined): 'null-like' | 'poison-pattern' | undefined {
+function suspiciousKind(value: string | undefined): 'null-like' | 'poison-pattern' | undefined {
   if (!value) return undefined;
   const compact = value.trim().toLowerCase().replace(/[`'_\s]/g, '');
   if (/^(?:0x0+|0|null|nullptr|nil|<null>)$/.test(compact)) return 'null-like';
@@ -355,7 +326,7 @@ const ARM_REGISTER_RE = /\b(?:[xw](?:[0-9]|[12][0-9]|30)|sp|pc|lr)\b/gi;
 
 function canonicalX86Register(value: string): string {
   const name = value.toLowerCase();
-  const familyMap: Record<string, string> = {
+  const aliases: Record<string, string> = {
     eax: 'rax', ax: 'rax', al: 'rax', ah: 'rax',
     ebx: 'rbx', bx: 'rbx', bl: 'rbx', bh: 'rbx',
     ecx: 'rcx', cx: 'rcx', cl: 'rcx', ch: 'rcx',
@@ -366,36 +337,35 @@ function canonicalX86Register(value: string): string {
     ebp: 'rbp', bp: 'rbp', bpl: 'rbp',
     eip: 'rip', ip: 'rip',
   };
-  if (familyMap[name]) return familyMap[name];
-  const extended = /^(r(?:8|9|1[0-5]))(?:d|w|b)$/.exec(name);
-  return extended?.[1] ?? name;
+  if (aliases[name]) return aliases[name];
+  return /^(r(?:8|9|1[0-5]))(?:d|w|b)$/.exec(name)?.[1] ?? name;
 }
 
 function canonicalArmRegister(value: string): string {
   const name = value.toLowerCase();
   if (name === 'lr') return 'x30';
-  const wide = /^w(\d+)$/.exec(name);
-  return wide?.[1] ? `x${wide[1]}` : name;
+  const match = /^w(\d+)$/.exec(name)?.[1];
+  return match ? `x${match}` : name;
 }
 
 function currentInstruction(evidence: FrameEvidence): DebugProtocol.DisassembledInstruction | undefined {
   const instructions = evidence.disassembly ?? [];
   const ip = evidence.frame.instructionPointerReference;
   if (!ip) return instructions[0];
-  const exact = instructions.find((instruction) => instruction.address.toLowerCase() === ip.toLowerCase());
+  const exact = instructions.find((item) => item.address.toLowerCase() === ip.toLowerCase());
   if (exact) return exact;
-  const ipAddress = parseAddress(ip);
-  if (ipAddress === undefined) return instructions[0];
+  const target = parseAddress(ip);
+  if (target === undefined) return instructions[0];
 
   let nearest: DebugProtocol.DisassembledInstruction | undefined;
-  let nearestDistance: bigint | undefined;
+  let distance: bigint | undefined;
   for (const instruction of instructions) {
     const address = parseAddress(instruction.address);
     if (address === undefined) continue;
-    const distance = address >= ipAddress ? address - ipAddress : ipAddress - address;
-    if (nearestDistance === undefined || distance < nearestDistance) {
+    const delta = address >= target ? address - target : target - address;
+    if (distance === undefined || delta < distance) {
       nearest = instruction;
-      nearestDistance = distance;
+      distance = delta;
     }
   }
   return nearest;
@@ -404,9 +374,7 @@ function currentInstruction(evidence: FrameEvidence): DebugProtocol.Disassembled
 export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnalysis {
   const instruction = currentInstruction(evidence);
   const rawInstruction = instruction?.instruction;
-  if (!rawInstruction) {
-    return { referencedRegisters: [], variableBindings: [] };
-  }
+  if (!rawInstruction) return { frameIndex: evidence.index, referencedRegisters: [], variableBindings: [] };
 
   const armLike = /\b[wx](?:[0-9]|[12][0-9]|30)\b/i.test(rawInstruction);
   const registerRegex = armLike ? ARM_REGISTER_RE : X86_REGISTER_RE;
@@ -414,36 +382,36 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
   const memoryMatch = /\[([^\]]+)\]|\(([^)]+)\)/.exec(rawInstruction);
   const memoryOperand = memoryMatch?.[0];
   const memoryText = memoryMatch?.[1] ?? memoryMatch?.[2] ?? '';
-  const referencedRaw = [...rawInstruction.matchAll(registerRegex)].map((match) => match[0]);
-  const referencedRegisters = [...new Set(referencedRaw.map((name) => canonicalize(name)))];
+  const referenced = [...new Set(
+    [...rawInstruction.matchAll(registerRegex)].map((match) => canonicalize(match[0])),
+  )];
   const memoryRegisters = new Set(
-    [...memoryText.matchAll(armLike ? ARM_REGISTER_RE : X86_REGISTER_RE)].map((match) => canonicalize(match[0])),
+    [...memoryText.matchAll(armLike ? ARM_REGISTER_RE : X86_REGISTER_RE)]
+      .map((match) => canonicalize(match[0])),
   );
 
-  const registerValues = new Map<string, DebugProtocol.Variable>();
-  for (const register of evidence.registers) {
-    registerValues.set(canonicalize(register.name), register);
-  }
-
-  const registerBindings: RegisterBinding[] = referencedRegisters.map((register) => {
-    const variable = registerValues.get(register);
+  const values = new Map<string, DebugProtocol.Variable>();
+  for (const register of evidence.registers) values.set(canonicalize(register.name), register);
+  const bindings: RegisterBinding[] = referenced.map((register) => {
+    const value = values.get(register)?.value;
+    const suspicious = suspiciousKind(value);
     return {
       register,
       canonicalRegister: register,
-      ...(variable?.value === undefined ? {} : { value: variable.value }),
+      ...(value === undefined ? {} : { value }),
       referencedByMemoryOperand: memoryRegisters.has(register),
-      ...(poisonReason(variable?.value) ? { suspicious: poisonReason(variable?.value) } : {}),
+      ...(suspicious ? { suspicious } : {}),
     };
   });
 
   const variableBindings: VariableRegisterBinding[] = [];
   for (const local of evidence.locals) {
-    const localAddress = parseAddress(local.value);
-    if (localAddress === undefined) continue;
-    for (const binding of registerBindings) {
-      const registerAddress = parseAddress(binding.value);
-      if (registerAddress === undefined || registerAddress !== localAddress || binding.value === undefined) continue;
-      if (localAddress === 0n && !looksPointerLike(local)) continue;
+    const localValue = parseAddress(local.value);
+    if (localValue === undefined) continue;
+    for (const binding of bindings) {
+      const registerValue = parseAddress(binding.value);
+      if (registerValue === undefined || binding.value === undefined || registerValue !== localValue) continue;
+      if (localValue === 0n && !looksPointerLike(local)) continue;
       variableBindings.push({
         variable: local.name,
         ...(local.type ? { variableType: local.type } : {}),
@@ -452,33 +420,32 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
         registerValue: binding.value,
         confidence: binding.referencedByMemoryOperand && looksPointerLike(local) ? 'high' : 'medium',
         reason: binding.referencedByMemoryOperand
-          ? 'local value matches a register used by the current memory operand'
-          : 'local value matches a register referenced by the current instruction',
+          ? 'local value matches a register used by this frame\'s memory operand'
+          : 'local value matches a register referenced by this frame\'s instruction',
       });
       if (variableBindings.length >= 12) break;
     }
     if (variableBindings.length >= 12) break;
   }
 
-  const suspiciousMemoryRegister = registerBindings.find(
-    (binding) => binding.referencedByMemoryOperand && binding.suspicious,
-  );
-
+  const suspiciousMemory = bindings.find((binding) => binding.referencedByMemoryOperand && binding.suspicious);
   const mnemonic = rawInstruction.trim().split(/\s+/, 1)[0]?.toLowerCase();
   return {
+    frameIndex: evidence.index,
     instruction,
     ...(mnemonic ? { mnemonic } : {}),
     rawInstruction,
-    referencedRegisters: registerBindings,
+    referencedRegisters: bindings,
     ...(memoryOperand ? { memoryOperand } : {}),
     variableBindings,
-    ...(suspiciousMemoryRegister
+    ...(suspiciousMemory
       ? {
           likelyFaultOperand: {
-            register: suspiciousMemoryRegister.register,
-            ...(suspiciousMemoryRegister.value === undefined ? {} : { value: suspiciousMemoryRegister.value }),
-            reason: `${suspiciousMemoryRegister.register} is used by the memory operand and contains a ${suspiciousMemoryRegister.suspicious === 'null-like' ? 'null-like' : 'poison-pattern'} value`,
-            confidence: 'high',
+            register: suspiciousMemory.register,
+            ...(suspiciousMemory.value === undefined ? {} : { value: suspiciousMemory.value }),
+            reason: `${suspiciousMemory.register} is used by this frame's memory operand and contains a ${suspiciousMemory.suspicious === 'null-like' ? 'null-like' : 'poison-pattern'} value`,
+            confidence: evidence.index === 0 ? 'high' : 'medium',
+            faultingFrame: evidence.index === 0,
           },
         }
       : {}),
@@ -486,11 +453,12 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
 }
 
 function compactFrame(assessment: FrameAssessment, role: CallChainFrame['role']): CallChainFrame {
+  const source = sourcePath(assessment.frame);
   return {
     index: assessment.index,
     function: assessment.frame.name,
     ...(assessment.frame.moduleId === undefined ? {} : { moduleId: assessment.frame.moduleId }),
-    ...(sourcePath(assessment.frame) ? { sourcePath: sourcePath(assessment.frame) } : {}),
+    ...(source ? { sourcePath: source } : {}),
     line: assessment.frame.line,
     role,
     projectControlled: assessment.projectControlled,
@@ -499,10 +467,9 @@ function compactFrame(assessment: FrameAssessment, role: CallChainFrame['role'])
   };
 }
 
-function normalizedComparableValue(value: string): string | undefined {
-  const address = parseAddress(value);
-  if (address === undefined) return undefined;
-  return `0x${address.toString(16)}`;
+function comparableValue(value: string): string | undefined {
+  const parsed = parseAddress(value);
+  return parsed === undefined ? undefined : `0x${parsed.toString(16)}`;
 }
 
 function buildProvenance(evidence: FrameEvidence[]): CallChainAnalysis['provenance'] {
@@ -510,32 +477,32 @@ function buildProvenance(evidence: FrameEvidence[]): CallChainAnalysis['provenan
   for (const frame of evidence) {
     for (const variable of frame.locals) {
       if (!looksPointerLike(variable)) continue;
-      const normalized = normalizedComparableValue(variable.value);
-      if (!normalized) continue;
-      const current = values.get(normalized) ?? [];
-      current.push({ index: frame.index, function: frame.frame.name, variable: variable.name });
-      values.set(normalized, current);
+      const value = comparableValue(variable.value);
+      if (!value) continue;
+      const occurrences = values.get(value) ?? [];
+      occurrences.push({ index: frame.index, function: frame.frame.name, variable: variable.name });
+      values.set(value, occurrences);
     }
   }
 
   const output: CallChainAnalysis['provenance'] = [];
   for (const [value, occurrences] of values) {
-    const frameIds = new Set(occurrences.map((item) => item.index));
-    if (frameIds.size < 2) continue;
-    const grouped = new Map<number, { index: number; function: string; variables: string[] }>();
+    if (new Set(occurrences.map((item) => item.index)).size < 2) continue;
+    const frames = new Map<number, { index: number; function: string; variables: string[] }>();
     for (const occurrence of occurrences) {
-      const existing = grouped.get(occurrence.index) ?? {
+      const item = frames.get(occurrence.index) ?? {
         index: occurrence.index,
         function: occurrence.function,
         variables: [],
       };
-      if (!existing.variables.includes(occurrence.variable)) existing.variables.push(occurrence.variable);
-      grouped.set(occurrence.index, existing);
+      if (!item.variables.includes(occurrence.variable)) item.variables.push(occurrence.variable);
+      frames.set(occurrence.index, item);
     }
+    const kind = suspiciousKind(value);
     output.push({
       value,
-      frames: [...grouped.values()].sort((a, b) => a.index - b.index),
-      confidence: poisonReason(value) ? 'high' : 'medium',
+      frames: [...frames.values()].sort((a, b) => a.index - b.index),
+      confidence: kind === 'poison-pattern' ? 'high' : kind === 'null-like' ? 'low' : 'medium',
     });
   }
   return output.slice(0, 8);
@@ -555,11 +522,11 @@ export function analyzeCallChain(
     return compactFrame(assessment, role);
   });
 
-  const functionCounts = new Map<string, number>();
+  const counts = new Map<string, number>();
   for (const assessment of selection.assessments) {
-    functionCounts.set(assessment.frame.name, (functionCounts.get(assessment.frame.name) ?? 0) + 1);
+    counts.set(assessment.frame.name, (counts.get(assessment.frame.name) ?? 0) + 1);
   }
-  const repeatedFunctions = [...functionCounts.entries()]
+  const repeatedFunctions = [...counts.entries()]
     .filter(([, count]) => count >= 3)
     .map(([functionName, count]) => ({ function: functionName, count }))
     .sort((a, b) => b.count - a.count)
@@ -569,19 +536,18 @@ export function analyzeCallChain(
   if (!firstProjectFrame) throw new Error('Unable to build call-chain analysis without a frame.');
   const projectCallerFrames = frames.filter((frame) => frame.index > selectedIndex && frame.projectControlled).slice(0, 6);
   const provenance = buildProvenance(evidence);
-
-  const rationale: string[] = [];
-  if (selectedIndex > 0) {
-    rationale.push(`The first ${selectedIndex} frame(s) are outside the selected project boundary; frame ${selectedIndex} is the first likely application-controlled call site.`);
-  } else {
-    rationale.push('The faulting frame itself is likely application-controlled.');
-  }
-  if (provenance.length > 0) {
-    rationale.push('The same pointer-like value is visible across multiple project frames, providing a bounded provenance trail through callers.');
-  }
-  if (repeatedFunctions.length > 0) {
-    rationale.push('Repeated stack frames indicate recursive/re-entrant call growth that may be causally relevant.');
-  }
+  const strongProvenance = provenance.some((item) => item.confidence === 'high');
+  const rationale = [
+    selectedIndex > 0
+      ? `Frame ${selectedIndex} is the first likely application-controlled call site after ${selectedIndex} non-project frame(s).`
+      : 'The faulting frame itself is likely application-controlled.',
+    ...(provenance.length > 0
+      ? ['Matching pointer-like values are visible across bounded project caller evidence; confidence depends on whether the value is distinctive.']
+      : []),
+    ...(repeatedFunctions.length > 0
+      ? ['Repeated stack frames indicate recursion/re-entry that may be causally relevant.']
+      : []),
+  ];
 
   return {
     frames,
@@ -592,117 +558,118 @@ export function analyzeCallChain(
     provenance,
     rootCauseCandidate: {
       frame: firstProjectFrame,
-      confidence: selection.selected.confidence === 'high' || provenance.length > 0 ? 'high' : 'medium',
+      confidence: strongProvenance ? 'high' : selection.selected.confidence === 'low' ? 'low' : 'medium',
       rationale,
     },
   };
 }
 
 function primaryHypothesis(base: CrashDiagnosis): DiagnosisHypothesis | undefined {
-  return base.hypotheses.find((hypothesis) => hypothesis.confidence === 'high') ?? base.hypotheses[0];
+  return base.hypotheses.find((item) => item.confidence === 'high') ?? base.hypotheses[0];
 }
 
-function suggestedChangesFor(
+function suggestedChanges(
   base: CrashDiagnosis,
   operand: OperandAnalysis,
-  callChain: CallChainAnalysis,
+  chain: CallChainAnalysis,
 ): string[] {
-  const changes: string[] = [];
-  const bound = operand.variableBindings[0];
-  const faultOperand = operand.likelyFaultOperand;
+  const output: string[] = [];
+  const variableBinding = operand.variableBindings[0];
+  const suspiciousOperand = operand.likelyFaultOperand;
 
-  if (faultOperand && bound) {
-    changes.push(`Trace ${bound.variable} (${bound.variableType ?? 'unknown type'}) from ${bound.register} at the selected project frame; it matches the register used by the faulting memory operand.`);
-  } else if (faultOperand) {
-    changes.push(`Trace the value loaded into ${faultOperand.register}; it is used by the current memory operand and is ${faultOperand.reason}.`);
+  if (suspiciousOperand && variableBinding) {
+    output.push(`Trace ${variableBinding.variable} (${variableBinding.variableType ?? 'unknown type'}) from ${variableBinding.register}; the local and register values match at the selected project frame.`);
+  } else if (suspiciousOperand) {
+    output.push(`Trace the value loaded into ${suspiciousOperand.register}; it participates in the selected frame's memory operand and is suspicious.`);
   }
 
   switch (base.classification.category) {
     case 'access-violation':
     case 'segmentation-fault':
-      if (base.hypotheses.some((hypothesis) => hypothesis.kind === 'invalid-lifetime')) {
-        changes.push('Fix the ownership/lifetime violation at the earliest proven producer; do not only add a guard at the final dereference if the object is already stale.');
-      } else {
-        changes.push('Restore the pointer/reference invariant before the dereference, preferably at the producer or caller boundary that allowed the invalid value through.');
-      }
+      output.push(base.hypotheses.some((item) => item.kind === 'invalid-lifetime')
+        ? 'Fix the ownership/lifetime violation at the earliest evidenced producer instead of only masking the final dereference.'
+        : 'Restore the pointer/reference invariant at the narrowest producer/caller boundary supported by the evidence.');
       break;
     case 'divide-by-zero':
-      changes.push('Restore the divisor invariant at its producer and add a validation/error path at the narrowest boundary where zero is genuinely invalid.');
+      output.push('Restore the divisor invariant at its producer and add validation where zero is genuinely invalid.');
       break;
     case 'stack-overflow':
-      changes.push('Fix the recursion/re-entry termination condition or move excessive per-frame storage away from the stack after confirming the repeating call pattern.');
+      output.push('Fix the recursion/re-entry termination condition or excessive per-frame stack use after confirming the repeating call pattern.');
       break;
     case 'abort-or-assert':
-      changes.push('Repair the violated invariant that led to abort/assert; keep the assertion unless the invariant itself is intentionally changing.');
+      output.push('Repair the violated invariant that led to abort/assert; do not simply suppress the assertion.');
       break;
     case 'heap-corruption':
-      changes.push('Fix the first invalid write/free or ownership transition; treat the allocator crash site as potentially downstream from the original corruption.');
+      output.push('Fix the first invalid write/free or ownership transition; allocator failure may be downstream of the original corruption.');
       break;
     case 'illegal-instruction':
-      changes.push('Validate the control-flow target, function pointer/vtable/return-address provenance, and binary-symbol match before changing source logic.');
+      output.push('Validate the control-flow target and binary/symbol match before changing source logic.');
       break;
     default:
-      changes.push('Apply the smallest source change that directly addresses the highest-confidence debugger evidence rather than the symptom alone.');
+      output.push('Apply the smallest source change directly supported by the highest-confidence debugger evidence.');
   }
 
-  if (callChain.provenance.length > 0) {
-    const trail = callChain.provenance[0];
-    if (trail) {
-      changes.push(`Use the caller trail for ${trail.value} to patch the earliest frame where the value first becomes invalid or violates its contract.`);
-    }
+  const strongestTrail = chain.provenance.find((item) => item.confidence === 'high') ?? chain.provenance[0];
+  if (strongestTrail) {
+    output.push(`Use the caller trail for ${strongestTrail.value} to find the earliest frame where the value first violates its contract.`);
   }
-
-  return [...new Set(changes)].slice(0, 6);
+  return [...new Set(output)].slice(0, 6);
 }
 
 function buildFixWorkflow(
   base: CrashDiagnosis,
   selection: ProjectFrameSelection,
   operand: OperandAnalysis,
-  callChain: CallChainAnalysis,
+  chain: CallChainAnalysis,
 ): FixWorkflow {
   const frame = selection.selected.frame;
-  const candidate = sourcePath(frame);
+  const source = sourcePath(frame);
+  const hypothesis = primaryHypothesis(base);
   return {
     status: 'proposal-only',
     candidateLocation: {
       function: frame.name,
-      ...(candidate ? { sourcePath: candidate } : {}),
+      ...(source ? { sourcePath: source } : {}),
       line: frame.line,
     },
-    ...(primaryHypothesis(base) ? { hypothesis: primaryHypothesis(base) } : {}),
-    suggestedChanges: suggestedChangesFor(base, operand, callChain),
+    ...(hypothesis ? { hypothesis } : {}),
+    suggestedChanges: suggestedChanges(base, operand, chain),
     phases: [
       {
         phase: 'diagnose',
         state: 'complete',
-        instruction: 'Preserve the classification, selected project frame, operand/register/variable bindings, and call-chain provenance as the evidence baseline.',
+        instruction: 'Preserve classification, project-frame selection, operand bindings and call-chain provenance as the baseline evidence.',
       },
       {
         phase: 'fix',
         state: 'agent-action-required',
-        instruction: 'Read the source around the selected project frame with normal coding tools and apply the smallest change supported by the debugger evidence.',
+        instruction: 'Read the source around the selected project frame with normal coding tools and apply the smallest evidence-backed change.',
       },
       {
         phase: 'rebuild',
         state: 'agent-action-required',
-        instruction: 'Rebuild the target with the project\'s existing build system and matching debug symbols. qwen-dap-mcp intentionally does not provide a general shell executor.',
+        instruction: 'Rebuild with the project\'s normal build system and matching debug symbols. qwen-dap-mcp intentionally does not expose a general shell executor.',
       },
       {
         phase: 'reproduce',
         state: 'ready-after-rebuild',
-        instruction: 'Run the same debug_this_crash launch/attach scenario again with workflow.stage="verify" and the returned verificationBaseline.',
+        instruction: 'Run the same debug_this_crash scenario with workflow.stage="verify" and the returned verificationBaseline.',
       },
       {
         phase: 'verify',
         state: 'ready-after-rebuild',
-        instruction: 'Treat a clean exit as strong evidence of a fix; treat the same crash category and same project location as not fixed; classify changed failures separately.',
+        instruction: 'Only a complete successful reproduction, such as a clean process exit, is strong fix evidence. A breakpoint/entry stop alone is inconclusive.',
       },
     ],
   };
 }
 
-export function createVerificationBaseline(diagnosis: IntelligentCrashDiagnosis): VerificationBaseline {
+type BaselineInput = Pick<
+  IntelligentCrashDiagnosis,
+  'classification' | 'faultLocation' | 'projectFrame' | 'hypotheses' | 'suspiciousValues'
+>;
+
+export function createVerificationBaseline(diagnosis: BaselineInput): VerificationBaseline {
   return {
     classification: diagnosis.classification.category,
     crashLikely: diagnosis.classification.crashLikely,
@@ -710,8 +677,8 @@ export function createVerificationBaseline(diagnosis: IntelligentCrashDiagnosis)
     projectFunction: diagnosis.projectFrame.function,
     ...(diagnosis.projectFrame.sourcePath ? { projectSourcePath: diagnosis.projectFrame.sourcePath } : {}),
     projectLine: diagnosis.projectFrame.line,
-    hypothesisKinds: diagnosis.hypotheses.map((hypothesis) => hypothesis.kind).slice(0, 8),
-    suspiciousNames: diagnosis.suspiciousValues.map((value) => value.name).slice(0, 12),
+    hypothesisKinds: diagnosis.hypotheses.map((item) => item.kind).slice(0, 8),
+    suspiciousNames: diagnosis.suspiciousValues.map((item) => item.name).slice(0, 12),
   };
 }
 
@@ -724,7 +691,7 @@ export function compareVerificationBaseline(
     return {
       verdict: 'fixed',
       confidence: 'high',
-      evidence: ['The reproduced scenario exited with code 0 before any crash stop was captured.'],
+      evidence: ['The reproduced scenario reached a clean exit with code 0 before any crash stop was captured.'],
     };
   }
   if (!current) {
@@ -736,14 +703,13 @@ export function compareVerificationBaseline(
         : `The debuggee exited with code ${terminal?.exitCode ?? 'unknown'} without a stopped-state diagnosis.`],
     };
   }
-
   if (!current.classification.crashLikely) {
     return {
-      verdict: 'fixed',
-      confidence: 'medium',
+      verdict: 'inconclusive',
+      confidence: 'low',
       evidence: [
-        `The verification stop is classified as ${current.classification.category}, not a crash.`,
-        'Confirm the complete original scenario still reaches its expected successful outcome before closing the bug.',
+        `The verification run stopped for ${current.classification.category}, which is not itself proof that the original crash is fixed.`,
+        'Continue/reproduce the complete original scenario to a successful terminal outcome before claiming a fix.',
       ],
     };
   }
@@ -752,7 +718,7 @@ export function compareVerificationBaseline(
   const sameFunction = current.projectFrame.function === baseline.projectFunction;
   const samePath = !baseline.projectSourcePath || current.projectFrame.sourcePath === baseline.projectSourcePath;
   const sameLine = current.projectFrame.line === baseline.projectLine;
-  const sharedHypothesis = current.hypotheses.some((hypothesis) => baseline.hypothesisKinds.includes(hypothesis.kind));
+  const sharedHypothesis = current.hypotheses.some((item) => baseline.hypothesisKinds.includes(item.kind));
 
   if (sameCategory && sameFunction && samePath && (sameLine || sharedHypothesis)) {
     return {
@@ -761,7 +727,7 @@ export function compareVerificationBaseline(
       evidence: [
         `The same ${baseline.classification} crash family reproduced.`,
         `The selected project frame is still ${baseline.projectFunction}${baseline.projectSourcePath ? ` at ${baseline.projectSourcePath}` : ''}:${baseline.projectLine}.`,
-        ...(sharedHypothesis ? ['At least one root-cause hypothesis kind from the baseline is still present.'] : []),
+        ...(sharedHypothesis ? ['At least one baseline root-cause hypothesis kind is still present.'] : []),
       ],
     };
   }
@@ -770,9 +736,9 @@ export function compareVerificationBaseline(
     verdict: 'changed-failure',
     confidence: 'medium',
     evidence: [
-      `The verification run still looks crash-related (${current.classification.category}), but it no longer matches the original failure signature exactly.`,
+      `The run is still crash-related (${current.classification.category}) but no longer matches the original signature exactly.`,
       `Original project frame: ${baseline.projectFunction}:${baseline.projectLine}; current: ${current.projectFrame.function}:${current.projectFrame.line}.`,
-      'Diagnose this as a potentially new or downstream failure rather than claiming the original fix is complete.',
+      'Treat this as a potentially new or downstream failure and diagnose it separately.',
     ],
   };
 }
@@ -793,7 +759,7 @@ export function buildIntelligentDiagnosis(
   const operandAnalysis = analyzeInstructionOperands(selectedEvidence);
   const callChain = analyzeCallChain(selection, evidence);
   const frame = selection.selected.frame;
-  const projectPath = frame.source?.path ?? frame.source?.name;
+  const projectPath = sourcePath(frame);
 
   const projectFrame: IntelligentCrashDiagnosis['projectFrame'] = {
     index: selection.selected.index,
@@ -810,9 +776,9 @@ export function buildIntelligentDiagnosis(
 
   const summary = selection.selected.index === 0
     ? `${base.summary} The faulting frame is also the first likely project-controlled frame.`
-    : `${base.summary} The first likely project-controlled frame is ${frame.name}${projectPath ? ` at ${projectPath}:${frame.line}` : ''} after ${selection.selected.index} runtime/system frame(s).`;
+    : `${base.summary} The first likely project-controlled frame is ${frame.name}${projectPath ? ` at ${projectPath}:${frame.line}` : ''} after ${selection.selected.index} non-project frame(s).`;
 
-  const partial = {
+  const partial: Omit<IntelligentCrashDiagnosis, 'verificationBaseline'> = {
     ...base,
     summary,
     projectFrame,
@@ -820,10 +786,10 @@ export function buildIntelligentDiagnosis(
     operandAnalysis,
     callChain,
     fixWorkflow: buildFixWorkflow(base, selection, operandAnalysis, callChain),
-  } as Omit<IntelligentCrashDiagnosis, 'verificationBaseline'>;
+  };
 
   return {
     ...partial,
-    verificationBaseline: createVerificationBaseline(partial as IntelligentCrashDiagnosis),
+    verificationBaseline: createVerificationBaseline(partial),
   };
 }
