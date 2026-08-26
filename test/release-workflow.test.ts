@@ -12,6 +12,8 @@ test('published release verification is serialized inside the release workflow',
   ]);
 
   assert.doesNotMatch(extensionSmoke, /^\s{2}published-release-install:/m);
+  assert.match(releaseWorkflow, /- '\.github\/workflows\/release-extension\.yml'/);
+  assert.match(releaseWorkflow, /- 'test\/release-workflow\.test\.ts'/);
   assert.match(releaseWorkflow, /- name: Publish GitHub release/);
   assert.match(releaseWorkflow, /- name: Verify published release metadata/);
   assert.match(releaseWorkflow, /- name: Verify published GitHub release installs exact version/);
