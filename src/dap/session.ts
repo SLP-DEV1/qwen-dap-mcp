@@ -385,19 +385,34 @@ export class DapSession {
     this.assertInitialized();
     this.configured = false;
     this.activeRequest = request;
-    const initializedEvent = this.connection.waitForEvent('initialized', this.requestTimeoutMs);
-    const requestPromise = this.connection.sendRequest(request, configuration, Math.max(this.requestTimeoutMs, 60_000));
-    await initializedEvent;
 
-    const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
-    for (const group of breakpoints) {
-      breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
+    const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);
+    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs);
+    const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
+
+    // launch/attach can remain pending while the initialized event is handled
+    // and breakpoints/configurationDone are sent. Observe rejection immediately
+    // so an earlier setup failure can never leave this parallel request as an
+    // unhandled rejected promise.
+    void requestPromise.catch(() => undefined);
+
+    try {
+      await initializedEvent;
+
+      const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
+      for (const group of breakpoints) {
+        breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
+      }
+      if (this.capabilities?.supportsConfigurationDoneRequest) await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+
+      const response = await requestPromise;
+      this.configured = true;
+      return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
+    } catch (error) {
+      this.configured = false;
+      this.activeRequest = undefined;
+      throw error;
     }
-    if (this.capabilities?.supportsConfigurationDoneRequest) await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
-
-    const response = await requestPromise;
-    this.configured = true;
-    return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
   }
 
   private assertCapability(capability: keyof DebugProtocol.Capabilities, requestName: string): void {
