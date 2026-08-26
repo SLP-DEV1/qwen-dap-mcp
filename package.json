@@ -1,6 +1,6 @@
 {
   "name": "@slp-dev1/qwen-dap-mcp",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Native runtime and crash-dump debugging for coding agents through a local DAP-to-MCP bridge.",
   "type": "module",
   "main": "./dist/index.js",
