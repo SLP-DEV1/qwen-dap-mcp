@@ -70,7 +70,7 @@ jobs:
 
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" | tee changed-files.txt
 
-          select() {
+          select_suite() {
             local suite="$1"
             local pattern="$2"
             if grep -Eq "$pattern" changed-files.txt; then
@@ -80,12 +80,12 @@ jobs:
             fi
           }
 
-          select codelldb '^(src/adapters/codelldb\.ts|src/tools/(agent-diagnostics|register-debug-tools|run-to-stop)\.ts|test/codelldb-real-smoke\.ts|test/codelldb-profile\.test\.ts|test/fixtures/native-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
-          select dump '^(src/adapters/codelldb-dump\.ts|src/dap/postmortem-normalization\.ts|src/tools/register-dump-tools\.ts|test/codelldb-(dump-profile\.test|real-dump-smoke)\.ts|test/fixtures/native-dump\.cpp|\.github/workflows/native-smoke\.yml)$'
-          select gdb '^(src/adapters/gdb-dap\.ts|src/dap/|src/tools/(agent-diagnostics|find-writer|register-gdb-dap-tools)\.ts|test/gdb|test/find-writer\.test\.ts|test/fixtures/gdb-dap-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
-          select lldb '^(src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
-          select differential '^(src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
-          select multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite codelldb '^(src/adapters/codelldb\.ts|src/tools/(agent-diagnostics|register-debug-tools|run-to-stop)\.ts|test/codelldb-real-smoke\.ts|test/codelldb-profile\.test\.ts|test/fixtures/native-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite dump '^(src/adapters/codelldb-dump\.ts|src/dap/postmortem-normalization\.ts|src/tools/register-dump-tools\.ts|test/codelldb-(dump-profile\.test|real-dump-smoke)\.ts|test/fixtures/native-dump\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite gdb '^(src/adapters/gdb-dap\.ts|src/dap/|src/tools/(agent-diagnostics|find-writer|register-gdb-dap-tools)\.ts|test/gdb|test/find-writer\.test\.ts|test/fixtures/gdb-dap-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite lldb '^(src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite differential '^(src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
 
   codelldb:
     name: CodeLLDB / Windows
