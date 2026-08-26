@@ -1,0 +1,52 @@
+# qwen-dap-mcp
+
+> Give AI coding agents a real native debugger.
+
+qwen-dap-mcp is an open-source TypeScript bridge from the Debug Adapter Protocol (DAP) to the Model Context Protocol (MCP). It is designed primarily for Qwen Code and exposes structured native-debugger evidence such as stack frames, registers, locals, exception state, modules, disassembly, bounded memory reads, and crash dumps.
+
+## Canonical links
+
+- Repository: https://github.com/SLP-DEV1/qwen-dap-mcp
+- Releases: https://github.com/SLP-DEV1/qwen-dap-mcp/releases
+- npm: https://www.npmjs.com/package/@slp-dev1/qwen-dap-mcp
+- MCP Registry name: io.github.SLP-DEV1/qwen-dap-mcp
+- License: Apache-2.0
+
+## Installation
+
+Qwen Code from GitHub:
+
+qwen extensions install SLP-DEV1/qwen-dap-mcp
+
+Qwen Code from npm:
+
+qwen extensions install @slp-dev1/qwen-dap-mcp
+
+Generic local stdio MCP launch:
+
+npx -y @slp-dev1/qwen-dap-mcp
+
+## Core capabilities
+
+- DAP-to-MCP bridge for native debugging
+- CodeLLDB launch and attach workflows
+- structured crash and stop diagnosis
+- stack, registers, locals, scopes, modules and exception evidence
+- disassembly and bounded memory inspection
+- Windows minidump/postmortem analysis
+- runtime root-cause backtracking
+- crash fingerprints and fix verification
+- bounded autonomous diagnose/fix/build/reproduce/verify orchestration
+
+## Safety boundaries
+
+The MCP server is local stdio only. It does not expose a general shell primitive, a general source-writing primitive, or unrestricted memory writes. Live attach is intended only for authorized local targets. Dump sessions are read-only.
+
+## Documentation
+
+- README.md: overview, installation, tools, architecture and examples
+- CONTRIBUTING.md: development and contribution guidance
+- SECURITY.md: security model and reporting
+- docs/publishing.md: npm and MCP Registry release process
+- docs/launch-kit.md: community launch copy and demo storyboard
+- docs/directory-submissions.md: maintained directory submission copy
