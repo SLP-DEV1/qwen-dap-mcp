@@ -1,10 +1,10 @@
 # Launch kit
 
-This file contains ready-to-use copy and metadata for announcing `qwen-dap-mcp` without rewriting the pitch for every community.
+Ready-to-use copy and metadata for announcing `qwen-dap-mcp` without rewriting the pitch for every community.
 
 ## One-line pitch
 
-Give Qwen Code a real native debugger: autonomous C/C++ crash diagnosis and verification through a local DAP-to-MCP bridge with CodeLLDB and minidump support.
+Give Qwen Code a real native debugger: local DAP-to-MCP crash diagnosis and verification with CodeLLDB, minidumps, compact agent tooling, and reproducible Crash Lab examples.
 
 ## GitHub About description
 
@@ -35,24 +35,26 @@ typescript
 
 ### Title
 
-Native autonomous debugging for Qwen Code with CodeLLDB through MCP
+I gave Qwen Code a real native debugger through DAP and MCP
 
 ### Post
 
-I built **qwen-dap-mcp**, a debugger-agnostic DAP → MCP bridge that gives Qwen Code structured access to a real native debugger.
+I built **qwen-dap-mcp**, a local DAP → MCP bridge that gives Qwen Code structured access to a real native debugger instead of asking it to infer every crash from source and terminal output alone.
 
-The goal is to let a coding agent use debugger evidence instead of guessing from source alone when a C/C++ program crashes.
+The useful evidence for a native crash is often inside the debugger: stack frames, registers, locals, exception state, disassembly, loaded modules and crash dumps. qwen-dap-mcp exposes that evidence through MCP and keeps the fix/build work in the normal coding-agent workflow.
 
-Current capabilities include:
+`v0.12.0` adds a compact default agent toolset, while the full low-level debugger surface remains available through `QWEN_DAP_MCP_TOOLSET=full`. It also includes a reproducible Crash Lab and benchmark scaffold so the workflow can be tested rather than only described.
+
+Current tested path:
 
 - CodeLLDB launch/attach through DAP
-- stack, register, local, module, disassembly and memory evidence
 - Windows minidump / postmortem analysis
-- project-frame and operand correlation
+- stack, register, local, module, disassembly and bounded memory evidence
+- project-frame and fault-operand correlation
 - bounded runtime root-cause backtracking
-- autonomous diagnose → inspect → fix → build → reproduce → verify orchestration
+- diagnose → inspect → fix → build → reproduce → verify orchestration
 - explicit crash fingerprints and changed-failure detection
-- local stdio transport with no arbitrary shell or unrestricted memory-write MCP primitive
+- local stdio MCP with no arbitrary shell or unrestricted memory-write primitive
 
 Install in Qwen Code:
 
@@ -60,49 +62,68 @@ Install in Qwen Code:
 qwen extensions install SLP-DEV1/qwen-dap-mcp
 ```
 
+Or run the published MCP package directly:
+
+```bash
+npx -y @slp-dev1/qwen-dap-mcp
+```
+
 Repository:
 https://github.com/SLP-DEV1/qwen-dap-mcp
 
-I would especially appreciate feedback from people using Qwen Code for C/C++ or other native projects, and from anyone testing additional DAP adapters.
+npm:
+`@slp-dev1/qwen-dap-mcp@0.12.0`
+
+Official MCP Registry:
+`io.github.SLP-DEV1/qwen-dap-mcp`
+
+I would especially like feedback from people using Qwen Code on native C/C++ projects, and from anyone interested in testing additional DAP adapters.
 
 ## Reddit / LocalLLaMA
 
-### Title
+**Important:** current `r/LocalLLaMA` moderation actively limits self-promotion. Do not post this just because the draft exists. First make sure your recent participation in the subreddit is overwhelmingly normal discussion rather than links to your own projects. The subreddit also scrutinizes undisclosed LLM-generated promotional posts, so rewrite the final version in your own voice and disclose assistance where appropriate.
 
-I gave Qwen Code access to CodeLLDB through MCP so it can diagnose native crashes with real debugger evidence
+### Suggested title
 
-### Post
+I connected Qwen Code to CodeLLDB through MCP so it can inspect real native crash state
 
-I have been working on **qwen-dap-mcp**, a local DAP → MCP bridge for coding agents.
+### Draft to rewrite in your own voice
 
-The problem I wanted to solve is simple: when an AI coding agent sees a native crash, source code alone is often not enough. The useful evidence is inside the debugger — exception state, stack frames, registers, locals, disassembly, modules and crash dumps.
+I kept running into the same limitation with coding agents on native projects: they can read source and retry builds, but once the program actually crashes they often do not have the debugger state that a human would immediately inspect.
 
-The bridge exposes that evidence as MCP tools. Qwen Code can then drive a bounded workflow that diagnoses the crash, identifies a likely project-controlled frame, correlates operands/registers/locals, inspects the source, applies a minimal fix through its normal coding tools, rebuilds, repeats the same reproduction and verifies whether the original crash fingerprint is gone.
+So I built **qwen-dap-mcp**, a local DAP → MCP bridge. The idea is not to give the model a bigger shell. It gives the agent structured debugger evidence such as stack frames, registers, locals, exception state, disassembly, modules and crash dumps.
 
-CodeLLDB is the first built-in debugger profile, and Windows minidump analysis is supported as well.
+Qwen Code can use that evidence in a bounded workflow: diagnose the stop, identify a likely project-controlled frame, correlate the faulting operand with registers/locals, make the source change through its normal coding tools, rebuild, reproduce the same scenario and compare the new result against the original crash fingerprint.
 
-The server is local stdio only and deliberately does not expose an arbitrary shell, arbitrary source-writing primitive or unrestricted memory-write primitive.
+The first fully tested debugger profile is CodeLLDB. Windows minidumps are covered by a real CI smoke test as well.
 
-Install:
+`v0.12.0` also adds a smaller default MCP tool surface for agents and a tiny Crash Lab so the workflow is reproducible.
 
-```bash
-qwen extensions install SLP-DEV1/qwen-dap-mcp
-```
+Everything runs locally over stdio. The MCP itself deliberately does not expose an arbitrary shell or unrestricted memory writes.
 
-Repo:
-https://github.com/SLP-DEV1/qwen-dap-mcp
+Repo: https://github.com/SLP-DEV1/qwen-dap-mcp
 
-Feedback on real native projects and other DAP adapters would be useful.
+npm: `npx -y @slp-dev1/qwen-dap-mcp`
+
+If anyone tries it on a real native project, I would be interested in where the debugger evidence helps and where the agent still gets stuck.
 
 ## Hacker News
 
+**Important:** HN currently limits Show HN submissions from accounts that are not yet established participants. Do not create or warm up an account just to submit this project. If the account is already an ordinary HN participant, the project qualifies as a Show HN because it is open source, runnable, and requires no signup.
+
 ### Title
 
-Show HN: qwen-dap-mcp – Give coding agents a native debugger through DAP and MCP
+Show HN: qwen-dap-mcp – Native debugging for coding agents via DAP and MCP
 
-### Text
+### Submission text / first comment
 
-I built qwen-dap-mcp, a local DAP-to-MCP bridge that exposes native debugger evidence to coding agents. CodeLLDB is the first built-in profile. It supports live debugging, Windows minidumps, stack/register/local/disassembly evidence, runtime provenance, and bounded diagnose/fix/reproduce/verify orchestration for Qwen Code. The MCP stays focused on debugger evidence and does not provide a general shell or unrestricted memory writes.
+I built qwen-dap-mcp because coding agents tend to be much better at editing source than at inspecting what happened inside a native process at the moment it crashed.
+
+It is a local DAP-to-MCP bridge. CodeLLDB is the first first-class debugger profile, with live debugging and Windows minidump support. The MCP exposes bounded stack/register/local/module/disassembly/memory evidence plus higher-level crash diagnosis and verification. Source editing and builds remain outside the debugger bridge.
+
+The design goal is to make crash fixing evidence-driven without turning the MCP into a general execution backdoor. There is no arbitrary shell tool and no unrestricted memory-write primitive.
+
+v0.12 adds a compact agent-facing toolset and a reproducible Crash Lab. The repository can be installed directly as a Qwen Code extension or run as an npm MCP package.
 
 https://github.com/SLP-DEV1/qwen-dap-mcp
 
@@ -110,7 +131,9 @@ https://github.com/SLP-DEV1/qwen-dap-mcp
 
 Qwen Code can now use a real native debugger.
 
-I built `qwen-dap-mcp`: DAP → MCP with CodeLLDB, crash dumps, registers/locals/disassembly, runtime evidence and bounded autonomous diagnose → fix → reproduce → verify loops.
+`qwen-dap-mcp` bridges DAP → MCP with CodeLLDB, live crash evidence, Windows minidumps and bounded diagnose → fix → reproduce → verify workflows.
+
+v0.12 adds a compact agent toolset + reproducible Crash Lab.
 
 https://github.com/SLP-DEV1/qwen-dap-mcp
 
@@ -118,24 +141,32 @@ https://github.com/SLP-DEV1/qwen-dap-mcp
 
 A short terminal recording or GIF should show one complete story rather than a tool list:
 
-1. Start with a tiny C++ target that reliably crashes.
-2. Ask Qwen Code to debug the crash.
-3. Show CodeLLDB starting through the MCP bridge.
-4. Show the selected project frame and suspicious register/local evidence.
-5. Show the source location and minimal proposed fix.
-6. Show the rebuild.
-7. Re-run the exact same reproduction.
-8. End on the verification verdict that the original crash fingerprint is gone.
+1. Build the included `null-pointer` Crash Lab target.
+2. Reproduce the crash once before Qwen touches the source.
+3. Ask Qwen Code to debug and fix the crash using qwen-dap-mcp.
+4. Show CodeLLDB starting through the MCP bridge.
+5. Show the selected project frame and suspicious register/local evidence.
+6. Show the source location and minimal fix.
+7. Show the rebuild.
+8. Re-run the exact same reproduction.
+9. End on the verification verdict that the original crash fingerprint is gone.
 
-Keep the demo under roughly 30–45 seconds and avoid private source paths or unrelated terminal noise.
+Useful commands:
 
-## Distribution checklist
+```bash
+npm run demo:build -- null-pointer
+npm run demo:repro -- null-pointer
+```
 
-- GitHub Releases: already supported by the repository release workflow.
+Keep the recording around 30–45 seconds and avoid private source paths or unrelated terminal noise.
+
+## Distribution status
+
+- GitHub Release: `v0.12.0` live.
 - Qwen Code GitHub install: `qwen extensions install SLP-DEV1/qwen-dap-mcp`.
-- npm target: `@slp-dev1/qwen-dap-mcp`.
-- MCP Registry name: `io.github.SLP-DEV1/qwen-dap-mcp`.
-- MCP registry metadata: `server.json`.
+- npm: `@slp-dev1/qwen-dap-mcp@0.12.0`, with `latest` pointing to `0.12.0`.
+- MCP Registry: `io.github.SLP-DEV1/qwen-dap-mcp` published through GitHub OIDC.
 - npm ownership verification: matching `mcpName` in `package.json`.
+- Glama: pending indexing/claim/build score before the large awesome-list PR.
 
-Do not announce npm or MCP Registry availability as live until the package/registry publication has actually completed.
+Do not post further updates in `QwenLM/qwen-code/issues/10051`; use a new Qwen Code Show and tell discussion instead.
