@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - 'package.json'
+      - '.github/workflows/release-extension.yml'
+      - 'test/release-workflow.test.ts'
 
 permissions:
   contents: write
