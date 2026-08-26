@@ -114,7 +114,7 @@ test('Pointer-Provenance v2 groups synchronization aliases across threads', () =
   assert.deepEqual(new Set(group.aliases), new Set(['lock_ptr', 'mutex']));
 });
 
-test('a runnable project thread suppresses the deadlock-candidate classification', () => {
+test('a runnable project top frame suppresses the deadlock-candidate classification', () => {
   const result = analyzeHang([
     evidence(1, 'waiter', [frame(1, 'pthread_mutex_lock')]),
     evidence(2, 'worker', [frame(2, 'project::event_loop', '/repo/src/main.cpp')]),
@@ -122,6 +122,30 @@ test('a runnable project thread suppresses the deadlock-candidate classification
 
   assert.equal(result.classification, 'mixed-wait');
   assert.deepEqual(result.deadlock.runnableProjectThreadIds, [2]);
+});
+
+test('a deeper project frame does not prove the thread is currently running project code', () => {
+  const thread = evidence(1, 'worker', [
+    frame(1, 'mystery_runtime_wait'),
+    frame(2, 'project::event_loop', '/repo/src/main.cpp'),
+  ]);
+
+  const wait = classifyThreadWait(thread, { projectRoots: ['/repo'] });
+  assert.equal(wait.kind, 'unknown');
+  assert.equal(wait.blocked, false);
+  assert.match(wait.rationale.join(' '), /deeper project frame/i);
+});
+
+test('unclassified threads prevent promotion to deadlock-candidate', () => {
+  const result = analyzeHang([
+    evidence(1, 'a', [frame(1, 'pthread_mutex_lock')]),
+    evidence(2, 'b', [frame(2, '__lll_lock_wait')]),
+    evidence(3, 'unknown', [frame(3, 'mystery_runtime_wait')]),
+  ]);
+
+  assert.equal(result.classification, 'mixed-wait');
+  assert.equal(result.deadlock.cycleProven, false);
+  assert.match(result.deadlock.evidence.join(' '), /remain unclassified/i);
 });
 
 test('all-thread blocking I/O is classified separately from deadlock', () => {
