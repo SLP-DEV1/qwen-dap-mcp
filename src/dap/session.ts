@@ -177,12 +177,8 @@ export class DapSession {
 
   async pause(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop
-      ? this.connection.waitForEvent('stopped', timeoutMs, (event) => {
-          const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
-          return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
-        })
-      : undefined;
+    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.catch(() => undefined);
 
     const response = await this.connection.sendRequest(
       'pause',
@@ -200,14 +196,14 @@ export class DapSession {
 
   async continueExecution(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop
-      ? this.connection.waitForEvent('stopped', timeoutMs, (event) => {
-          const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
-          return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
-        })
-      : undefined;
+    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.catch(() => undefined);
 
-    const response = await this.connection.sendRequest('continue', { threadId } satisfies DebugProtocol.ContinueArguments, this.requestTimeoutMs);
+    const response = await this.connection.sendRequest(
+      'continue',
+      { threadId } satisfies DebugProtocol.ContinueArguments,
+      this.requestTimeoutMs,
+    );
     if (!stopped) return response.body ?? {};
     const event = await stopped;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
@@ -215,14 +211,14 @@ export class DapSession {
 
   async step(action: 'next' | 'stepIn' | 'stepOut', threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
     this.assertConfigured();
-    const stopped = waitForStop
-      ? this.connection.waitForEvent('stopped', timeoutMs, (event) => {
-          const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
-          return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
-        })
-      : undefined;
+    const stopped = waitForStop ? this.waitForThreadStop(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.catch(() => undefined);
 
-    const response = await this.connection.sendRequest(action, { threadId } satisfies DebugProtocol.NextArguments, this.requestTimeoutMs);
+    const response = await this.connection.sendRequest(
+      action,
+      { threadId } satisfies DebugProtocol.NextArguments,
+      this.requestTimeoutMs,
+    );
     if (!stopped) return response.body ?? {};
     const event = await stopped;
     return { response: response.body ?? {}, stopped: event.body ?? {} };
@@ -389,21 +385,24 @@ export class DapSession {
     const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);
     const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs);
     const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
-
-    // launch/attach can remain pending while the initialized event is handled
-    // and breakpoints/configurationDone are sent. Observe rejection immediately
-    // so an earlier setup failure can never leave this parallel request as an
-    // unhandled rejected promise.
-    void requestPromise.catch(() => undefined);
+    const requestFailure = new Promise<never>((_resolve, reject) => {
+      void requestPromise.catch(reject);
+    });
 
     try {
-      await initializedEvent;
+      // DAP launch/attach usually stays pending until configurationDone, but an
+      // adapter is allowed to reject it immediately. Surface that actionable
+      // request error instead of waiting up to 60s for an initialized event
+      // that will never arrive.
+      await Promise.race([initializedEvent, requestFailure]);
 
       const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
       for (const group of breakpoints) {
         breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
       }
-      if (this.capabilities?.supportsConfigurationDoneRequest) await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+      if (this.capabilities?.supportsConfigurationDoneRequest) {
+        await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+      }
 
       const response = await requestPromise;
       this.configured = true;
@@ -413,6 +412,13 @@ export class DapSession {
       this.activeRequest = undefined;
       throw error;
     }
+  }
+
+  private waitForThreadStop(threadId: number, timeoutMs: number): Promise<DebugProtocol.Event> {
+    return this.connection.waitForEvent('stopped', timeoutMs, (event) => {
+      const body = event.body as DebugProtocol.StoppedEvent['body'] | undefined;
+      return body?.allThreadsStopped === true || body?.threadId === undefined || body.threadId === threadId;
+    });
   }
 
   private assertCapability(capability: keyof DebugProtocol.Capabilities, requestName: string): void {
