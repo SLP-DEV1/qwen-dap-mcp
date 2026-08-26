@@ -2,6 +2,40 @@
 
 All notable prototype milestones are documented here.
 
+## Unreleased
+
+## 0.12.1 - 2026-08-26
+
+### Changed / hardened
+
+- Improved the default agent MCP tool metadata with explicit usage guidance, parameter semantics, and behavior annotations.
+- Added Glama build metadata/container validation and community discovery links.
+- Restored canonical Apache-2.0 license text and moved project attribution to `NOTICE` for stricter scanner compatibility.
+- Include `NOTICE` consistently in npm, Qwen extension, and container artifacts.
+- Added a committed dependency lockfile and switched reproducible CI/release/container installs to `npm ci`.
+- Pinned `mcp-publisher` to v1.8.1 and verify the official Linux amd64 SHA256 before execution.
+
+## 0.12.0 - 2026-08-26
+
+### Added
+
+- Added the compact default `agent` MCP toolset while retaining the complete low-level debugger surface through `QWEN_DAP_MCP_TOOLSET=full`.
+- Added reproducible Crash Lab fixtures for null-pointer, divide-by-zero, and bad-call-target failures.
+- Added a benchmark scaffold for source-only, raw DAP, and qwen-dap-mcp comparison runs without fabricated results.
+- Added the 30-45 second demo storyboard and release documentation for the v0.12 agent workflow.
+
+### Distribution / verified
+
+- Published `@slp-dev1/qwen-dap-mcp@0.12.0` to npm and `io.github.SLP-DEV1/qwen-dap-mcp` to the official MCP Registry.
+- GitHub Release, Node 20/22 CI, Qwen package smoke, real Windows CodeLLDB live smoke, and real Windows minidump smoke passed for the release.
+
+## 0.11.4 - 2026-08-26
+
+### Fixed / verified
+
+- Normalized recognized Windows postmortem SEH exception codes so real CodeLLDB minidumps retain crash-like classification.
+- Verified the production dump-open path against a real generated Windows minidump before advancing to v0.12.
+
 ## 0.11.3 - 2026-08-26
 
 ### Fixed

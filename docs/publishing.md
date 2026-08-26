@@ -28,7 +28,7 @@ After signing in to the npm account that owns the scope:
 
 ```bash
 npm login
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm run check
 npm publish --access public
 ```

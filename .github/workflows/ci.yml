@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
-      - run: npm install --ignore-scripts
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - name: Crash Lab smoke
         if: matrix.node-version == 22
@@ -38,7 +38,7 @@ jobs:
             throw new Error(`unexpected npm package name: ${report.name}`);
           }
           const files = new Set(report.files.map((entry) => entry.path));
-          for (const required of ['dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE']) {
+          for (const required of ['dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE', 'NOTICE']) {
             if (!files.has(required)) {
               throw new Error(`npm package is missing ${required}`);
             }

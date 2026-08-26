@@ -27,7 +27,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Build, test and stage extension
         run: npm run check

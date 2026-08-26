@@ -243,7 +243,11 @@ Qwen Code / MCP client
 
 The MCP server has no HTTP listener. The adapter is spawned locally without a shell and communicates over stdio.
 
-## Main MCP tools
+## MCP toolsets
+
+The default `agent` toolset deliberately exposes only the nine high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
+
+### Default `agent` tools
 
 | Tool | Purpose |
 | --- | --- |
@@ -253,26 +257,11 @@ The MCP server has no HTTP listener. The adapter is spawned locally without a sh
 | `debug_run_to_stop` | Launch/attach and race-safely wait for stop/exit/termination |
 | `debug_open_dump` | Open a native core/minidump for read-only postmortem inspection |
 | `debug_snapshot` | Capture a bounded raw runtime snapshot |
-| `debug_codelldb_info` | Discover CodeLLDB |
-| `debug_start_codelldb` | Start and initialize CodeLLDB |
-| `debug_launch_codelldb` | Launch a local native target using CodeLLDB |
-| `debug_attach_codelldb` | Attach to an authorized local process |
-| `debug_start` / `debug_launch` / `debug_attach` | Generic local DAP workflows |
-| `debug_set_source_breakpoints` | Conditional/hit-count/log source breakpoints |
-| `debug_set_function_breakpoints` | Function breakpoints |
-| `debug_set_instruction_breakpoints` | Instruction breakpoints |
-| `debug_data_breakpoint_info` / `debug_set_data_breakpoints` | Live data watchpoints |
-| `debug_set_exception_breakpoints` | Adapter-defined exception filters |
-| `debug_pause` / `debug_continue` / `debug_step` | Live execution control |
-| `debug_threads` / `debug_stack` | Thread and stack inspection |
-| `debug_scopes` / `debug_variables` | Scope/variable inspection |
-| `debug_evaluate` | Narrow debugger expression evaluation |
-| `debug_modules` | Loaded modules/images |
-| `debug_disassemble` | Bounded machine-code inspection |
-| `debug_read_memory` | Bounded memory read |
-| `debug_exception_info` | Structured exception information |
-| `debug_status` / `debug_events` | Session status and recent DAP events |
-| `debug_disconnect` | Disconnect and stop the adapter |
+| `debug_status` | Read current session status |
+| `debug_continue` | Resume an authorized live target to the next stop |
+| `debug_disconnect` | Disconnect and tear down the debugger session |
+
+The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB lifecycle primitives.
 
 ## Verification model
 
@@ -310,7 +299,7 @@ Requirements:
 Run the complete check:
 
 ```bash
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm run check
 ```
 

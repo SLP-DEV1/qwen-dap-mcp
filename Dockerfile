@@ -2,8 +2,8 @@ FROM node:24-bookworm-slim AS build
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --ignore-scripts
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -14,12 +14,12 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev --ignore-scripts \
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-COPY README.md LICENSE qwen-extension.json server.json ./
+COPY README.md LICENSE NOTICE qwen-extension.json server.json ./
 COPY skills ./skills
 
 USER node

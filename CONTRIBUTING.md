@@ -29,7 +29,7 @@ Requirements:
 Install dependencies and run the complete check:
 
 ```bash
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm run check
 ```
 
