@@ -38,6 +38,33 @@ test('configured first-chance exception stops are not treated as proven crashes'
   assert.match(diagnosis.summary, /does not prove/i);
 });
 
+test('postmortem access violations stay crash-likely even when the adapter reports breakMode always', () => {
+  const snapshot = snapshotWithException('always');
+  snapshot.postmortem = true;
+  snapshot.exception = {
+    exceptionId: 'EXCEPTION_ACCESS_VIOLATION',
+    description: 'Access violation reading address 0',
+    breakMode: 'always',
+  };
+
+  const diagnosis = analyzeRuntimeSnapshot(snapshot);
+
+  assert.equal(diagnosis.classification.category, 'access-violation');
+  assert.equal(diagnosis.classification.crashLikely, true);
+  assert.equal(diagnosis.classification.confidence, 'high');
+  assert.notEqual(diagnosis.hypotheses[0]?.kind, 'first-chance-or-configured-exception');
+});
+
+test('postmortem generic configured exceptions remain conservative without a recognized crash family', () => {
+  const snapshot = snapshotWithException('always');
+  snapshot.postmortem = true;
+
+  const diagnosis = analyzeRuntimeSnapshot(snapshot);
+
+  assert.equal(diagnosis.classification.category, 'exception');
+  assert.equal(diagnosis.classification.crashLikely, false);
+});
+
 test('unhandled exception stops remain crash-likely', () => {
   const diagnosis = analyzeRuntimeSnapshot(snapshotWithException('unhandled'));
 

@@ -2,7 +2,14 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapError } from './errors.js';
-import { DapSession, type SourceBreakpointGroup, type StartSessionOptions } from './session.js';
+import { normalizePostmortemSnapshot } from './postmortem-normalization.js';
+import {
+  DapSession,
+  type RuntimeSnapshot,
+  type RuntimeSnapshotOptions,
+  type SourceBreakpointGroup,
+  type StartSessionOptions,
+} from './session.js';
 
 /**
  * DapSession with an explicit frozen postmortem mode and a serialized lifecycle.
@@ -95,6 +102,11 @@ export class GuardedDapSession extends DapSession {
 
   isPostmortem(): boolean {
     return this.postmortem;
+  }
+
+  override async runtimeSnapshot(options: RuntimeSnapshotOptions = {}): Promise<RuntimeSnapshot> {
+    const snapshot = await super.runtimeSnapshot(options);
+    return this.postmortem ? normalizePostmortemSnapshot(snapshot) : snapshot;
   }
 
   override snapshot() {
