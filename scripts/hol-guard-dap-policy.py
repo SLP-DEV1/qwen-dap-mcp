@@ -13,6 +13,7 @@ making qwen-dap-mcp depend on a private package version pin.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import inspect
 import json
@@ -21,10 +22,10 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 MIN_HOL_GUARD_VERSION = (2, 2)
-BRIDGE_POLICY_VERSION = "qwen-dap-mcp-hol-guard-v2"
+BRIDGE_POLICY_VERSION = "qwen-dap-mcp-hol-guard-v3"
 
 
 def _error(message: str) -> int:
@@ -73,6 +74,11 @@ def _string_list(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _optional_string(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _tool_shape(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any], str]:
     kind = payload.get("kind")
     if kind == "adapter-start":
@@ -84,12 +90,21 @@ def _tool_shape(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str,
             "command": command,
             "args": args,
         }
-        cwd = payload.get("cwd")
-        if isinstance(cwd, str) and cwd.strip():
+        cwd = _optional_string(payload, "cwd")
+        if cwd is not None:
             arguments["cwd"] = cwd
-        env_hash = payload.get("envHash")
-        if isinstance(env_hash, str) and env_hash.strip():
+        env_hash = _optional_string(payload, "envHash")
+        if env_hash is not None:
             arguments["environmentHash"] = env_hash
+        resolved_executable = _optional_string(payload, "adapterResolvedCommand")
+        if resolved_executable is not None:
+            arguments["resolvedExecutable"] = resolved_executable
+        executable_hash = _optional_string(payload, "adapterExecutableHash")
+        if executable_hash is not None:
+            arguments["executableHash"] = executable_hash
+        identity_hash = _optional_string(payload, "adapterIdentityHash")
+        if identity_hash is not None:
+            arguments["adapterIdentityHash"] = identity_hash
         schema = {
             "type": "object",
             "properties": {
@@ -97,6 +112,9 @@ def _tool_shape(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str,
                 "args": {"type": "array", "items": {"type": "string"}},
                 "cwd": {"type": "string"},
                 "environmentHash": {"type": "string"},
+                "resolvedExecutable": {"type": "string"},
+                "executableHash": {"type": "string"},
+                "adapterIdentityHash": {"type": "string"},
             },
             "required": ["command"],
         }
@@ -127,36 +145,61 @@ def _tool_shape(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str,
             f"execute_dap_{_safe_token(command)}",
             arguments,
             schema,
-            "Execute a Debug Adapter Protocol action that may run code or change the selected target process.",
+            "Execute a Debug Adapter Protocol action that may run code or change debugger/debuggee state.",
         )
 
     raise ValueError(f"unsupported action kind: {kind!r}")
 
 
+def _fallback_adapter_identity(payload: dict[str, Any]) -> str:
+    material = {
+        "policy": BRIDGE_POLICY_VERSION,
+        "command": _optional_string(payload, "adapterCommand") or _optional_string(payload, "command"),
+        "args": _string_list(payload.get("adapterArgs", [])),
+        "resolved": _optional_string(payload, "adapterResolvedCommand"),
+        "executable_hash": _optional_string(payload, "adapterExecutableHash"),
+        "env_hash": _optional_string(payload, "envHash"),
+        "env_keys": _string_list(payload.get("envKeys", [])),
+    }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def _server_fingerprint(payload: dict[str, Any]) -> dict[str, object]:
     kind = payload.get("kind")
-    adapter_command = payload.get("adapterCommand")
-    if not isinstance(adapter_command, str) or not adapter_command.strip():
+    adapter_command = _optional_string(payload, "adapterCommand")
+    if adapter_command is None:
         candidate = payload.get("command") if kind == "adapter-start" else None
-        adapter_command = candidate if isinstance(candidate, str) else "unknown-adapter"
-    adapter_args = _string_list(payload.get("adapterArgs", payload.get("args", []))) if kind == "adapter-start" else _string_list(payload.get("adapterArgs", []))
-    env_hash = payload.get("envHash")
+        adapter_command = candidate.strip() if isinstance(candidate, str) and candidate.strip() else "unknown-adapter"
+    adapter_args = (
+        _string_list(payload.get("adapterArgs", payload.get("args", [])))
+        if kind == "adapter-start"
+        else _string_list(payload.get("adapterArgs", []))
+    )
+    env_hash = _optional_string(payload, "envHash")
     env_keys = _string_list(payload.get("envKeys", []))
+    resolved_executable = _optional_string(payload, "adapterResolvedCommand") or adapter_command
+    executable_hash = _optional_string(payload, "adapterExecutableHash")
+    adapter_identity_hash = _optional_string(payload, "adapterIdentityHash") or _fallback_adapter_identity(payload)
     return {
         "command": adapter_command,
         "args": adapter_args,
-        "configured_env_values_hash": env_hash if isinstance(env_hash, str) else None,
+        "configured_env_values_hash": env_hash,
         "configured_env_keys": env_keys,
         "transport": "stdio",
-        "resolved_executable": adapter_command,
+        "resolved_executable": resolved_executable,
+        "executable_content_hash": executable_hash,
+        # HOL Guard includes tool_catalog_fingerprint in the approval context.
+        # Reuse that supported capability slot to bind every later protected DAP
+        # request to the exact adapter command/args/binary/environment identity.
         "tool_catalog_state": "complete",
-        "tool_catalog_fingerprint": BRIDGE_POLICY_VERSION,
+        "tool_catalog_fingerprint": f"{BRIDGE_POLICY_VERSION}:{adapter_identity_hash}",
     }
 
 
 def _launch_target(payload: dict[str, Any], tool_name: str, arguments: dict[str, Any]) -> str:
     if payload.get("kind") == "adapter-start":
-        command = str(arguments.get("command") or "unknown-adapter")
+        command = str(arguments.get("resolvedExecutable") or arguments.get("command") or "unknown-adapter")
         args = arguments.get("args")
         suffix = " " + " ".join(args) if isinstance(args, list) and args else ""
         return f"{command}{suffix}"
