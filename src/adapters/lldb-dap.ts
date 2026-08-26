@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 
 import { DapError } from '../dap/errors.js';
 import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
+import { buildRemoteTcpEndpoint, type RemoteTcpEndpoint } from '../remote-endpoint.js';
 
 export type LldbDapDiscoverySource = 'explicit' | 'environment' | 'path' | 'toolchain' | 'xcrun';
 
@@ -34,6 +35,13 @@ export type LldbDapAttachOptions = {
   pid: number;
   program?: string;
   stopOnEntry?: boolean;
+};
+
+export type LldbDapRemoteAttachOptions = {
+  host: string;
+  port: number;
+  program?: string;
+  policyEnv?: NodeJS.ProcessEnv;
 };
 
 export type LldbDapCoreOptions = {
@@ -185,6 +193,26 @@ export function buildLldbDapAttachConfiguration(options: LldbDapAttachOptions): 
     pid: options.pid,
     ...(program ? { program } : {}),
     stopOnEntry: options.stopOnEntry ?? true,
+  };
+}
+
+export function resolveLldbDapRemoteEndpoint(options: LldbDapRemoteAttachOptions): RemoteTcpEndpoint {
+  return buildRemoteTcpEndpoint(options.host, options.port, options.policyEnv);
+}
+
+export function buildLldbDapRemoteAttachConfiguration(options: LldbDapRemoteAttachOptions): Record<string, unknown> {
+  const endpoint = resolveLldbDapRemoteEndpoint(options);
+  const program = options.program
+    ? resolveExistingFile(options.program, 'Program image')
+    : undefined;
+
+  return {
+    type: 'lldb-dap',
+    request: 'attach',
+    name: 'qwen-dap-mcp lldb-dap remote attach',
+    'gdb-remote-host': endpoint.host,
+    'gdb-remote-port': endpoint.port,
+    ...(program ? { program } : {}),
   };
 }
 
