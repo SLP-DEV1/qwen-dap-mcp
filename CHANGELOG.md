@@ -4,6 +4,36 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.15.0 - 2026-08-26
+
+### Added
+
+- Added `debug_this_hang` as the high-level native hang/concurrency workflow across CodeLLDB, upstream `lldb-dap`, and GNU GDB DAP, with bounded observation, process-wide pause attempts, and all-thread evidence capture.
+- Added conservative wait/deadlock classification that distinguishes runnable project work, lock/join waits, condition/event/semaphore/timer waits, I/O waits, global waits, mixed waits, and deadlock candidates without fabricating a lock-owner cycle.
+- Added Pointer-Provenance v2 to correlate equal pointer/memory-reference values across thread and frame boundaries as alias evidence while keeping ownership/causality claims explicitly unproven.
+- Added deterministic native Hang Lab fixtures and release/CI coverage for concurrency triage.
+- Expanded the compact default agent surface to eleven high-level tools with `debug_this_hang` included.
+
+### Fixed / hardened
+
+- Bounded aggregate multi-thread pause time during hang capture and kept evidence collection under separate global deadlines so one unresponsive thread cannot multiply timeout cost across the process.
+- Tightened deadlock heuristics so deeper project frames beneath an unknown/runtime top wait frame do not falsely count as runnable project work, while preserving `projectControlled` metadata for deeper project evidence.
+- Fixed `debug_find_writer` to snapshot the thread that actually triggered a data breakpoint/watchpoint, use a single cancellable resume waiter, and strengthen GDB watchpoint-ID recovery/cleanup without deleting unrelated breakpoints.
+- Prevented stale `stopped` events from contaminating snapshots after `continued`, exit, or termination; cleaned pause/continue/step waiters immediately on request failure; and marked sessions uncertain after timed-out mutating DAP requests until reset.
+- Made generic signal stops conservative, treated explicit fatal signals separately, and prevented unrelated zero-valued registers from creating high-confidence null-dereference claims without operand correlation.
+- Permitted only recognized frozen core/minidump attach shapes in `inspect-only` policy while continuing to deny live launch/PID attach and other mutating control operations.
+- Enforced CodeLLDB >= 1.11.0 for extension auto-discovery and added explicit MCP behavior annotations across the full manual toolset.
+- Hardened HOL Guard's trust root by canonicalizing and hash-binding the selected Python interpreter and bridge script, rechecking both identities before evaluation, launching Python with `-I`, and stripping `PYTHONPATH` / `PYTHONHOME`.
+- Replaced raw deterministic secret digests in HOL Guard policy payloads with per-process keyed HMAC-SHA256 redaction while preserving the existing redacted marker shape and untouched debugger transport values.
+- Fixed the standalone HOL Guard Compatibility workflow so `actions/setup-python@v6` no longer requests a pip dependency cache when the repository intentionally has no Python requirements file.
+
+### Verified
+
+- The v0.15 feature and audit-hardening heads pass Node.js 20/22 `npm run check`, Crash Lab, Hang Lab, scoped npm package verification, and the Glama-compatible container build.
+- Real Linux GDB DAP watchpoint smoke and upstream `lldb-dap` launch/high-level crash smoke pass on the final hardening head.
+- Real HOL Guard bridge smoke passes in PR CI against both the latest published package and the minimum supported `hol-guard==2.2.0`.
+- External HOL Guard integration review found no additional Guard contract blocker after the trust-boundary hardening.
+
 ## 0.14.0 - 2026-08-26
 
 ### Added
@@ -237,7 +267,7 @@ All notable prototype milestones are documented here.
 ### Verified
 
 - Node.js 20 and 22 build/test/package matrix passes on the final feature head and merged `main`.
-- Generated self-contained Qwen extension archive builds and installs successfully.
+- Generated self-contained extension archive builds and installs successfully.
 - Real Windows CodeLLDB live DAP smoke passes against an MSVC-built native target.
 - Real Windows minidump smoke generates a native `.dmp` with PDB symbols, reopens it through real CodeLLDB, and validates the v0.9 project-frame selection, intelligent diagnosis, fix workflow, and verification baseline against the recovered debugger state.
 
