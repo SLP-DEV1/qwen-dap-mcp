@@ -6,12 +6,12 @@ The integration is defense in depth. The built-in `QWEN_DAP_MCP_DAP_POLICY=inspe
 
 ## What is gated
 
-The integration protects the two execution boundaries originally identified by the HOL Guard maintainer:
+The integration protects both execution boundaries:
 
-1. **DAP `evaluate` and `launch` before `writeMessage()`**. `evaluate` can execute code in the debuggee; `launch` can start the wrong target process.
+1. **Mutating or executable DAP requests before sequence allocation and `writeMessage()`**. This includes `evaluate`, `launch`, `attach`, target-control requests (`continue`, stepping, pause, restart, terminate), memory/state writes (`writeMemory`, `setVariable`, `setExpression`), breakpoint mutations, and other DAP requests that can change debugger/debuggee state.
 2. **DAP adapter start before `DapConnection.start()` can spawn the adapter process.** This closes the separate local process-start path that does not flow through `sendRequest()`.
 
-Inspection requests such as `variables`, `stackTrace`, `scopes`, `threads`, `modules`, `readMemory`, and disassembly remain on the read-only fast path and do not invoke HOL Guard.
+Inspection requests such as `variables`, `stackTrace`, `scopes`, `threads`, `modules`, `readMemory`, `source`, `loadedSources`, `exceptionInfo`, and disassembly remain on the read-only fast path and do not invoke HOL Guard.
 
 ## Enable
 
@@ -71,28 +71,45 @@ Approve the request with HOL Guard's Approval Center or the command returned in 
 hol-guard approvals approve <request-id>
 ```
 
-Then retry the same debugger action. HOL Guard can reuse the exact saved approval only when its current authority still matches.
+Then retry the same debugger action. HOL Guard can reuse an approval only when the exact current authority still matches.
 
-## Exact action identity
+## Exact action and adapter identity
 
 Protected approvals are bound to more than the synthetic tool name. The approval context includes:
 
 - effective project/debuggee workspace,
-- DAP command and arguments,
-- adapter command and arguments,
-- a SHA-256 fingerprint of the effective adapter environment,
-- environment variable names (but **not their values**),
+- DAP command and privacy-sanitized arguments,
+- original adapter command identity,
+- adapter arguments through an exact identity hash,
+- canonical resolved adapter executable path,
+- SHA-256 of the adapter executable file,
+- SHA-256 fingerprint of the effective adapter environment,
+- environment variable names,
 - HOL Guard policy context and tool identity.
 
-Raw environment values remain inside the Node process. qwen-dap-mcp sends HOL Guard only a deterministic environment hash and key names, so changing the adapter's effective environment invalidates exact approval reuse without leaking secrets into the bridge payload.
+The adapter identity is folded into HOL Guard's supported `tool_catalog_fingerprint` capability field, so approval reuse for a later protected DAP request is invalidated when the adapter command, arguments, binary, working directory, or effective environment changes.
+
+When HOL Guard is enabled, qwen-dap-mcp resolves the adapter executable before approval and hashes the file. After an allow decision it hashes the file again, fails closed if it changed, and starts the canonical resolved path instead of resolving the original `PATH` command a second time.
 
 For DAP `launch`, a request-level `cwd` takes precedence over the adapter working directory so approvals are tied to the actual debuggee workspace when one is supplied.
 
+## Secret handling
+
+Raw adapter environment values are not included in the HOL Guard payload. qwen-dap-mcp sends a deterministic environment hash plus variable names.
+
+Protected DAP argument objects are sanitized in Node before they reach the Python bridge. Values under environment containers such as `env` / `environment` and common credential fields such as `token`, `apiKey`, `password`, `authorization`, `clientSecret`, and `privateKey` are replaced with deterministic SHA-256 markers. The hash keeps exact-approval invalidation semantics while the original secret remains available only to the real DAP transport.
+
+Sensitive adapter CLI forms such as `--token value`, `--api-key=value`, `TOKEN=value`, and equivalent common secret flags are handled the same way. The adapter itself still receives its original arguments after policy approval.
+
+The HOL Guard Python subprocess also receives a restricted environment instead of inheriting the MCP server's complete `process.env`. It gets the OS/Python variables required to start plus `HOL_GUARD_*` configuration, but unrelated credentials such as cloud/API keys are not forwarded implicitly.
+
 ## Approval reuse and TOCTOU hardening
 
-On HOL Guard versions that expose `fresh_authority_provider`, the bridge supplies one. When HOL Guard claims a saved approval, it can reload the current configuration and rebuild the artifact/hash immediately at the execution boundary. If that authority changed, HOL Guard requires reapproval instead of silently reusing stale permission.
+On HOL Guard versions that expose `fresh_authority_provider`, the bridge supplies one. When HOL Guard claims a saved approval, it reloads current configuration and rebuilds the artifact/hash at the execution boundary. If that authority changed, HOL Guard requires reapproval instead of silently reusing stale permission.
 
 The integration feature-detects this API so HOL Guard 2.2 remains supported while newer releases receive the strongest available post-claim revalidation.
+
+The adapter-start boundary has an additional local TOCTOU check: the approved executable is re-hashed immediately before the spawn-capable path is entered. A mismatch blocks the start.
 
 ## Runtime and failure behavior
 
@@ -102,6 +119,8 @@ When HOL Guard integration is enabled, these conditions fail closed instead of f
 
 - HOL Guard is older than 2.2,
 - HOL Guard cannot be imported from the selected Python environment,
+- the adapter executable cannot be resolved after an allow decision,
+- the approved adapter executable changes before spawn,
 - the bridge process fails or times out,
 - the bridge returns malformed JSON,
 - the approval/receipt pipeline fails,
@@ -111,10 +130,12 @@ When `QWEN_DAP_MCP_HOL_GUARD` is unset or disabled, qwen-dap-mcp behaves as befo
 
 ## Compatibility testing
 
-The repository has two layers of tests:
+The repository has multiple test layers:
 
-1. TypeScript boundary tests use a fake evaluator to prove denied `evaluate`, `launch`, and adapter-start actions produce zero DAP/process side effects and do not consume DAP sequence numbers.
-2. `HOL Guard Compatibility` CI installs real HOL Guard, verifies the imported runtime APIs, and runs the packaged Python bridge against both the minimum supported `hol-guard==2.2.0` and the latest published version. A scheduled weekly run detects upstream compatibility changes even when qwen-dap-mcp itself has not changed.
+1. TypeScript boundary tests prove denied protected requests produce zero DAP/process side effects and do not consume DAP sequence numbers.
+2. Privacy tests prove secret values are absent from HOL Guard actions while the real DAP transport receives the untouched request/adapter arguments.
+3. Adapter-identity tests verify canonical path, binary hash, environment hash, and exact spawn path behavior.
+4. `HOL Guard Compatibility` CI installs real HOL Guard, verifies the imported runtime APIs, and runs the packaged Python bridge against both the minimum supported `hol-guard==2.2.0` and the latest published version. A scheduled weekly run detects upstream compatibility changes even when qwen-dap-mcp itself has not changed.
 
 You can run the real smoke locally after installing HOL Guard:
 
@@ -131,7 +152,7 @@ $env:QWEN_DAP_MCP_DAP_POLICY = "inspect-only"
 $env:QWEN_DAP_MCP_HOL_GUARD = "1"
 ```
 
-`inspect-only` is an authoritative local allowlist and therefore denies `evaluate`, `launch`, attach/control operations, breakpoints, and other requests outside its inspection list before HOL Guard is consulted. HOL Guard still protects the separate adapter-start process boundary.
+`inspect-only` is an authoritative local allowlist and therefore denies executable/mutating operations before HOL Guard is consulted. HOL Guard still protects the separate adapter-start process boundary.
 
 Do not enable `inspect-only` for a workflow that must establish a live launch/attach or another denied DAP control operation; use the standard DAP policy with HOL Guard instead.
 
