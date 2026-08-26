@@ -112,6 +112,9 @@ const BRIDGE_ENV_KEYS = new Set([
   'PYTHONIOENCODING',
   'PYTHONPATH',
   'PYTHONUTF8',
+  'REQUESTS_CA_BUNDLE',
+  'SSL_CERT_DIR',
+  'SSL_CERT_FILE',
   'SYSTEMDRIVE',
   'SYSTEMROOT',
   'TEMP',
@@ -121,6 +124,10 @@ const BRIDGE_ENV_KEYS = new Set([
   'USERPROFILE',
   'VIRTUAL_ENV',
   'WINDIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
 ]);
 
 const SENSITIVE_ARGUMENT_KEYS = new Set([
@@ -145,6 +152,7 @@ const SENSITIVE_ARGUMENT_KEYS = new Set([
 ]);
 
 const ENVIRONMENT_ARGUMENT_KEYS = new Set(['env', 'environment', 'environmentvariables']);
+const CLI_ARGUMENT_KEYS = new Set(['args', 'arguments', 'argv', 'commandlineargs', 'programargs']);
 
 function parseEnabled(value: string | undefined): boolean {
   if (value === undefined || value.trim() === '') return false;
@@ -323,7 +331,7 @@ export function buildHolGuardEnvironmentFingerprint(
   for (const [key, value] of Object.entries(mergeEnvironment(process.env, overrides))) {
     if (typeof value === 'string') merged[key] = value;
   }
-  const entries = Object.entries(merged).sort(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(merged).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   const hash = createHash('sha256');
   for (const [key, value] of entries) {
     hash.update(key, 'utf8');
@@ -367,39 +375,13 @@ function redactedValue(value: unknown): Record<string, unknown> {
   };
 }
 
-function sanitizeValue(value: unknown, keyHint?: string): unknown {
-  const normalizedKey = keyHint === undefined ? undefined : normalizedArgumentKey(keyHint);
-  if (normalizedKey && SENSITIVE_ARGUMENT_KEYS.has(normalizedKey)) return redactedValue(value);
-  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item));
-  if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  const output: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(record)) {
-    const normalized = normalizedArgumentKey(key);
-    if (ENVIRONMENT_ARGUMENT_KEYS.has(normalized) && item && typeof item === 'object' && !Array.isArray(item)) {
-      const environment: Record<string, unknown> = {};
-      for (const [envKey, envItem] of Object.entries(item as Record<string, unknown>)) {
-        environment[envKey] = redactedValue(envItem);
-      }
-      output[key] = environment;
-    } else {
-      output[key] = sanitizeValue(item, key);
-    }
-  }
-  return output;
-}
-
-export function sanitizeDapArgumentsForHolGuard(args: unknown): unknown {
-  return sanitizeValue(args);
+function redactedArgText(value: string): string {
+  const digest = createHash('sha256').update(value, 'utf8').digest('hex');
+  return `<redacted:sha256:${digest}>`;
 }
 
 function adapterFlagName(value: string): string {
   return normalizedArgumentKey(value.replace(/^--?/, '').split('=', 1)[0] ?? '');
-}
-
-function redactedArgText(value: string): string {
-  const digest = createHash('sha256').update(value, 'utf8').digest('hex');
-  return `<redacted:sha256:${digest}>`;
 }
 
 export function sanitizeAdapterArgsForHolGuard(args: readonly string[]): string[] {
@@ -424,6 +406,64 @@ export function sanitizeAdapterArgsForHolGuard(args: readonly string[]): string[
     output.push(arg);
   }
   return output;
+}
+
+function sanitizeEnvironmentContainer(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (typeof item === 'string') {
+        const separator = item.indexOf('=');
+        if (separator > 0) {
+          return `${item.slice(0, separator)}=${redactedArgText(item.slice(separator + 1))}`;
+        }
+        return redactedValue(item);
+      }
+      if (item && typeof item === 'object') {
+        const output: Record<string, unknown> = {};
+        for (const [key, nested] of Object.entries(item as Record<string, unknown>)) {
+          output[key] = normalizedArgumentKey(key) === 'value'
+            ? redactedValue(nested)
+            : sanitizeValue(nested, key);
+        }
+        return output;
+      }
+      return redactedValue(item);
+    });
+  }
+  if (value && typeof value === 'object') {
+    const environment: Record<string, unknown> = {};
+    for (const [envKey, envValue] of Object.entries(value as Record<string, unknown>)) {
+      environment[envKey] = redactedValue(envValue);
+    }
+    return environment;
+  }
+  return redactedValue(value);
+}
+
+function sanitizeValue(value: unknown, keyHint?: string): unknown {
+  const normalizedKey = keyHint === undefined ? undefined : normalizedArgumentKey(keyHint);
+  if (normalizedKey && SENSITIVE_ARGUMENT_KEYS.has(normalizedKey)) return redactedValue(value);
+  if (normalizedKey && ENVIRONMENT_ARGUMENT_KEYS.has(normalizedKey)) return sanitizeEnvironmentContainer(value);
+  if (
+    normalizedKey
+    && CLI_ARGUMENT_KEYS.has(normalizedKey)
+    && Array.isArray(value)
+    && value.every((item) => typeof item === 'string')
+  ) {
+    return sanitizeAdapterArgsForHolGuard(value as string[]);
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item));
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    output[key] = sanitizeValue(item, key);
+  }
+  return output;
+}
+
+export function sanitizeDapArgumentsForHolGuard(args: unknown): unknown {
+  return sanitizeValue(args);
 }
 
 function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
