@@ -11,6 +11,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export type DapSessionRegistryEntry = {
   sessionId: string;
   isDefault: boolean;
+  activeRequests: number;
   snapshot: ReturnType<GuardedDapSession['snapshot']>;
 };
 
@@ -19,6 +20,14 @@ export type DapSessionRegistryOptions = {
   maxSessions?: number;
   sessionFactory?: () => GuardedDapSession;
 };
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null
+    && (typeof value === 'object' || typeof value === 'function')
+    && typeof (value as { then?: unknown }).then === 'function'
+  );
+}
 
 /**
  * Owns independent guarded DAP sessions and binds one session ID to the
@@ -33,6 +42,7 @@ export class DapSessionRegistry {
   readonly maxSessions: number;
 
   private readonly sessions = new Map<string, GuardedDapSession>();
+  private readonly activeRequestCounts = new Map<string, number>();
   private readonly sessionContext = new AsyncLocalStorage<string>();
   private readonly sessionFactory: () => GuardedDapSession;
   private generatedSessionCounter = 0;
@@ -88,22 +98,52 @@ export class DapSessionRegistry {
     return this.sessionContext.getStore() ?? this.defaultSessionId;
   }
 
+  activeRequests(sessionId: string): number {
+    this.get(sessionId);
+    return this.activeRequestCounts.get(sessionId) ?? 0;
+  }
+
   runWithSession<T>(sessionId: string | undefined, action: () => T): T {
     const resolvedId = sessionId ?? this.defaultSessionId;
     this.get(resolvedId);
-    return this.sessionContext.run(resolvedId, action);
+    this.incrementActiveRequests(resolvedId);
+
+    let result: T;
+    try {
+      result = this.sessionContext.run(resolvedId, action);
+    } catch (error) {
+      this.decrementActiveRequests(resolvedId);
+      throw error;
+    }
+
+    if (isPromiseLike(result)) {
+      return Promise.resolve(result).finally(() => {
+        this.decrementActiveRequests(resolvedId);
+      }) as T;
+    }
+
+    this.decrementActiveRequests(resolvedId);
+    return result;
   }
 
   list(): DapSessionRegistryEntry[] {
     return [...this.sessions.entries()].map(([sessionId, session]) => ({
       sessionId,
       isDefault: sessionId === this.defaultSessionId,
+      activeRequests: this.activeRequestCounts.get(sessionId) ?? 0,
       snapshot: session.snapshot(),
     }));
   }
 
   async close(sessionId: string, terminateDebuggee = true): Promise<{ sessionId: string; removed: boolean }> {
     const session = this.get(sessionId);
+    const activeRequests = this.activeRequestCounts.get(sessionId) ?? 0;
+    if (activeRequests > 0) {
+      throw new DapError(
+        `Cannot close DAP session '${sessionId}' while ${activeRequests} routed debug request${activeRequests === 1 ? ' is' : 's are'} still active. Wait for the request to finish first.`,
+      );
+    }
+
     await session.disconnect(terminateDebuggee);
 
     if (sessionId === this.defaultSessionId) {
@@ -111,7 +151,27 @@ export class DapSessionRegistry {
     }
 
     this.sessions.delete(sessionId);
+    this.activeRequestCounts.delete(sessionId);
     return { sessionId, removed: true };
+  }
+
+  /**
+   * Best-effort server-shutdown cleanup. This intentionally bypasses the
+   * user-facing busy-session close guard because shutdown must not leave
+   * adapter processes owned by this MCP server behind. By default the bridge
+   * detaches/stops adapters without asking debuggers to terminate debuggees.
+   */
+  async closeAll(terminateDebuggees = false): Promise<void> {
+    const entries = [...this.sessions.entries()];
+    await Promise.allSettled(
+      entries.map(async ([sessionId, session]) => {
+        await session.disconnect(terminateDebuggees);
+        if (sessionId !== this.defaultSessionId) {
+          this.sessions.delete(sessionId);
+          this.activeRequestCounts.delete(sessionId);
+        }
+      }),
+    );
   }
 
   /**
@@ -128,8 +188,24 @@ export class DapSessionRegistry {
         const value = Reflect.get(session, property, session) as unknown;
         return typeof value === 'function' ? value.bind(session) : value;
       },
-      set: (_target, property, value) => Reflect.set(this.get(), property, value, this.get()),
+      set: (_target, property, value) => {
+        const session = this.get();
+        return Reflect.set(session, property, value, session);
+      },
     });
+  }
+
+  private incrementActiveRequests(sessionId: string): void {
+    this.activeRequestCounts.set(sessionId, (this.activeRequestCounts.get(sessionId) ?? 0) + 1);
+  }
+
+  private decrementActiveRequests(sessionId: string): void {
+    const current = this.activeRequestCounts.get(sessionId) ?? 0;
+    if (current <= 1) {
+      this.activeRequestCounts.delete(sessionId);
+      return;
+    }
+    this.activeRequestCounts.set(sessionId, current - 1);
   }
 
   private nextGeneratedSessionId(): string {
