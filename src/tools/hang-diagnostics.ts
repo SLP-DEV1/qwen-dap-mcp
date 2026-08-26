@@ -33,10 +33,13 @@ import { logger } from '../logger.js';
 import { debugThisHangOutputSchema, structuredResult } from './agent-output.js';
 import { LOCAL_TARGET_EXECUTION_ANNOTATIONS } from './tool-annotations.js';
 
-const jsonRecord = z.record(z.string(), z.unknown()).describe('Adapter-specific launch or attach configuration used only for mode=live.');
+const jsonRecord = z.record(z.string(), z.unknown())
+  .describe('Adapter-specific launch or attach configuration used only for mode=live.');
 const analysisSchema = z.object({
-  projectRoots: z.array(z.string().min(1)).max(20).optional().describe('Optional local source roots used to recognize project-controlled frames across all captured threads.'),
-  projectModules: z.array(z.string().min(1)).max(50).optional().describe('Optional executable/library names treated as project-controlled modules during all-thread triage.'),
+  projectRoots: z.array(z.string().min(1)).max(20).optional()
+    .describe('Optional local source roots used to recognize project-controlled frames across all captured threads.'),
+  projectModules: z.array(z.string().min(1)).max(50).optional()
+    .describe('Optional executable/library names treated as project-controlled modules during all-thread triage.'),
 }).describe('Project-code hints used when ranking runnable versus blocked threads.');
 
 export type HangCaptureOptions = {
@@ -51,6 +54,7 @@ type ObservationOutcome =
   | { kind: 'event'; event: DebugProtocol.Event };
 
 type ExecutionState = 'stopped' | 'running' | 'exited' | 'terminated' | 'unknown';
+type GuardedSnapshot = SessionSnapshot & { postmortem?: boolean };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -60,7 +64,7 @@ function errorResult(error: unknown) {
   return { content: [{ type: 'text' as const, text: errorMessage(error) }], isError: true };
 }
 
-function recentExecutionState(snapshot: SessionSnapshot & { postmortem?: boolean }): ExecutionState {
+function recentExecutionState(snapshot: GuardedSnapshot): ExecutionState {
   for (const record of [...snapshot.recentEvents].reverse()) {
     const event = (record as { event?: unknown }).event;
     if (event === 'stopped') return 'stopped';
@@ -69,6 +73,19 @@ function recentExecutionState(snapshot: SessionSnapshot & { postmortem?: boolean
     if (event === 'terminated') return 'terminated';
   }
   return 'unknown';
+}
+
+function latestStoppedBody(snapshot: GuardedSnapshot): DebugProtocol.StoppedEvent['body'] | undefined {
+  for (const record of [...snapshot.recentEvents].reverse()) {
+    const candidate = record as { event?: unknown; body?: unknown };
+    if (candidate.event === 'stopped') {
+      return candidate.body as DebugProtocol.StoppedEvent['body'] | undefined;
+    }
+    if (candidate.event === 'continued' || candidate.event === 'exited' || candidate.event === 'terminated') {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function createObservationWait(session: GuardedDapSession, observeMs: number) {
@@ -122,12 +139,42 @@ function createObservationWait(session: GuardedDapSession, observeMs: number) {
   };
 }
 
+async function pauseThreadsBestEffort(
+  session: GuardedDapSession,
+  threads: DebugProtocol.Thread[],
+  excludedThreadId: number | undefined,
+  pauseTimeoutMs: number,
+) {
+  const pauseErrors: string[] = [];
+  let allThreadsStopped = false;
+  const requestedThreadIds: number[] = [];
+
+  for (const thread of threads) {
+    if (thread.id === excludedThreadId) continue;
+    try {
+      requestedThreadIds.push(thread.id);
+      const paused = await session.pause(thread.id, true, pauseTimeoutMs) as {
+        stopped?: DebugProtocol.StoppedEvent['body'];
+      };
+      if (paused.stopped?.allThreadsStopped === true) {
+        allThreadsStopped = true;
+        break;
+      }
+    } catch (error) {
+      pauseErrors.push(`thread ${thread.id}: ${errorMessage(error)}`);
+    }
+  }
+
+  return { allThreadsStopped, pauseErrors, requestedThreadIds };
+}
+
 async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: number) {
   if (session.isPostmortem()) {
     return {
       requested: false,
       allThreadsStopped: true,
       pauseErrors: [] as string[],
+      requestedThreadIds: [] as number[],
       reason: 'postmortem sessions are already frozen',
     };
   }
@@ -137,43 +184,73 @@ async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: n
   if (state === 'exited' || state === 'terminated') {
     throw new DapError(`Cannot capture hang evidence because the debuggee has already ${state}.`);
   }
+
+  const threads = await session.threads();
+  if (threads.length === 0) {
+    throw new DapError('The debugger returned no threads to pause for hang capture.');
+  }
+
   if (state === 'stopped') {
+    const stopped = latestStoppedBody(before);
+    if (stopped?.allThreadsStopped === true) {
+      return {
+        requested: false,
+        allThreadsStopped: true,
+        pauseErrors: [] as string[],
+        requestedThreadIds: [] as number[],
+        reason: 'the latest stopped event explicitly reports allThreadsStopped=true',
+      };
+    }
+
+    const remaining = await pauseThreadsBestEffort(
+      session,
+      threads,
+      stopped?.threadId,
+      pauseTimeoutMs,
+    );
     return {
-      requested: false,
-      allThreadsStopped: true,
-      pauseErrors: [] as string[],
-      reason: 'the most recent execution event is already stopped',
+      requested: remaining.requestedThreadIds.length > 0,
+      allThreadsStopped: remaining.allThreadsStopped,
+      pauseErrors: remaining.pauseErrors,
+      requestedThreadIds: remaining.requestedThreadIds,
+      ...(stopped?.threadId === undefined ? {} : { alreadyStoppedThreadId: stopped.threadId }),
+      reason: remaining.allThreadsStopped
+        ? 'an additional pause reported allThreadsStopped=true'
+        : 'the session was stopped but not globally stopped; remaining threads received bounded best-effort pause requests',
     };
   }
 
-  const threads = await session.threads();
   const anchor = threads[0];
-  if (!anchor) throw new DapError('The debugger returned no threads to pause for hang capture.');
-
+  if (!anchor) throw new DapError('The debugger returned no anchor thread to pause.');
   const firstPause = await session.pause(anchor.id, true, pauseTimeoutMs) as {
     stopped?: DebugProtocol.StoppedEvent['body'];
   };
-  const allThreadsStopped = firstPause.stopped?.allThreadsStopped === true;
-  const pauseErrors: string[] = [];
-
-  if (!allThreadsStopped) {
-    for (const thread of threads.slice(1)) {
-      try {
-        await session.pause(thread.id, false, pauseTimeoutMs);
-      } catch (error) {
-        pauseErrors.push(`thread ${thread.id}: ${errorMessage(error)}`);
-      }
-    }
+  if (firstPause.stopped?.allThreadsStopped === true) {
+    return {
+      requested: true,
+      anchorThreadId: anchor.id,
+      allThreadsStopped: true,
+      pauseErrors: [] as string[],
+      requestedThreadIds: [anchor.id],
+      reason: 'the anchor pause reported allThreadsStopped=true',
+    };
   }
 
+  const remaining = await pauseThreadsBestEffort(
+    session,
+    threads,
+    firstPause.stopped?.threadId ?? anchor.id,
+    pauseTimeoutMs,
+  );
   return {
     requested: true,
     anchorThreadId: anchor.id,
-    allThreadsStopped,
-    pauseErrors,
-    reason: allThreadsStopped
-      ? 'the anchor pause reported allThreadsStopped=true'
-      : 'the adapter did not report allThreadsStopped=true; remaining threads received best-effort pause requests',
+    allThreadsStopped: remaining.allThreadsStopped,
+    pauseErrors: remaining.pauseErrors,
+    requestedThreadIds: [anchor.id, ...remaining.requestedThreadIds],
+    reason: remaining.allThreadsStopped
+      ? 'a follow-up pause reported allThreadsStopped=true'
+      : 'the adapter never confirmed allThreadsStopped=true; all other threads received bounded best-effort pause requests',
   };
 }
 
@@ -204,7 +281,9 @@ async function collectFrameVariables(
   }
 
   const variables: DebugProtocol.Variable[] = [];
-  for (const scope of scopes.filter((item) => /locals?|arguments?|parameters?/i.test(item.name)).slice(0, 3)) {
+  for (const scope of scopes
+    .filter((item) => /locals?|arguments?|parameters?/i.test(item.name))
+    .slice(0, 3)) {
     if (scope.variablesReference <= 0) continue;
     try {
       variables.push(...await session.variables(scope.variablesReference, 0, maxVariablesPerFrame));
@@ -242,9 +321,12 @@ export async function captureAllThreadHangEvidence(
       collectionErrors.push(`stackTrace: ${errorMessage(error)}`);
     }
 
-    const assessments = assessProjectFrames(stack, analysisOptions);
-    const projectIndex = assessments.find((item) => item.projectControlled)?.index;
-    const frameIndexes = [0, ...(projectIndex === undefined || projectIndex === 0 ? [] : [projectIndex])]
+    const projectIndex = assessProjectFrames(stack, analysisOptions)
+      .find((item) => item.projectControlled)?.index;
+    const frameIndexes = [
+      0,
+      ...(projectIndex === undefined || projectIndex === 0 ? [] : [projectIndex]),
+    ]
       .filter((value, index, values) => values.indexOf(value) === index)
       .slice(0, framesWithVariables);
 
@@ -253,7 +335,12 @@ export async function captureAllThreadHangEvidence(
       const frame = stack[frameIndex];
       if (!frame) continue;
       try {
-        variableFrames.push(await collectFrameVariables(session, frame, frameIndex, maxVariablesPerFrame));
+        variableFrames.push(await collectFrameVariables(
+          session,
+          frame,
+          frameIndex,
+          maxVariablesPerFrame,
+        ));
       } catch (error) {
         collectionErrors.push(`frame ${frameIndex} variables: ${errorMessage(error)}`);
       }
@@ -282,12 +369,17 @@ async function captureAndAnalyze(
   };
 }
 
-async function resetOwnedSessionAfterFailure(session: GuardedDapSession, error: unknown): Promise<never> {
+async function resetOwnedSessionAfterFailure(
+  session: GuardedDapSession,
+  error: unknown,
+): Promise<never> {
   try {
     await session.reset();
   } catch (cleanupError) {
     logger.warn('Failed to reset owned debugger session after hang workflow failure', {
-      cleanupError: cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+      cleanupError: cleanupError instanceof Error
+        ? cleanupError
+        : new Error(String(cleanupError)),
     });
   }
   throw error;
@@ -331,6 +423,7 @@ async function observeLaunchedOrAttachedTarget(
   }
 
   if (outcome.kind === 'event' && outcome.event.event === 'stopped') {
+    const pause = await pauseForHangCapture(session, pauseTimeoutMs);
     const captured = await captureAndAnalyze(session, captureOptions, analysisOptions);
     return {
       requestResult,
@@ -339,7 +432,8 @@ async function observeLaunchedOrAttachedTarget(
         suspectedHang: false,
         trigger: 'debugger-stop-before-timeout',
         event: outcome.event.body ?? {},
-        note: 'The debugger stopped before the observation window expired, so this capture is useful for thread triage but does not by itself establish a hang.',
+        pause,
+        note: 'The debugger stopped before the observation window expired, so this capture is useful for all-thread triage but does not by itself establish a hang.',
       },
       ...captured,
       status: session.snapshot(),
@@ -362,7 +456,24 @@ async function observeLaunchedOrAttachedTarget(
   };
 }
 
-export function registerHangDiagnosticTool(server: McpServer, session: GuardedDapSession): void {
+function validateOwnedRequest(
+  mode: 'codelldb' | 'lldb-dap' | 'gdb',
+  request: 'launch' | 'attach',
+  program: string | undefined,
+  pid: number | undefined,
+): void {
+  if (request === 'launch' && !program) {
+    throw new DapError(`debug_this_hang mode='${mode}' request='launch' requires program.`);
+  }
+  if (request === 'attach' && pid === undefined) {
+    throw new DapError(`debug_this_hang mode='${mode}' request='attach' requires pid.`);
+  }
+}
+
+export function registerHangDiagnosticTool(
+  server: McpServer,
+  session: GuardedDapSession,
+): void {
   server.registerTool(
     'debug_this_hang',
     {
@@ -372,23 +483,40 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       outputSchema: debugThisHangOutputSchema,
       inputSchema: z.object({
-        mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'gdb']).default('current').describe('current triages the configured session; live uses an already initialized generic DAP adapter; codelldb/lldb-dap/gdb discover and start that adapter before launch/attach.'),
-        request: z.enum(['launch', 'attach']).default('launch').describe('For live or adapter-owned modes, launch starts a program and attach connects to an existing authorized process.'),
-        configuration: jsonRecord.optional().describe('Required only for mode=live: adapter-specific DAP launch/attach configuration.'),
-        program: z.string().min(1).optional().describe('Required for codelldb/lldb-dap/gdb launch; optional executable image hint for adapter-specific attach.'),
-        pid: z.number().int().positive().optional().describe('Required for codelldb/lldb-dap/gdb attach modes; ignored for launch and generic live configuration.'),
-        args: z.array(z.string()).optional().describe('Command-line arguments for codelldb/lldb-dap/gdb launch modes.'),
-        cwd: z.string().optional().describe('Working directory for adapter-owned launches and a project-root hint for hang triage.'),
-        env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to adapter-owned launched programs.'),
-        adapterPath: z.string().min(1).optional().describe('Optional explicit CodeLLDB, lldb-dap, or GDB executable path; omit to use adapter discovery.'),
-        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request timeout for starting and configuring an adapter-owned DAP session.'),
-        observeMs: z.number().int().min(250).max(120000).default(5000).describe('Bounded interval after launch/attach during which a normal stop or process exit prevents automatic hang-timeout classification.'),
-        pauseTimeoutMs: z.number().int().min(1000).max(60000).default(10000).describe('Maximum time to wait for the anchor thread pause used to freeze a suspected live hang.'),
-        maxThreads: z.number().int().positive().max(128).default(32).describe('Maximum threads to collect for bounded all-thread triage.'),
-        stackLevels: z.number().int().positive().max(100).default(24).describe('Maximum stack frames collected per thread.'),
-        maxVariablesPerFrame: z.number().int().positive().max(200).default(50).describe('Maximum local/argument variables collected per selected frame scope for Pointer-Provenance v2.'),
-        framesWithVariables: z.number().int().positive().max(4).default(2).describe('Maximum frames per thread whose locals/arguments are collected, prioritizing the top frame and first project-controlled frame.'),
-        analysis: analysisSchema.optional().describe('Optional project roots/modules used to recognize project-controlled frames across all threads.'),
+        mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'gdb']).default('current')
+          .describe('current triages the configured session; live uses an already initialized generic DAP adapter; codelldb/lldb-dap/gdb discover and start that adapter before launch/attach.'),
+        request: z.enum(['launch', 'attach']).default('launch')
+          .describe('For live or adapter-owned modes, launch starts a program and attach connects to an existing authorized process.'),
+        configuration: jsonRecord.optional()
+          .describe('Required only for mode=live: adapter-specific DAP launch/attach configuration.'),
+        program: z.string().min(1).optional()
+          .describe('Required for codelldb/lldb-dap/gdb launch; optional executable image hint for adapter-specific attach.'),
+        pid: z.number().int().positive().optional()
+          .describe('Required for codelldb/lldb-dap/gdb attach modes; ignored for launch and generic live configuration.'),
+        args: z.array(z.string()).optional()
+          .describe('Command-line arguments for codelldb/lldb-dap/gdb launch modes.'),
+        cwd: z.string().optional()
+          .describe('Working directory for adapter-owned launches and a project-root hint for hang triage.'),
+        env: z.record(z.string(), z.string()).optional()
+          .describe('Environment variables supplied to adapter-owned launched programs.'),
+        adapterPath: z.string().min(1).optional()
+          .describe('Optional explicit CodeLLDB, lldb-dap, or GDB executable path; omit to use adapter discovery.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000)
+          .describe('Per-request timeout for starting and configuring an adapter-owned DAP session.'),
+        observeMs: z.number().int().min(250).max(120000).default(5000)
+          .describe('Bounded interval after launch/attach during which a normal stop or process exit prevents automatic hang-timeout classification.'),
+        pauseTimeoutMs: z.number().int().min(1000).max(60000).default(10000)
+          .describe('Maximum time to wait for each bounded pause used to freeze a suspected live hang.'),
+        maxThreads: z.number().int().positive().max(128).default(32)
+          .describe('Maximum threads to collect for bounded all-thread triage.'),
+        stackLevels: z.number().int().positive().max(100).default(24)
+          .describe('Maximum stack frames collected per thread.'),
+        maxVariablesPerFrame: z.number().int().positive().max(200).default(50)
+          .describe('Maximum local/argument variables collected per selected frame scope for Pointer-Provenance v2.'),
+        framesWithVariables: z.number().int().positive().max(4).default(2)
+          .describe('Maximum frames per thread whose locals/arguments are collected, prioritizing the top frame and first project-controlled frame.'),
+        analysis: analysisSchema.optional()
+          .describe('Optional project roots/modules used to recognize project-controlled frames across all threads.'),
       }),
     },
     async ({
@@ -432,12 +560,14 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
               mode,
               observation: {
                 suspectedHang: true,
-                trigger: session.isPostmortem() ? 'postmortem-current' : 'current-session-capture',
+                trigger: session.isPostmortem()
+                  ? 'postmortem-current'
+                  : 'current-session-capture',
                 priorExecutionState: recentExecutionState(before),
                 pause,
                 note: session.isPostmortem()
                   ? 'A frozen dump/core can show a state consistent with a hang but cannot prove that the original process lacked forward progress.'
-                  : 'current mode treats the caller-provided session as the suspected hang and pauses it only when it was not already stopped.',
+                  : 'current mode treats the caller-provided session as the suspected hang and obtains the strongest bounded all-thread stop the adapter can confirm.',
               },
               ...captured,
               status: session.snapshot(),
@@ -445,7 +575,9 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
           }
 
           if (mode === 'live') {
-            if (!configuration) throw new DapError("debug_this_hang mode='live' requires configuration.");
+            if (!configuration) {
+              throw new DapError("debug_this_hang mode='live' requires configuration.");
+            }
             return {
               mode,
               ...(await observeLaunchedOrAttachedTarget(
@@ -460,17 +592,20 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
             };
           }
 
+          validateOwnedRequest(mode, request, program, pid);
           let adapterStarted = false;
           try {
             if (mode === 'gdb') {
-              const adapter = discoverGdbDap({ ...(adapterPath ? { explicitPath: adapterPath } : {}) });
+              const adapter = discoverGdbDap({
+                ...(adapterPath ? { explicitPath: adapterPath } : {}),
+              });
               const requestConfiguration = request === 'attach'
                 ? buildGdbDapPidAttachConfiguration({
-                    pid: pid ?? 0,
+                    pid: pid as number,
                     ...(program ? { program } : {}),
                   })
                 : buildGdbDapLaunchConfiguration({
-                    program: program ?? '',
+                    program: program as string,
                     ...(args ? { args } : {}),
                     ...(cwd ? { cwd } : {}),
                     ...(env ? { env } : {}),
@@ -501,15 +636,17 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
             }
 
             if (mode === 'lldb-dap') {
-              const adapter = discoverLldbDap({ ...(adapterPath ? { explicitPath: adapterPath } : {}) });
+              const adapter = discoverLldbDap({
+                ...(adapterPath ? { explicitPath: adapterPath } : {}),
+              });
               const requestConfiguration = request === 'attach'
                 ? buildLldbDapAttachConfiguration({
-                    pid: pid ?? 0,
+                    pid: pid as number,
                     ...(program ? { program } : {}),
                     stopOnEntry: false,
                   })
                 : buildLldbDapLaunchConfiguration({
-                    program: program ?? '',
+                    program: program as string,
                     ...(args ? { args } : {}),
                     ...(cwd ? { cwd } : {}),
                     ...(env ? { env } : {}),
@@ -538,15 +675,17 @@ export function registerHangDiagnosticTool(server: McpServer, session: GuardedDa
               };
             }
 
-            const adapter = discoverCodeLldb({ ...(adapterPath ? { explicitPath: adapterPath } : {}) });
+            const adapter = discoverCodeLldb({
+              ...(adapterPath ? { explicitPath: adapterPath } : {}),
+            });
             const requestConfiguration = request === 'attach'
               ? buildCodeLldbAttachConfiguration({
-                  pid: pid ?? 0,
+                  pid: pid as number,
                   ...(program ? { program } : {}),
                   stopOnEntry: false,
                 })
               : buildCodeLldbLaunchConfiguration({
-                  program: program ?? '',
+                  program: program as string,
                   ...(args ? { args } : {}),
                   ...(cwd ? { cwd } : {}),
                   ...(env ? { env } : {}),
