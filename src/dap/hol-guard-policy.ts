@@ -5,6 +5,7 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 
 import { DapError } from './errors.js';
+import { mergeEnvironment } from './environment.js';
 import {
   createDapRequestPolicy,
   resolveDapPolicyMode,
@@ -319,10 +320,9 @@ export function buildHolGuardEnvironmentFingerprint(
   overrides: Record<string, string> | undefined,
 ): Pick<HolGuardExecutionContext, 'envKeys' | 'envHash'> {
   const merged: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(mergeEnvironment(process.env, overrides))) {
     if (typeof value === 'string') merged[key] = value;
   }
-  Object.assign(merged, overrides ?? {});
   const entries = Object.entries(merged).sort(([left], [right]) => left.localeCompare(right));
   const hash = createHash('sha256');
   for (const [key, value] of entries) {
@@ -583,7 +583,7 @@ export async function requireHolGuardAdapterStart(
   };
   if (!evaluator.enabled) return baseContext;
 
-  const effectiveEnv: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}) };
+  const effectiveEnv = mergeEnvironment(process.env, options.env);
   const resolvedCommand = resolveAdapterExecutable(options.command, options.cwd, effectiveEnv);
   const executableHash = resolvedCommand ? hashExecutable(resolvedCommand) : undefined;
   const context: HolGuardExecutionContext = {
