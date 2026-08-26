@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 
 import type { DapSessionRegistry } from '../dap/session-registry.js';
-import { structuredResult } from './agent-output.js';
+import { debugSessionsOutputSchema, structuredResult } from './agent-output.js';
 import { SESSION_TEARDOWN_ANNOTATIONS } from './tool-annotations.js';
 
 const sessionIdSchema = z
@@ -10,21 +10,6 @@ const sessionIdSchema = z
   .min(1)
   .max(64)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
-
-const sessionEntrySchema = z.object({
-  sessionId: z.string(),
-  isDefault: z.boolean(),
-  snapshot: z.object({}).catchall(z.unknown()),
-});
-
-const debugSessionsOutputSchema = z.object({
-  action: z.enum(['list', 'create', 'close']),
-  defaultSessionId: z.string(),
-  maxSessions: z.number().int().positive(),
-  sessionId: z.string().optional(),
-  removed: z.boolean().optional(),
-  sessions: z.array(sessionEntrySchema),
-}).catchall(z.unknown());
 
 function errorResult(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -37,11 +22,11 @@ export function registerSessionTools(server: McpServer, registry: DapSessionRegi
     {
       title: 'Manage Debug Sessions',
       description:
-        'List, create, or close isolated DAP sessions. Existing debug tools accept optional sessionId; omit it to keep using the backward-compatible default session.',
+        'Use this tool to list, create, or close isolated DAP sessions before routing other debugger tools with sessionId. Omit sessionId on normal debug tools only when the backward-compatible default session is intended; do not use a global session selector for concurrent work.',
       inputSchema: z.object({
-        action: z.enum(['list', 'create', 'close']).default('list'),
-        sessionId: sessionIdSchema.optional().describe('Requested ID for create, or target ID for close.'),
-        terminateDebuggee: z.boolean().default(true).describe('For close: request debugger termination of the live target before removing the session.'),
+        action: z.enum(['list', 'create', 'close']).default('list').describe('Management action: list current sessions, create a new isolated session, or close one session.'),
+        sessionId: sessionIdSchema.optional().describe('Requested ID for create, or target ID for close. Omit on create to generate a bounded session-N identifier.'),
+        terminateDebuggee: z.boolean().default(true).describe('For close only: request debugger termination of the live target before resetting/removing the session.'),
       }),
       outputSchema: debugSessionsOutputSchema,
       annotations: SESSION_TEARDOWN_ANNOTATIONS,
