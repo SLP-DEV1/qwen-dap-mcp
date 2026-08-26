@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapError } from './errors.js';
+import { normalizePostmortemSnapshot } from './postmortem-normalization.js';
 import {
   DapSession,
   type RuntimeSnapshot,
@@ -105,7 +106,7 @@ export class GuardedDapSession extends DapSession {
 
   override async runtimeSnapshot(options: RuntimeSnapshotOptions = {}): Promise<RuntimeSnapshot> {
     const snapshot = await super.runtimeSnapshot(options);
-    return this.postmortem ? { ...snapshot, postmortem: true } : snapshot;
+    return this.postmortem ? normalizePostmortemSnapshot(snapshot) : snapshot;
   }
 
   override snapshot() {
