@@ -39,7 +39,7 @@ function validateSkill(content: string): void {
     assert.ok(content.includes(tool), `Skill must reference ${tool}`);
   }
 
-  const requiredV09Concepts = [
+  const requiredDiagnosisConcepts = [
     'projectFrame',
     'frameSelection',
     'operandAnalysis',
@@ -50,10 +50,27 @@ function validateSkill(content: string): void {
     'inconclusive',
   ];
 
-  for (const concept of requiredV09Concepts) {
+  for (const concept of requiredDiagnosisConcepts) {
     assert.ok(content.includes(concept), `Skill must explain ${concept}`);
   }
 
+  const requiredAutonomousConcepts = [
+    'workflow.autonomousAgent',
+    'rootFingerprint',
+    'activeFingerprint',
+    'nextActions',
+    'agentState',
+    'needs-reproduction',
+    'budget-exhausted',
+    'broaden-diagnosis',
+  ];
+
+  for (const concept of requiredAutonomousConcepts) {
+    assert.ok(content.includes(concept), `Skill must explain autonomous concept ${concept}`);
+  }
+
+  assert.match(content, /workflow\s*=\s*\{[\s\S]*?stage\s*:\s*["']autonomous["']/i);
+  assert.match(content, /workflow\s*=\s*\{[\s\S]*?stage\s*:\s*["']autonomous["'][\s\S]*?agentState\s*:/i);
   assert.match(content, /workflow\s*=\s*\{[\s\S]*?stage\s*:\s*["']verify["'][\s\S]*?baseline\s*:/i);
   assert.match(content, /authorized local targets/i);
   assert.match(content, /confidence/i);
