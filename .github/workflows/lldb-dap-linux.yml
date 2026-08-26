@@ -1,0 +1,85 @@
+name: lldb-dap Linux Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/adapters/lldb-dap.ts'
+      - 'src/dap/**'
+      - 'src/tools/agent-diagnostics.ts'
+      - 'src/tools/register-dump-tools.ts'
+      - 'src/tools/register-lldb-dap-tools.ts'
+      - 'test/lldb-dap-*.ts'
+      - 'test/fixtures/native-smoke.cpp'
+      - 'test/fixtures/lldb-dap-crash.cpp'
+      - '.github/workflows/lldb-dap-linux.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - 'src/adapters/lldb-dap.ts'
+      - 'src/dap/**'
+      - 'src/tools/agent-diagnostics.ts'
+      - 'src/tools/register-dump-tools.ts'
+      - 'src/tools/register-lldb-dap-tools.ts'
+      - 'test/lldb-dap-*.ts'
+      - 'test/fixtures/native-smoke.cpp'
+      - 'test/fixtures/lldb-dap-crash.cpp'
+      - '.github/workflows/lldb-dap-linux.yml'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install distribution LLDB
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends lldb
+
+      - name: Show installed lldb-dap layout
+        shell: bash
+        run: |
+          adapter="$(command -v lldb-dap || true)"
+          if [ -z "$adapter" ]; then
+            adapter="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-dap' -print 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          test -n "$adapter"
+          test -x "$adapter"
+          echo "Installed lldb-dap: $adapter"
+
+      - name: Install project dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build project and native fixtures
+        run: |
+          npm run build
+          mkdir -p build/lldb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/lldb-dap-smoke/native-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/lldb-dap-crash.cpp -o build/lldb-dap-smoke/lldb-dap-crash
+
+      - name: Run real lldb-dap launch smoke through auto-discovery
+        run: |
+          env -u LLDB_DAP_PATH npx tsx test/lldb-dap-real-smoke.ts \
+            --program build/lldb-dap-smoke/native-smoke \
+            --source test/fixtures/native-smoke.cpp
+
+      - name: Run high-level debug_this_crash lldb-dap smoke
+        run: |
+          env -u LLDB_DAP_PATH npx tsx test/lldb-dap-high-level-smoke.ts \
+            --program build/lldb-dap-smoke/lldb-dap-crash \
+            --source test/fixtures/lldb-dap-crash.cpp

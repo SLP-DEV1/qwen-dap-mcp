@@ -38,6 +38,27 @@ test('configured first-chance exception stops are not treated as proven crashes'
   assert.match(diagnosis.summary, /does not prove/i);
 });
 
+test('live lldb-dap SIGSEGV stays crash-likely even when breakMode is always', () => {
+  const snapshot = snapshotWithException('always');
+  snapshot.stopped = {
+    reason: 'exception',
+    description: 'signal SIGSEGV',
+    threadId: 1,
+    allThreadsStopped: true,
+  };
+  snapshot.exception = {
+    exceptionId: 'SIGSEGV',
+    description: 'Segmentation fault',
+    breakMode: 'always',
+  };
+
+  const diagnosis = analyzeRuntimeSnapshot(snapshot);
+
+  assert.equal(diagnosis.classification.category, 'segmentation-fault');
+  assert.equal(diagnosis.classification.crashLikely, true);
+  assert.equal(diagnosis.classification.confidence, 'high');
+});
+
 test('postmortem access violations stay crash-likely even when the adapter reports breakMode always', () => {
   const snapshot = snapshotWithException('always');
   snapshot.postmortem = true;

@@ -3,14 +3,19 @@ import * as z from 'zod/v4';
 
 import { discoverCodeLldb } from '../adapters/codelldb.js';
 import { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';
+import { buildLldbDapCoreConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';
+import { DapError } from '../dap/errors.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import { logger } from '../logger.js';
 import { READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
+
+export type DumpAdapterKind = 'codelldb' | 'lldb-dap';
 
 export type OpenDumpOptions = {
   dumpPath: string;
   program?: string;
   sourceMap?: Record<string, string>;
+  adapter?: DumpAdapterKind;
   adapterPath?: string;
   cwd?: string;
   requestTimeoutMs?: number;
@@ -24,22 +29,36 @@ export type OpenDumpOptions = {
 
 export async function openDump(session: GuardedDapSession, options: OpenDumpOptions) {
   return session.runExclusiveLifecycle('open dump', async () => {
-    // Validate the local dump/program paths before spawning an adapter. A bad
-    // user path should never leave an otherwise idle CodeLLDB process behind.
-    const configuration = buildCodeLldbDumpConfiguration({
-      dumpPath: options.dumpPath,
-      ...(options.program ? { program: options.program } : {}),
-      ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
-    });
-    const adapter = discoverCodeLldb({
-      ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}),
-    });
+    const adapterKind = options.adapter ?? 'codelldb';
+
+    // Validate dump/program paths before spawning an adapter. A bad local path
+    // should never leave an otherwise idle debugger process behind.
+    const configuration = adapterKind === 'lldb-dap'
+      ? (() => {
+          if (!options.program) {
+            throw new DapError("debug_open_dump adapter='lldb-dap' requires program because the upstream coreFile flow needs the matching executable image.");
+          }
+          return buildLldbDapCoreConfiguration({
+            coreFile: options.dumpPath,
+            program: options.program,
+            ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
+          });
+        })()
+      : buildCodeLldbDumpConfiguration({
+          dumpPath: options.dumpPath,
+          ...(options.program ? { program: options.program } : {}),
+          ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
+        });
+
+    const adapter = adapterKind === 'lldb-dap'
+      ? discoverLldbDap({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) })
+      : discoverCodeLldb({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) });
 
     let adapterStarted = false;
     try {
       const capabilities = await session.start({
         command: adapter.command,
-        adapterId: 'lldb',
+        adapterId: adapterKind === 'lldb-dap' ? 'lldb-dap' : 'lldb',
         ...(options.cwd ? { cwd: options.cwd } : {}),
         requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
       });
@@ -61,6 +80,7 @@ export async function openDump(session: GuardedDapSession, options: OpenDumpOpti
       return {
         mode: 'postmortem' as const,
         readOnlyTarget: true,
+        adapterKind,
         dumpPath: options.dumpPath,
         ...(options.program ? { program: options.program } : {}),
         adapter,
@@ -79,7 +99,8 @@ export async function openDump(session: GuardedDapSession, options: OpenDumpOpti
         try {
           await session.reset();
         } catch (cleanupError) {
-          logger.warn('Failed to clean up CodeLLDB after crash-dump setup failure', {
+          logger.warn('Failed to clean up debugger adapter after crash-dump setup failure', {
+            adapterKind,
             cleanupError: cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
           });
         }
@@ -114,14 +135,15 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
     {
       title: 'Open Native Crash Dump',
       description:
-        'Open a local native core/minidump with CodeLLDB and capture bounded postmortem evidence. Use this when the failure is already recorded and no target process should execute; use debug_run_to_stop or debug_this_crash mode=codelldb for a live reproduction instead. The tool starts only the local debugger adapter, never launches or resumes the crashed program, treats the dump as read-only, and returns the initial stack/locals/registers plus optional modules and disassembly.',
+        'Open a local native core/minidump with CodeLLDB or upstream LLVM lldb-dap and capture bounded postmortem evidence. Use this when the failure is already recorded and no target process should execute; use debug_run_to_stop or debug_this_crash for a live reproduction instead. The tool starts only the selected local debugger adapter, never launches or resumes the crashed program, treats the dump as read-only, and returns the initial stack/locals/registers plus optional modules and disassembly.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       inputSchema: z.object({
         dumpPath: z.string().min(1).describe('Absolute or local path to the native core/minidump file to inspect.'),
-        program: z.string().min(1).optional().describe('Optional path to the matching executable image, used by CodeLLDB to improve symbol/module resolution.'),
-        sourceMap: z.record(z.string(), z.string()).optional().describe('Optional mapping from source paths recorded in symbols to local source paths.'),
-        adapterPath: z.string().min(1).optional().describe('Optional explicit CodeLLDB executable path; omit to use normal CodeLLDB discovery.'),
-        cwd: z.string().optional().describe('Working directory for the local CodeLLDB adapter process; this does not execute the crashed target.'),
+        program: z.string().min(1).optional().describe('Path to the matching executable image. Optional for CodeLLDB, but required when adapter=lldb-dap because LLVM coreFile loading binds the dump to its program image.'),
+        sourceMap: z.record(z.string(), z.string()).optional().describe('Optional mapping from source paths recorded in symbols to local source paths; converted to lldb-dap pair arrays when that adapter is selected.'),
+        adapter: z.enum(['codelldb', 'lldb-dap']).default('codelldb').describe('Debugger adapter used for postmortem inspection. codelldb preserves existing behavior; lldb-dap uses upstream LLVM coreFile attach semantics.'),
+        adapterPath: z.string().min(1).optional().describe('Optional explicit executable path for the selected debugger adapter; omit to use its normal discovery logic.'),
+        cwd: z.string().optional().describe('Working directory for the local debugger adapter process; this does not execute the crashed target.'),
         requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds while opening and inspecting the dump.'),
         threadId: z.number().int().positive().optional().describe('Specific dump thread to inspect; omit to use the debugger-selected stopped/crashed thread.'),
         stackLevels: z.number().int().positive().max(100).default(20).describe('Maximum stack frames to include in the initial postmortem snapshot.'),
