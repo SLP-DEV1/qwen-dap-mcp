@@ -28,6 +28,30 @@ All notable prototype milestones are documented here.
 - Unit coverage exercises semantic address instability, nullability changes, Windows path canonicalization, exception/module differences, value-trace matching, operation cancellation, orphaned late responses, and transport-generation isolation.
 - Dedicated GDB DAP, upstream `lldb-dap`, multi-session remote, HOL Guard minimum/latest, standard Node.js 20/22, package, and container workflows are used as the final v0.17 acceptance matrix.
 
+## 0.16.0 - 2026-08-26
+
+### Added
+
+- Added bounded request-local multi-session debugging with `DapSessionRegistry`, a backward-compatible `default` session, and `debug_sessions` create/list/close lifecycle management.
+- Added optional `sessionId` routing across debugger tools through `AsyncLocalStorage`, keeping each session's DAP transport, lifecycle state, events, watchpoints, timeout state, postmortem state, and HOL Guard context isolated.
+- Added hardened GNU GDB DAP → `gdbserver` remote attach through validated TCP host/port endpoints and exact non-loopback allowlisting via `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS`.
+- Added hardened upstream `lldb-dap` → `lldb-server gdbserver` remote attach with the same endpoint policy and a generated single `gdb-remote host:port` compatibility command for lldb-dap 18.
+- Added real Linux remote and concurrent cross-adapter multi-session smoke coverage for GDB/gdbserver and lldb-dap/lldb-server.
+- Expanded the compact default agent surface to twelve tools with `debug_sessions`.
+
+### Fixed / hardened
+
+- Removed process-global session selection from concurrent MCP calls; session identity is bound to each asynchronous request and stripped before existing tool handlers run.
+- Fail closed on unknown/invalid session IDs and refuse user-facing close while a routed request is active.
+- Restricted remote debugger targets to validated TCP endpoints, rejected arbitrary GDB target syntax and user-supplied LLDB attach commands, and kept loopback as the default trust boundary.
+- Preserved per-session debugger/HOL Guard policy isolation and cleanly tear down all owned adapter transports on MCP server shutdown without terminating debuggees by default.
+
+### Verified
+
+- Node.js 20/22 `npm run check`, Crash Lab, Hang Lab, scoped npm package verification, and container build passed on the v0.16 feature head.
+- HOL Guard latest and minimum supported `2.2.0` real bridge smoke passed.
+- Real GDB/gdbserver, lldb-dap/lldb-server, and concurrent cross-adapter multi-session remote smoke passed before the `v0.16.0` release.
+
 ## 0.15.0 - 2026-08-26
 
 ### Added
@@ -223,7 +247,7 @@ All notable prototype milestones are documented here.
 
 - Final v0.11 feature head and merged `main` pass `npm run check` on Node.js 20 and 22.
 - Real Windows CodeLLDB live DAP smoke passes against an MSVC-built native target.
-- Real Windows minidump smoke builds a native crash fixture with PDB symbols, generates a real `.dmp`, opens it through CodeLLDB, and validates intelligent project-frame selection plus autonomous state/action generation from the real dump.
+- Real Windows minidump smoke builds a native crash fixture with PDB symbols, generates a real `.dmp`, opens it through CodeLLDB, and validates intelligent project-frame selection plus autonomous state/action generation.
 - Self-contained Qwen extension archive builds, validates, and installs successfully with the pinned Qwen Code smoke environment.
 
 ## 0.10.1 - 2026-08-26
