@@ -716,7 +716,8 @@ export function compareVerificationBaseline(
 
   const sameCategory = current.classification.category === baseline.classification;
   const sameFunction = current.projectFrame.function === baseline.projectFunction;
-  const samePath = !baseline.projectSourcePath || current.projectFrame.sourcePath === baseline.projectSourcePath;
+  const samePath = !baseline.projectSourcePath
+    || normalizedPath(current.projectFrame.sourcePath) === normalizedPath(baseline.projectSourcePath);
   const sameLine = current.projectFrame.line === baseline.projectLine;
   const sharedHypothesis = current.hypotheses.some((item) => baseline.hypothesisKinds.includes(item.kind));
 
