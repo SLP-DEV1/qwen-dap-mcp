@@ -27,6 +27,7 @@ Coding agents are good at reading and editing source, but native crashes often n
 - **CodeLLDB integration** — launch or attach to authorized local native targets through DAP.
 - **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.
 - **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, remote-target, and core-file support through `--interpreter=dap`.
+- **HOL Guard policy enforcement** — optional fail-closed policy gating for adapter startup and mutating/executable DAP actions, with approval/reapproval flows, secret hashing, and exact adapter identity binding.
 - **Runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value.
 - **Windows minidumps / postmortem debugging** — open existing `.dmp` files and recover structured evidence.
 - **Runtime root-cause backtracking** — follow suspicious values through bounded caller frames toward likely project-controlled producer candidates.
@@ -120,6 +121,32 @@ Qwen Code is the primary integration and the path covered by the project's exten
 CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` for LLVM's adapter or `debug_this_crash(mode="gdb")` for GDB 14+. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `dumpAdapter="lldb-dap"`.
 
 LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md) and [docs/gdb-dap.md](docs/gdb-dap.md).
+
+## HOL Guard integration
+
+`qwen-dap-mcp` optionally integrates with [HOL Guard](https://github.com/hashgraph-online/hol-guard) 2.2+ as a defense-in-depth policy layer around debugger side effects.
+
+When enabled, HOL Guard is consulted **before** a protected DAP request can allocate sequence state or cross `writeMessage()`, and **before** a debugger adapter process can be spawned. Mutating or executable actions such as `evaluate`, `launch`, `attach`, target control, state/memory writes, and breakpoint mutation are gated; read-only inspection such as stacks, scopes, variables, modules, source, disassembly, and memory reads stays on the fast path.
+
+Approvals are bound to the effective workspace, privacy-sanitized DAP arguments, adapter command/arguments, canonical executable path, executable SHA-256, and a fingerprint of the effective adapter environment. Secret-bearing DAP fields and common credential CLI forms are replaced with deterministic SHA-256 markers before they enter the HOL Guard bridge, while the real debugger transport retains the original values.
+
+The integration supports HOL Guard `allow`, `warn`, `review`, `require-reapproval`, `sandbox-required`, and `block` outcomes. Review/reapproval decisions create real Approval Center requests, denied actions produce no DAP write or adapter spawn, and supported HOL Guard versions revalidate saved authority at the execution boundary.
+
+Enable it after installing and initializing HOL Guard:
+
+```bash
+pipx install hol-guard
+hol-guard init
+export QWEN_DAP_MCP_HOL_GUARD=1
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:QWEN_DAP_MCP_HOL_GUARD = "1"
+```
+
+For the full threat model, approval flow, exact identity binding, secret handling, TOCTOU hardening, compatibility behavior, and local smoke-test instructions, see [docs/hol-guard.md](docs/hol-guard.md).
 
 ## Roadmap
 
@@ -337,6 +364,9 @@ npm run check
 - no built-in remote HTTP debugger service,
 - no arbitrary shell/source-writing MCP primitive,
 - no arbitrary memory-write MCP primitive,
+- optional HOL Guard 2.2+ policy gate for adapter spawn and mutating/executable DAP actions,
+- HOL Guard approvals bound to canonical adapter identity, executable hash, workspace, arguments, and environment fingerprint,
+- secret-bearing DAP/adapter values are hashed before entering the HOL Guard policy bridge,
 - no automatic source rollback without external evidence,
 - live attach intended only for authorized local targets,
 - postmortem dumps frozen against execution-control operations,
