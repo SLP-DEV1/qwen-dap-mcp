@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { buildGdbDapLaunchConfiguration, discoverGdbDap } from '../src/adapters/gdb-dap.js';
@@ -22,6 +23,16 @@ const program = resolve(programArg);
 const source = resolve(sourceArg);
 const adapter = discoverGdbDap({ ...(adapterPath ? { explicitPath: adapterPath } : {}) });
 const session = new GuardedDapSession();
+const dapLogPath = '/tmp/qwen-dap-mcp-gdb-dap.log';
+
+// Keep the real smoke self-diagnosing. These are GDB early-init options, not
+// debuggee commands, and only enable GDB's own DAP protocol log for CI output.
+adapter.args.push(
+  '-iex',
+  `set debug dap-log-file ${dapLogPath}`,
+  '-iex',
+  'set debug dap-log-level 2',
+);
 
 try {
   const capabilities = await session.start({
@@ -50,6 +61,16 @@ try {
 
   const before = await session.evaluate('watched_value', initial.frame.id, 'watch');
   assert.match(before.result, /7/, `Expected watched_value=7 before mutate_value(), got '${before.result}'`);
+
+  console.error(JSON.stringify({
+    diagnostic: 'before-debug-find-writer',
+    adapter,
+    stopped: stoppedBody,
+    frame: initial.frame,
+    watchedValueBefore: before.result,
+    capabilities,
+    recentEvents: session.snapshot().recentEvents,
+  }, null, 2));
 
   const writer = await findWriter(session, {
     name: 'watched_value',
@@ -84,6 +105,7 @@ try {
     initialFrame: initial.frame,
     watchedValueBefore: before.result,
     writer: {
+      strategy: writer.strategy,
       hitConfirmed: writer.hitConfirmed,
       outcome: writer.outcome,
       writerFrame: writer.writerFrame,
@@ -91,6 +113,18 @@ try {
     },
     launchResult,
   }, null, 2));
+} catch (error) {
+  console.error(JSON.stringify({
+    diagnostic: 'gdb-real-smoke-failure',
+    error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+    state: session.snapshot(),
+  }, null, 2));
+  if (existsSync(dapLogPath)) {
+    console.error('--- GDB DAP LOG BEGIN ---');
+    console.error(readFileSync(dapLogPath, 'utf8'));
+    console.error('--- GDB DAP LOG END ---');
+  }
+  throw error;
 } finally {
   await session.disconnect(true);
 }
