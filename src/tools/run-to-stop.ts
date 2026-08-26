@@ -48,36 +48,49 @@ const OUTCOME_EVENTS = new Set(['stopped', 'exited', 'terminated']);
 function createOutcomeWait(session: RunToStopSession, timeoutMs: number) {
   let active = true;
   let resolvePromise!: (event: DebugProtocol.Event | undefined) => void;
+  let handler!: (event: DebugProtocol.Event) => void;
+  let onAdapterExit!: (detail: unknown) => void;
+  let onAdapterError!: (error: unknown) => void;
+  let timer!: NodeJS.Timeout;
 
-  const cleanup = (handler: (event: DebugProtocol.Event) => void, timer: NodeJS.Timeout) => {
+  const cleanup = () => {
     if (!active) return;
     active = false;
     clearTimeout(timer);
     session.connection.off('event', handler);
+    session.connection.off('adapterExit', onAdapterExit);
+    session.connection.off('adapterError', onAdapterError);
   };
-
-  let handler!: (event: DebugProtocol.Event) => void;
-  let timer!: NodeJS.Timeout;
 
   const promise = new Promise<DebugProtocol.Event | undefined>((resolve, reject) => {
     resolvePromise = resolve;
     handler = (event: DebugProtocol.Event) => {
       if (!OUTCOME_EVENTS.has(event.event)) return;
-      cleanup(handler, timer);
+      cleanup();
       resolve(event);
     };
+    onAdapterExit = (detail: unknown) => {
+      cleanup();
+      reject(new DapError(`DAP adapter exited before stopped/exited/terminated was observed: ${JSON.stringify(detail ?? {})}`));
+    };
+    onAdapterError = (error: unknown) => {
+      cleanup();
+      reject(error instanceof Error ? error : new DapError('DAP adapter failed while waiting for stopped/exited/terminated.'));
+    };
     timer = setTimeout(() => {
-      cleanup(handler, timer);
+      cleanup();
       reject(new DapTimeoutError('DAP stopped/exited/terminated event', timeoutMs));
     }, timeoutMs);
     session.connection.on('event', handler);
+    session.connection.on('adapterExit', onAdapterExit);
+    session.connection.on('adapterError', onAdapterError);
   });
 
   return {
     promise,
     cancel: () => {
       if (!active) return;
-      cleanup(handler, timer);
+      cleanup();
       resolvePromise(undefined);
     },
   };
@@ -100,9 +113,8 @@ export async function runToStop(
     // process exit cannot race past the composite tool between DAP requests.
     const outcomeWait = createOutcomeWait(session, timeoutMs);
     // launch/attach may itself take longer than the outcome timer. Observe a
-    // possible early timeout immediately so Node never reports it as an
-    // unhandled rejection; the original promise is still awaited below and
-    // retains its normal timeout behavior on the success path.
+    // possible early rejection immediately so Node never reports it as an
+    // unhandled rejection; the original promise is still awaited below.
     void outcomeWait.promise.catch(() => undefined);
 
     let requestResult: unknown;
@@ -112,9 +124,8 @@ export async function runToStop(
         : await session.launch(options.configuration, breakpoints);
     } catch (error) {
       outcomeWait.cancel();
-      // The outcome timer may already have rejected while launch/attach was
-      // still failing. That stale wait must never mask the actionable DAP
-      // request error that brought us here.
+      // A stale outcome timeout/adapter-exit error must never mask the more
+      // specific launch/attach error that brought us here.
       await outcomeWait.promise.catch(() => undefined);
       throw error;
     }
