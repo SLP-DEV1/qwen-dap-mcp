@@ -6,16 +6,20 @@ import { DapSession } from '../src/dap/session.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/mock-dap-adapter.mjs', import.meta.url));
 
-test('runs a rich DAP debug workflow end-to-end', async (t) => {
-  const session = new DapSession();
-  t.after(async () => session.reset());
-
-  const capabilities = await session.start({
+function mockStartOptions() {
+  return {
     command: process.execPath,
     args: [fixture],
     adapterId: 'mock',
     requestTimeoutMs: 2_000,
-  });
+  };
+}
+
+test('runs a rich DAP debug workflow end-to-end', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+
+  const capabilities = await session.start(mockStartOptions());
 
   assert.equal(capabilities.supportsConfigurationDoneRequest, true);
   assert.equal(capabilities.supportsModulesRequest, true);
@@ -126,12 +130,7 @@ test('failed launch aligns initialized timeout, observes the parallel request, a
   const session = new DapSession();
   t.after(async () => session.reset());
 
-  await session.start({
-    command: process.execPath,
-    args: [fixture],
-    adapterId: 'mock',
-    requestTimeoutMs: 2_000,
-  });
+  await session.start(mockStartOptions());
 
   let initializedTimeoutMs: number | undefined;
   let launchTimeoutMs: number | undefined;
@@ -156,14 +155,59 @@ test('failed launch aligns initialized timeout, observes the parallel request, a
     return pendingLaunch;
   }) as typeof session.connection.sendRequest;
 
-  await assert.rejects(
-    session.launch({ program: '/tmp/slow-app' }),
-    /initialized event failed/,
-  );
+  await assert.rejects(session.launch({ program: '/tmp/slow-app' }), /initialized event failed/);
 
   assert.equal(initializedTimeoutMs, 60_000);
   assert.equal(launchTimeoutMs, 60_000);
   assert.equal(launchRejectionObserved, true);
   assert.equal(session.snapshot().configured, false);
   assert.equal(session.snapshot().activeRequest, undefined);
+});
+
+test('an immediate launch rejection wins over the initialized wait instead of being delayed to its timeout', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+  await session.start(mockStartOptions());
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    session.launch({ failImmediately: true }),
+    /Mock launch rejected immediately/i,
+  );
+  const elapsed = Date.now() - startedAt;
+
+  assert.ok(elapsed < 2_000, `Immediate launch failure took ${elapsed}ms`);
+  assert.equal(session.snapshot().configured, false);
+  assert.equal(session.snapshot().activeRequest, undefined);
+});
+
+test('starting a fresh adapter clears stopped events and stderr from the previous transport', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+
+  await session.start(mockStartOptions());
+  await session.launch({ program: '/tmp/fake-app' });
+  assert.ok(session.snapshot().recentEvents.length > 0);
+
+  await session.start(mockStartOptions());
+
+  assert.deepEqual(session.snapshot().recentEvents, []);
+  assert.deepEqual(session.snapshot().recentAdapterStderr, []);
+  assert.equal(session.snapshot().configured, false);
+  assert.equal(session.snapshot().activeRequest, undefined);
+});
+
+test('failed execution-control requests do not leave unhandled stopped-event timeout rejections', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+  await session.start(mockStartOptions());
+  await session.launch({ program: '/tmp/fake-app' });
+
+  await assert.rejects(session.pause(999, true, 20), /Mock pause rejected/i);
+  await assert.rejects(session.continueExecution(999, true, 20), /Mock continue rejected/i);
+  await assert.rejects(session.step('next', 999, true, 20), /Mock next rejected/i);
+
+  // Give all armed waiters enough time to settle. node:test treats an
+  // unhandled rejection here as a test failure.
+  await new Promise((resolve) => setTimeout(resolve, 50));
 });
