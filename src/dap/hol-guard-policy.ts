@@ -11,6 +11,8 @@ import {
   type DapPolicyMode,
   type DapRequestPolicy,
   type DapRequestPolicyContext,
+  type DapRequestPolicyDecision,
+  type DapRequestPolicyResult,
 } from './request-policy.js';
 
 export type HolGuardExecutionContext = {
@@ -267,6 +269,12 @@ function decisionReason(decision: HolGuardDecision): string {
   return `HOL Guard '${decision.action}': ${decision.reason}${approvalHint}`;
 }
 
+function isPolicyPromise(
+  value: DapRequestPolicyResult,
+): value is Promise<DapRequestPolicyDecision> {
+  return typeof (value as { then?: unknown }).then === 'function';
+}
+
 export function createHolGuardEvaluator(options: HolGuardPolicyOptions = {}): HolGuardEvaluator {
   const enabled = options.enabled ?? parseEnabled(process.env.QWEN_DAP_MCP_HOL_GUARD);
   if (!enabled) {
@@ -302,8 +310,10 @@ export function createGuardedDapRequestPolicy(
 ): DapRequestPolicy {
   const builtIn = createDapRequestPolicy(policyMode);
 
-  return (context: DapRequestPolicyContext) => {
-    const localDecision = builtIn(context);
+  const applyHolGuard = (
+    context: DapRequestPolicyContext,
+    localDecision: DapRequestPolicyDecision,
+  ): DapRequestPolicyResult => {
     if (!localDecision.allow) return localDecision;
     if (!evaluator.enabled || !shouldConsultHolGuard(context.command)) return localDecision;
 
@@ -320,6 +330,13 @@ export function createGuardedDapRequestPolicy(
         reason: decisionReason(decision),
       };
     });
+  };
+
+  return (context: DapRequestPolicyContext) => {
+    const localResult = builtIn(context);
+    return isPolicyPromise(localResult)
+      ? localResult.then((decision) => applyHolGuard(context, decision))
+      : applyHolGuard(context, localResult);
   };
 }
 
