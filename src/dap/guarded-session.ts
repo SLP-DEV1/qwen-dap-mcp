@@ -2,7 +2,14 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapError } from './errors.js';
+import {
+  createGuardedDapRequestPolicy,
+  createHolGuardEvaluator,
+  requireHolGuardAdapterStart,
+  type HolGuardEvaluator,
+} from './hol-guard-policy.js';
 import { normalizePostmortemSnapshot } from './postmortem-normalization.js';
+import type { DapPolicyMode } from './request-policy.js';
 import {
   DapSession,
   type RuntimeSnapshot,
@@ -11,8 +18,15 @@ import {
   type StartSessionOptions,
 } from './session.js';
 
+export type GuardedDapSessionOptions = {
+  holGuardEvaluator?: HolGuardEvaluator;
+  dapPolicyMode?: DapPolicyMode;
+};
+
 /**
- * DapSession with an explicit frozen postmortem mode and a serialized lifecycle.
+ * DapSession with an explicit frozen postmortem mode, serialized lifecycle,
+ * and optional HOL Guard enforcement at the two process/code-execution choke
+ * points: outgoing mutating DAP requests and adapter process start.
  *
  * CodeLLDB exposes core/minidump inspection through its normal DAP attach
  * surface, so the base session cannot infer that no live process exists.
@@ -27,9 +41,26 @@ export class GuardedDapSession extends DapSession {
   private postmortem = false;
   private readonly lifecycleContext = new AsyncLocalStorage<symbol>();
   private activeLifecycleOperation?: { owner: symbol; name: string };
+  private readonly holGuardEvaluator: HolGuardEvaluator;
+
+  constructor(options: GuardedDapSessionOptions = {}) {
+    super();
+    this.holGuardEvaluator = options.holGuardEvaluator ?? createHolGuardEvaluator();
+    this.connection.setRequestPolicy(
+      createGuardedDapRequestPolicy(this.holGuardEvaluator, options.dapPolicyMode),
+    );
+  }
 
   override async start(options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
     return this.runExclusiveLifecycle('start', async () => {
+      // DapConnection.start() directly spawns the adapter and intentionally sits
+      // outside sendRequest(). Gate it here before reset/spawn can create a side
+      // effect. Environment values are not forwarded to the policy bridge.
+      requireHolGuardAdapterStart(this.holGuardEvaluator, {
+        command: options.command,
+        ...(options.args ? { args: options.args } : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+      });
       this.postmortem = false;
       return super.start(options);
     });
