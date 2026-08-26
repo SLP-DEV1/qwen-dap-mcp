@@ -91,3 +91,12 @@ test('CodeLLDB attach profile uses a concrete PID', () => {
   assert.equal(config.request, 'attach');
   assert.equal(config.pid, 4242);
 });
+
+test('CodeLLDB attach profile rejects invalid PIDs even when called outside MCP schema validation', () => {
+  for (const pid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    assert.throws(
+      () => buildCodeLldbAttachConfiguration({ pid }),
+      /positive safe integer/i,
+    );
+  }
+});
