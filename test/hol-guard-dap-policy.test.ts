@@ -187,10 +187,15 @@ test('DAP secrets are hashed for HOL Guard while the actual adapter receives the
   const requests = installLoopbackTransport(session.connection);
   const launchArgs = {
     program: '/tmp/app',
+    args: ['--mode', 'safe', '--token', 'debuggee-cli-secret', '--api-key=debuggee-inline-secret'],
     env: {
       API_TOKEN: 'dap-env-secret',
       NORMAL_VALUE: 'also-private-env-value',
     },
+    environment: [
+      { name: 'ARRAY_TOKEN', value: 'array-env-secret' },
+      'STRING_TOKEN=string-env-secret',
+    ],
     apiKey: 'top-level-api-secret',
     nested: {
       password: 'nested-password-secret',
@@ -203,10 +208,12 @@ test('DAP secrets are hashed for HOL Guard while the actual adapter receives the
   const serializedGuardAction = JSON.stringify(protectedAction);
   assert.doesNotMatch(
     serializedGuardAction,
-    /dap-env-secret|also-private-env-value|top-level-api-secret|nested-password-secret/,
+    /dap-env-secret|also-private-env-value|array-env-secret|string-env-secret|debuggee-cli-secret|debuggee-inline-secret|top-level-api-secret|nested-password-secret/,
   );
   assert.match(serializedGuardAction, /sha256:[a-f0-9]{64}/);
   assert.match(serializedGuardAction, /safe-value/);
+  assert.match(serializedGuardAction, /ARRAY_TOKEN/);
+  assert.match(serializedGuardAction, /STRING_TOKEN/);
 
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.command, 'launch');
@@ -218,12 +225,16 @@ test('HOL Guard bridge environment strips unrelated process secrets', () => {
     PATH: '/usr/bin',
     HOME: '/home/fixture',
     HOL_GUARD_HOME: '/tmp/guard',
+    XDG_CONFIG_HOME: '/tmp/xdg-config',
+    SSL_CERT_FILE: '/tmp/ca.pem',
     OPENAI_API_KEY: 'must-not-cross-bridge',
     AWS_SECRET_ACCESS_KEY: 'must-not-cross-bridge-either',
   });
   assert.equal(environment.PATH, '/usr/bin');
   assert.equal(environment.HOME, '/home/fixture');
   assert.equal(environment.HOL_GUARD_HOME, '/tmp/guard');
+  assert.equal(environment.XDG_CONFIG_HOME, '/tmp/xdg-config');
+  assert.equal(environment.SSL_CERT_FILE, '/tmp/ca.pem');
   assert.equal(environment.OPENAI_API_KEY, undefined);
   assert.equal(environment.AWS_SECRET_ACCESS_KEY, undefined);
 });
