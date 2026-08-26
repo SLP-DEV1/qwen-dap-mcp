@@ -6,10 +6,12 @@ on:
       - main
     paths:
       - 'src/dap/connection.ts'
+      - 'src/dap/environment.ts'
       - 'src/dap/request-policy.ts'
       - 'src/dap/guarded-session.ts'
       - 'src/dap/hol-guard-policy.ts'
       - 'scripts/hol-guard-dap-policy.py'
+      - 'test/environment.test.ts'
       - 'test/hol-guard-dap-policy.test.ts'
       - 'test/hol-guard-real-smoke.mjs'
       - 'docs/hol-guard.md'
