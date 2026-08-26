@@ -44,24 +44,10 @@ export type HolGuardPolicyOptions = {
   bridgePath?: string;
 };
 
-const HOL_GUARD_COMMANDS = new Set([
-  'evaluate',
-  'launch',
-  'attach',
-  'restart',
-  'configurationDone',
-  'continue',
-  'next',
-  'stepIn',
-  'stepOut',
-  'stepBack',
-  'reverseContinue',
-  'goto',
-  'setVariable',
-  'setExpression',
-  'writeMemory',
-  'terminate',
-]);
+// First integration deliberately follows the HOL Guard maintainer's proposed
+// DAP boundary: evaluate can execute code in the debuggee and launch can start
+// the wrong target. Read-only inspection stays on the zero-overhead path.
+const HOL_GUARD_COMMANDS = new Set(['evaluate', 'launch']);
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
