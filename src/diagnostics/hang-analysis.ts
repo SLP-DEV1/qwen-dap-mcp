@@ -1,8 +1,8 @@
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
+import type { DiagnosisConfidence } from './analyze-snapshot.js';
 import {
   assessProjectFrames,
-  type DiagnosisConfidence,
   type IntelligentDiagnosisOptions,
 } from './intelligent-diagnosis.js';
 
@@ -54,7 +54,11 @@ export type HangThreadTriage = {
   collectionErrors?: string[];
 };
 
-export type PointerRole = 'synchronization' | 'owner-or-thread' | 'buffer-or-object' | 'generic-pointer';
+export type PointerRole =
+  | 'synchronization'
+  | 'owner-or-thread'
+  | 'buffer-or-object'
+  | 'generic-pointer';
 
 export type PointerObservation = {
   address: string;
@@ -88,7 +92,14 @@ export type PointerProvenanceV2 = {
 };
 
 export type DeadlockHeuristic = {
-  classification: 'deadlock-candidate' | 'lock-contention' | 'global-wait' | 'io-wait' | 'mixed-wait' | 'no-deadlock-signal' | 'unknown';
+  classification:
+    | 'deadlock-candidate'
+    | 'lock-contention'
+    | 'global-wait'
+    | 'io-wait'
+    | 'mixed-wait'
+    | 'no-deadlock-signal'
+    | 'unknown';
   likelihood: DiagnosisConfidence;
   blockedThreadIds: number[];
   runnableProjectThreadIds: number[];
@@ -156,13 +167,13 @@ const WAIT_RULES: WaitRule[] = [
   },
   {
     kind: 'io',
-    re: /(?:epoll_(?:p)?wait|poll\b|ppoll\b|select\b|pselect\b|kevent\b|recv\b|recvfrom\b|accept\b|getqueuedcompletionstatus|readfile|io_uring_enter)/i,
+    re: /(?:epoll_(?:p)?wait|\bpoll\b|\bppoll\b|\bselect\b|\bpselect\b|\bkevent\b|\brecv\b|recvfrom\b|\baccept\b|getqueuedcompletionstatus|readfile|io_uring_enter)/i,
     confidence: 'high',
     rationale: 'stack contains a blocking I/O wait primitive',
   },
   {
     kind: 'sleep-timer',
-    re: /(?:nanosleep|clock_nanosleep|usleep|sleep\b|waitabletimer|delayexecution)/i,
+    re: /(?:nanosleep|clock_nanosleep|usleep|\bsleep\b|waitabletimer|delayexecution)/i,
     confidence: 'high',
     rationale: 'stack contains a sleep/timer wait primitive',
   },
@@ -174,11 +185,18 @@ const WAIT_RULES: WaitRule[] = [
   },
   {
     kind: 'scheduler-park',
-    re: /(?:park\b|parking_lot|threadpool|worker.*wait|scheduler.*wait|yield_processor)/i,
+    re: /(?:\bpark\b|parking_lot|threadpool|worker.*wait|scheduler.*wait|yield_processor)/i,
     confidence: 'medium',
     rationale: 'stack looks parked in a scheduler/worker wait loop',
   },
 ];
+
+const STRONG_LOCK_WAITS = new Set<HangWaitKind>([
+  'mutex',
+  'rwlock',
+  'futex',
+  'thread-join',
+]);
 
 const POINTER_NAME_RE = /(?:ptr|pointer|this|self|owner|mutex|lock|guard|critical|cond|semaphore|event|handle|buffer|buf|node|object|obj|context|ctx|state|queue|list|map|tree|head|tail)/i;
 const POINTER_TYPE_RE = /(?:\*|\bptr\b|pointer|unique_ptr|shared_ptr|weak_ptr|handle|mutex|lock|condition_variable|semaphore)/i;
@@ -210,8 +228,12 @@ function looksPointerLike(variable: DebugProtocol.Variable): boolean {
     || POINTER_TYPE_RE.test(variable.type ?? '');
 }
 
-function variableAddress(variable: DebugProtocol.Variable): { address: string; source: PointerObservation['source'] } | undefined {
-  const memoryReference = variable.memoryReference ? normalizedHex(variable.memoryReference) : undefined;
+function variableAddress(
+  variable: DebugProtocol.Variable,
+): { address: string; source: PointerObservation['source'] } | undefined {
+  const memoryReference = variable.memoryReference
+    ? normalizedHex(variable.memoryReference)
+    : undefined;
   if (memoryReference) return { address: memoryReference, source: 'memoryReference' };
   if (!looksPointerLike(variable)) return undefined;
   const value = normalizedHex(variable.value);
@@ -237,8 +259,8 @@ export function classifyThreadWait(
     }
   }
 
-  const assessments = assessProjectFrames(evidence.stack, analysisOptions);
-  const project = assessments.find((item) => item.projectControlled);
+  const project = assessProjectFrames(evidence.stack, analysisOptions)
+    .find((item) => item.projectControlled);
   if (project) {
     return {
       kind: 'running-user-code',
@@ -306,7 +328,9 @@ function buildPointerProvenance(evidence: HangThreadEvidence[]): PointerProvenan
     if (sharedAcrossThreads) rationale.push(`the same pointer value is visible from ${threadIds.length} threads`);
     if (aliases.length > 1) rationale.push(`the address is observed through ${aliases.length} variable names`);
     if (synchronizationRelevant) rationale.push('at least one observation is synchronization-related');
-    if (items.some((item) => item.source === 'memoryReference')) rationale.push('at least one observation uses an adapter-provided memoryReference');
+    if (items.some((item) => item.source === 'memoryReference')) {
+      rationale.push('at least one observation uses an adapter-provided memoryReference');
+    }
     return {
       address,
       observations: items,
@@ -314,13 +338,17 @@ function buildPointerProvenance(evidence: HangThreadEvidence[]): PointerProvenan
       threadIds,
       sharedAcrossThreads,
       synchronizationRelevant,
-      confidence: sharedAcrossThreads || items.some((item) => item.source === 'memoryReference') ? 'high' : 'medium',
+      confidence: sharedAcrossThreads || items.some((item) => item.source === 'memoryReference')
+        ? 'high'
+        : 'medium',
       rationale,
     } satisfies PointerProvenanceGroup;
   }).sort((a, b) => {
-    const aScore = Number(a.synchronizationRelevant) * 4 + Number(a.sharedAcrossThreads) * 2 + a.observations.length;
-    const bScore = Number(b.synchronizationRelevant) * 4 + Number(b.sharedAcrossThreads) * 2 + b.observations.length;
-    return bScore - aScore || a.address.localeCompare(b.address);
+    const score = (group: PointerProvenanceGroup) =>
+      Number(group.synchronizationRelevant) * 4
+      + Number(group.sharedAcrossThreads) * 2
+      + group.observations.length;
+    return score(b) - score(a) || a.address.localeCompare(b.address);
   });
 
   return {
@@ -339,15 +367,22 @@ function buildDeadlockHeuristic(
   pointerProvenance: PointerProvenanceV2,
 ): DeadlockHeuristic {
   const blocked = triage.filter((item) => item.wait.blocked);
-  const lockBlocked = blocked.filter((item) => ['mutex', 'rwlock', 'condition-variable', 'semaphore', 'thread-join', 'futex', 'event'].includes(item.wait.kind));
+  const strongLockBlocked = blocked.filter((item) => STRONG_LOCK_WAITS.has(item.wait.kind));
   const ioBlocked = blocked.filter((item) => item.wait.kind === 'io');
   const runnableProject = triage.filter((item) => item.projectControlled && !item.wait.blocked);
-  const sharedSynchronization = pointerProvenance.groups.filter((group) => group.sharedAcrossThreads && group.synchronizationRelevant);
+  const sharedSynchronization = pointerProvenance.groups
+    .filter((group) => group.sharedAcrossThreads && group.synchronizationRelevant);
   const evidence: string[] = [];
 
-  if (blocked.length > 0) evidence.push(`${blocked.length}/${triage.length} captured threads match a recognized blocking primitive.`);
-  if (lockBlocked.length > 0) evidence.push(`${lockBlocked.length} threads are blocked in synchronization/join waits.`);
-  if (runnableProject.length > 0) evidence.push(`${runnableProject.length} project-controlled thread(s) do not match a known wait primitive.`);
+  if (blocked.length > 0) {
+    evidence.push(`${blocked.length}/${triage.length} captured threads match a recognized blocking primitive.`);
+  }
+  if (strongLockBlocked.length > 0) {
+    evidence.push(`${strongLockBlocked.length} thread(s) are blocked in strong lock/join waits.`);
+  }
+  if (runnableProject.length > 0) {
+    evidence.push(`${runnableProject.length} project-controlled thread(s) do not match a known wait primitive.`);
+  }
   if (sharedSynchronization.length > 0) {
     evidence.push(`${sharedSynchronization.length} synchronization-related pointer value(s) are visible across multiple threads.`);
   }
@@ -357,11 +392,11 @@ function buildDeadlockHeuristic(
 
   if (triage.length === 0) {
     classification = 'unknown';
-  } else if (lockBlocked.length >= 2 && runnableProject.length === 0) {
+  } else if (strongLockBlocked.length >= 2 && runnableProject.length === 0) {
     classification = 'deadlock-candidate';
     likelihood = 'medium';
-    evidence.push('multiple threads are simultaneously blocked on synchronization and no project-controlled runnable thread was identified');
-  } else if (sharedSynchronization.length > 0 && lockBlocked.length >= 1) {
+    evidence.push('multiple threads are simultaneously blocked in strong lock/join waits and no project-controlled runnable thread was identified');
+  } else if (sharedSynchronization.length > 0 && strongLockBlocked.length >= 1) {
     classification = 'lock-contention';
     likelihood = 'medium';
   } else if (blocked.length === triage.length && ioBlocked.length === blocked.length && blocked.length > 0) {
@@ -389,6 +424,7 @@ function buildDeadlockHeuristic(
     evidence,
     limitations: [
       'Generic DAP does not expose a portable lock-owner graph, so qwen-dap-mcp never labels a cycle as proven from stack waits alone.',
+      'Condition-variable, semaphore, event, scheduler, and timer waits alone are not promoted to a deadlock candidate because they are common in healthy idle worker pools.',
       'A deadlock-candidate means the captured state is consistent with deadlock; confirm ownership/wait edges with adapter-specific lock metadata or repeated evidence when available.',
     ],
   };
@@ -399,8 +435,8 @@ export function analyzeHang(
   analysisOptions: IntelligentDiagnosisOptions = {},
 ): HangDiagnosis {
   const allThreadTriage: HangThreadTriage[] = evidence.map((item) => {
-    const assessments = assessProjectFrames(item.stack, analysisOptions);
-    const project = assessments.find((assessment) => assessment.projectControlled);
+    const project = assessProjectFrames(item.stack, analysisOptions)
+      .find((assessment) => assessment.projectControlled);
     const wait = classifyThreadWait(item, analysisOptions);
     return {
       threadId: item.thread.id,
@@ -434,7 +470,7 @@ export function analyzeHang(
     nextActions.push('Compare blocked and runnable project-controlled threads to identify the thread responsible for forward progress.');
   }
   if (pointerProvenance.groups.some((group) => group.sharedAcrossThreads)) {
-    nextActions.push('Use pointerProvenance v2 cross-thread aliases as evidence anchors, not as proof of ownership or root cause.');
+    nextActions.push('Use Pointer-Provenance v2 cross-thread aliases as evidence anchors, not as proof of ownership or root cause.');
   }
 
   const collectionLimitations = evidence.flatMap((item) => item.collectionErrors ?? []);
@@ -449,7 +485,9 @@ export function analyzeHang(
     limitations: [
       'Hang triage is a bounded snapshot of thread state. It does not prove lack of forward progress unless the caller has independently established that the process is hung.',
       'Wait classification is heuristic and adapter/platform function names vary.',
-      ...(collectionLimitations.length === 0 ? [] : [`Some thread evidence could not be collected: ${collectionLimitations.join('; ')}`]),
+      ...(collectionLimitations.length === 0
+        ? []
+        : [`Some thread evidence could not be collected: ${collectionLimitations.join('; ')}`]),
     ],
   };
 }
