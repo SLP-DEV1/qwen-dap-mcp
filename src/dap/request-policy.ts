@@ -11,7 +11,8 @@ export type DapRequestPolicyDecision =
   | { allow: true }
   | { allow: false; reason: string };
 
-export type DapRequestPolicy = (context: DapRequestPolicyContext) => DapRequestPolicyDecision;
+export type DapRequestPolicyResult = DapRequestPolicyDecision | Promise<DapRequestPolicyDecision>;
+export type DapRequestPolicy = (context: DapRequestPolicyContext) => DapRequestPolicyResult;
 
 const INSPECT_ONLY_ALLOWED_COMMANDS = new Set([
   'initialize',
