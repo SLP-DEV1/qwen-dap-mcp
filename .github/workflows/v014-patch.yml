@@ -23,7 +23,15 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply patch
-        run: node .tmp/v014-patch.mjs
+        run: |
+          node .tmp/v014-patch.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/tools/agent-diagnostics.ts')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("GNU GDB's built-in DAP interpreter", "GNU GDB built-in DAP interpreter")
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Validate
         run: |
           npm ci --ignore-scripts
