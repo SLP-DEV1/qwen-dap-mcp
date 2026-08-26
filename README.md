@@ -312,12 +312,32 @@ npm run check
 
 `npm run check` performs TypeScript build, tests, and extension-package staging. CI runs Node 20 and 22.
 
+## Optional HOL Guard runtime protection
+
+qwen-dap-mcp can integrate with [HOL Guard](https://github.com/hashgraph-online/hol-guard) as an additional local runtime-policy layer. When enabled, DAP `evaluate`/`launch` are checked before the request reaches the adapter, and adapter startup is checked before the local process is spawned. Read-only inspection such as variables, stacks, scopes, modules, memory reads, and disassembly stays on the fast path.
+
+HOL Guard `review`/`require-reapproval` decisions create real Approval Center requests. The action remains side-effect free until approved and retried. Allow, review, and block outcomes are recorded through HOL Guard's runtime receipt/event pipeline. Exact approval reuse is bound to the active workspace, DAP arguments, adapter command/arguments, and a hash of the effective adapter environment; raw environment values are never sent to the bridge.
+
+Enable it after installing HOL Guard 2.2+:
+
+```bash
+pipx install hol-guard
+hol-guard init
+```
+
+```powershell
+$env:QWEN_DAP_MCP_HOL_GUARD = "1"
+```
+
+See [docs/hol-guard.md](docs/hol-guard.md) for approval behavior, failure semantics, compatibility testing, and hardened policy configuration.
+
 ## Safety model
 
 - local stdio MCP transport only,
 - no built-in remote HTTP debugger service,
 - no arbitrary shell/source-writing MCP primitive,
 - no arbitrary memory-write MCP primitive,
+- optional HOL Guard policy/approval boundary for DAP evaluate/launch and adapter startup,
 - no automatic source rollback without external evidence,
 - live attach intended only for authorized local targets,
 - postmortem dumps frozen against execution-control operations,
