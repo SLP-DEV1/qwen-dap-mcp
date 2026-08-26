@@ -3,9 +3,11 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { buildCodeLldbDumpConfiguration } from '../src/adapters/codelldb-dump.js';
 import { GuardedDapSession } from '../src/dap/guarded-session.js';
+import type { SourceBreakpointGroup, StartSessionOptions } from '../src/dap/session.js';
 import { openDump } from '../src/tools/register-dump-tools.js';
 
 test('builds a CodeLLDB postmortem attach configuration', async () => {
@@ -62,4 +64,36 @@ test('openDump validates the dump before adapter discovery or startup', async ()
 
   assert.equal(session.snapshot().adapterRunning, false);
   assert.equal(session.snapshot().initialized, false);
+});
+
+test('openDump resets an adapter it owns when attach fails after startup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'qwen-dap-dump-cleanup-'));
+  const dumpPath = join(root, 'crash.dmp');
+  await writeFile(dumpPath, 'fake-dump');
+
+  class FailingAttachSession extends GuardedDapSession {
+    resetCalls = 0;
+
+    override async start(_options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
+      return {};
+    }
+
+    override async attach(
+      _configuration: Record<string, unknown>,
+      _breakpoints: SourceBreakpointGroup[] = [],
+    ): Promise<unknown> {
+      throw new Error('synthetic attach failure');
+    }
+
+    override async reset(): Promise<void> {
+      this.resetCalls += 1;
+    }
+  }
+
+  const session = new FailingAttachSession();
+  await assert.rejects(
+    openDump(session, { dumpPath, adapterPath: process.execPath }),
+    /synthetic attach failure/,
+  );
+  assert.equal(session.resetCalls, 1);
 });
