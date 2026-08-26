@@ -6,6 +6,7 @@ on:
       - feature/v0.14-gdb-find-writer
     paths:
       - '.github/scripts/v014-structured-symbols.mjs'
+      - '.github/scripts/v014-structured-symbols-runner.mjs'
       - '.github/workflows/v014-structured-symbols.yml'
 
 permissions:
@@ -26,7 +27,7 @@ jobs:
           cache: npm
 
       - name: Apply v0.14 structured-output and symbol-health patch
-        run: node .github/scripts/v014-structured-symbols.mjs
+        run: node .github/scripts/v014-structured-symbols-runner.mjs
 
       - name: Validate project
         run: |
