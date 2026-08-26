@@ -97,7 +97,7 @@ test('lldb-dap attach profile validates PID and optional program', () => {
   }
 });
 
-test('lldb-dap remote profile uses native gdb-remote attach fields and host policy', () => {
+test('lldb-dap remote profile generates one validated gdb-remote command for old adapters', () => {
   const root = mkdtempSync(join(tmpdir(), 'qwen-dap-mcp-lldb-dap-remote-'));
   try {
     const program = join(root, 'native-smoke');
@@ -109,9 +109,17 @@ test('lldb-dap remote profile uses native gdb-remote attach fields and host poli
         type: 'lldb-dap',
         request: 'attach',
         name: 'qwen-dap-mcp lldb-dap remote attach',
-        'gdb-remote-host': 'localhost',
-        'gdb-remote-port': 1234,
         program,
+        attachCommands: ['gdb-remote localhost:1234'],
+      },
+    );
+    assert.deepEqual(
+      buildLldbDapRemoteAttachConfiguration({ host: '::1', port: 1234 }),
+      {
+        type: 'lldb-dap',
+        request: 'attach',
+        name: 'qwen-dap-mcp lldb-dap remote attach',
+        attachCommands: ['gdb-remote [::1]:1234'],
       },
     );
 
