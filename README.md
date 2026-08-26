@@ -6,8 +6,13 @@ A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (M
 
 [![CI](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SLP-DEV1/qwen-dap-mcp)](https://github.com/SLP-DEV1/qwen-dap-mcp/releases/latest)
+[![npm](https://img.shields.io/npm/v/@slp-dev1/qwen-dap-mcp)](https://www.npmjs.com/package/@slp-dev1/qwen-dap-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/@slp-dev1/qwen-dap-mcp)](https://www.npmjs.com/package/@slp-dev1/qwen-dap-mcp)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-published-5b5bd6)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.SLP-DEV1%2Fqwen-dap-mcp)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+
+Published on **npm** as [`@slp-dev1/qwen-dap-mcp`](https://www.npmjs.com/package/@slp-dev1/qwen-dap-mcp) and in the official MCP Registry as `io.github.SLP-DEV1/qwen-dap-mcp`.
 
 ## Why this exists
 
@@ -51,10 +56,16 @@ verifies the original crash fingerprint no longer reproduces
 
 ## Install in Qwen Code
 
-The easiest installation path is the GitHub release:
+Install directly from the GitHub release:
 
 ```bash
 qwen extensions install SLP-DEV1/qwen-dap-mcp
+```
+
+Or install the published scoped npm extension:
+
+```bash
+qwen extensions install @slp-dev1/qwen-dap-mcp
 ```
 
 Then verify the extension and MCP server:
@@ -68,15 +79,38 @@ You should see the `qwen-dap-mcp` MCP server and bundled `native-runtime-debug` 
 
 The GitHub release archive is self-contained: runtime npm dependencies are bundled into `dist/index.js`.
 
-### npm distribution
+### Use from another stdio MCP client
 
-The project is also prepared for scoped npm distribution as `@slp-dev1/qwen-dap-mcp`. Qwen Code supports scoped npm extensions directly:
+For MCP clients that accept a local stdio command, the published npm package can be launched with:
 
 ```bash
-qwen extensions install @slp-dev1/qwen-dap-mcp
+npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-Use the GitHub installation command above until the scoped npm package has been published.
+A typical client configuration looks like:
+
+```json
+{
+  "mcpServers": {
+    "qwen-dap-mcp": {
+      "command": "npx",
+      "args": ["-y", "@slp-dev1/qwen-dap-mcp"]
+    }
+  }
+}
+```
+
+Qwen Code is the primary integration and the path covered by the project's extension packaging and release validation. The MCP server itself communicates over local stdio.
+
+### Distribution
+
+| Channel | Identifier / install path |
+| --- | --- |
+| Qwen Code from GitHub | `qwen extensions install SLP-DEV1/qwen-dap-mcp` |
+| Qwen Code from npm | `qwen extensions install @slp-dev1/qwen-dap-mcp` |
+| npm | `@slp-dev1/qwen-dap-mcp` |
+| Official MCP Registry | `io.github.SLP-DEV1/qwen-dap-mcp` |
+| GitHub Releases | Self-contained extension archive |
 
 ## Autonomous crash debugging
 
