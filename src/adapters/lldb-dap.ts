@@ -52,7 +52,16 @@ function executableNames(): string[] {
   if (process.platform === 'win32') return ['lldb-dap.exe'];
   // Distribution packages can expose only a versioned binary while upstream
   // toolchains normally provide the canonical unversioned name.
-  return ['lldb-dap', 'lldb-dap-23', 'lldb-dap-22', 'lldb-dap-21', 'lldb-dap-20', 'lldb-dap-19'];
+  return [
+    'lldb-dap',
+    'lldb-dap-23',
+    'lldb-dap-22',
+    'lldb-dap-21',
+    'lldb-dap-20',
+    'lldb-dap-19',
+    'lldb-dap-18',
+    'lldb-dap-17',
+  ];
 }
 
 function findOnPath(command: string): string | undefined {
@@ -137,9 +146,6 @@ export function buildLldbDapLaunchConfiguration(options: LldbDapLaunchOptions): 
     cwd,
     ...(options.env ? { env: options.env } : {}),
     stopOnEntry: options.stopOnEntry ?? false,
-    // qwen-dap-mcp deliberately does not implement runInTerminal reverse
-    // requests. LLVM 21+ supports internalConsole directly.
-    console: 'internalConsole',
   };
 }
 
