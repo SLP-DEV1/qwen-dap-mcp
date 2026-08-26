@@ -3,8 +3,14 @@ name: CodeLLDB Windows Dump Smoke
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
+      - 'src/dap/**'
+      - 'src/diagnostics/**'
       - 'src/adapters/codelldb-dump.ts'
+      - 'src/adapters/codelldb.ts'
+      - 'src/tools/agent-diagnostics.ts'
       - 'src/tools/register-dump-tools.ts'
       - 'src/server.ts'
       - 'test/codelldb-dump-profile.test.ts'
@@ -18,9 +24,9 @@ jobs:
   real-codelldb-dump:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
