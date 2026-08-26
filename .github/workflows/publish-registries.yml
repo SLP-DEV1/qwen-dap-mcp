@@ -26,14 +26,42 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout default branch
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Require main and select the released version
+        id: release
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo '::error::Registry publication must be dispatched from the main branch.'
+            exit 1
+          fi
+
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+
+          if ! git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Release tag ${tag} does not exist. Publish the GitHub release first."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "refs/tags/${tag}" origin/main; then
+            echo "::error::Release tag ${tag} is not an ancestor of main."
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          git checkout --detach "refs/tags/${tag}"
+          echo "Publishing artifacts from $(git rev-parse HEAD) (${tag})"
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       - name: Install dependencies
@@ -66,6 +94,11 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `package=${pkg.name}\nversion=${pkg.version}\nserver=${server.name}\n`);
           NODE
 
+          if [ "${{ steps.metadata.outputs.version }}" != "${{ steps.release.outputs.version }}" ]; then
+            echo '::error::The checked-out release version does not match the version selected from main.'
+            exit 1
+          fi
+
       - name: Verify npm package contents
         run: |
           npm pack --dry-run --json > npm-pack.json
@@ -90,12 +123,22 @@ jobs:
             echo 'npm version is not published yet.'
           fi
 
-      - name: Publish package to npm
+      - name: Configure bootstrap npm token when available
         if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
         run: |
-          npm publish --access public
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+            echo 'Configured the temporary npm bootstrap credential.'
+          else
+            echo 'No NPM_TOKEN secret is configured; npm publish will use Trusted Publishing/OIDC if the package is already configured for this workflow.'
+          fi
+
+      - name: Publish package to npm
+        if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
+        run: npm publish --access public
 
       - name: Verify package is visible on npm
         if: ${{ inputs.publish_mcp }}
@@ -109,7 +152,7 @@ jobs:
             fi
             sleep 3
           done
-          echo '::error::The exact package/version is not visible on npm with the expected mcpName. Publish npm first or check the npm scope/token.'
+          echo '::error::The exact package/version is not visible on npm with the expected mcpName. Publish npm first or check the npm scope/credentials.'
           exit 1
 
       - name: Install mcp-publisher
@@ -135,6 +178,7 @@ jobs:
           {
             echo '## Registry publication'
             echo
+            echo "- release tag: ${{ steps.release.outputs.tag }}"
             echo "- npm: ${{ steps.metadata.outputs.package }}@${{ steps.metadata.outputs.version }}"
             echo "- MCP name: ${{ steps.metadata.outputs.server }}"
             echo "- npm publish requested: ${{ inputs.publish_npm }}"
