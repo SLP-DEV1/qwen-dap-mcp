@@ -43,7 +43,7 @@ function installLoopbackTransport(connection: DapConnection): DebugProtocol.Requ
   return requests;
 }
 
-test('inspect-only policy denies evaluate and launch before any DAP transport write', async () => {
+test('inspect-only policy denies evaluate and launch before transport or request-state side effects', async () => {
   const connection = new DapConnection({ policyMode: 'inspect-only' });
   makeRequestable(connection);
   const requests = installLoopbackTransport(connection);
@@ -58,6 +58,11 @@ test('inspect-only policy denies evaluate and launch before any DAP transport wr
   );
 
   assert.equal(requests.length, 0, 'denied requests must never reach writeMessage');
+
+  await connection.sendRequest('variables', { variablesReference: 1 });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.command, 'variables');
+  assert.equal(requests[0]?.seq, 1, 'denied requests must not consume DAP sequence numbers');
 });
 
 test('inspect-only policy still allows variables and stackTrace inspection requests', async () => {
