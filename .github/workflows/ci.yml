@@ -44,3 +44,10 @@ jobs:
             }
           }
           NODE
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build Glama-compatible stdio container
+        run: docker build --tag qwen-dap-mcp:ci .

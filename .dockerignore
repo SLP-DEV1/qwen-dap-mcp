@@ -1,0 +1,11 @@
+.git
+.github
+.qwen
+node_modules
+dist
+release
+coverage
+benchmark/results
+examples/crash-lab/bin
+*.log
+*.tgz
