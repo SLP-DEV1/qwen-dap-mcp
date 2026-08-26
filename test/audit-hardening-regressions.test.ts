@@ -15,7 +15,7 @@ import { DapSession } from '../src/dap/session.js';
 import { analyzeRuntimeSnapshot } from '../src/diagnostics/analyze-snapshot.js';
 import { findWriter } from '../src/tools/find-writer.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
-import { filterToolRegistrar } from '../src/toolset.js';
+import { annotateToolRegistrar } from '../src/toolset.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/mock-dap-adapter.mjs', import.meta.url));
 
@@ -123,6 +123,7 @@ test('runtimeSnapshot does not reuse a stale stopped event after execution conti
   t.after(async () => session.reset());
   await session.start(mockStartOptions());
   await session.launch({ program: '/tmp/fake-app' });
+  await session.connection.waitForEvent('stopped', 2_000, undefined, true);
 
   (session.connection as unknown as { handleMessage(message: DebugProtocol.ProtocolMessage): void }).handleMessage({
     seq: 50_000,
@@ -281,7 +282,7 @@ test('full toolset injects explicit MCP behavior annotations for manual tools', 
     },
   };
 
-  registerDebugTools(filterToolRegistrar(registrar as never, 'full'), {} as never);
+  registerDebugTools(annotateToolRegistrar(registrar as never), {} as never);
 
   for (const name of ['debug_start', 'debug_launch', 'debug_attach', 'debug_pause', 'debug_step', 'debug_evaluate']) {
     const annotations = definitions.get(name)?.annotations;
