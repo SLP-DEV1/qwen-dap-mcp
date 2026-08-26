@@ -15,16 +15,27 @@ const sessionIdSchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
   .describe('Existing DAP session ID created with debug_sessions.');
 
+const defaultSnapshotOptions = {
+  stackLevels: 20,
+  maxVariablesPerScope: 100,
+  includeDisassembly: false,
+  disassembleBefore: 8,
+  disassembleAfter: 12,
+  includeModules: true,
+  moduleCount: 100,
+  includeExceptionInfo: true,
+} as const;
+
 const snapshotSchema = z.object({
   threadId: z.number().int().positive().optional().describe('Stopped DAP thread to inspect; omit to use each session-selected stopped thread.'),
-  stackLevels: z.number().int().positive().max(100).default(20).describe('Maximum stack frames captured from each session.'),
-  maxVariablesPerScope: z.number().int().positive().max(500).default(100).describe('Maximum variables captured per relevant scope in each session.'),
-  includeDisassembly: z.boolean().default(false).describe('Include bounded disassembly in the raw snapshots. The semantic phase-1 diff does not compare raw instruction addresses.'),
-  disassembleBefore: z.number().int().nonnegative().max(100).default(8),
-  disassembleAfter: z.number().int().nonnegative().max(100).default(12),
-  includeModules: z.boolean().default(true).describe('Collect loaded modules so added/removed images can be compared.'),
-  moduleCount: z.number().int().positive().max(500).default(100),
-  includeExceptionInfo: z.boolean().default(true).describe('Collect exception information from both stopped sessions when supported.'),
+  stackLevels: z.number().int().positive().max(100).default(defaultSnapshotOptions.stackLevels).describe('Maximum stack frames captured from each session.'),
+  maxVariablesPerScope: z.number().int().positive().max(500).default(defaultSnapshotOptions.maxVariablesPerScope).describe('Maximum variables captured per relevant scope in each session.'),
+  includeDisassembly: z.boolean().default(defaultSnapshotOptions.includeDisassembly).describe('Include bounded disassembly in the raw snapshots. The semantic phase-1 diff does not compare raw instruction addresses.'),
+  disassembleBefore: z.number().int().nonnegative().max(100).default(defaultSnapshotOptions.disassembleBefore),
+  disassembleAfter: z.number().int().nonnegative().max(100).default(defaultSnapshotOptions.disassembleAfter),
+  includeModules: z.boolean().default(defaultSnapshotOptions.includeModules).describe('Collect loaded modules so added/removed images can be compared.'),
+  moduleCount: z.number().int().positive().max(500).default(defaultSnapshotOptions.moduleCount),
+  includeExceptionInfo: z.boolean().default(defaultSnapshotOptions.includeExceptionInfo).describe('Collect exception information from both stopped sessions when supported.'),
 }).describe('Bounded evidence capture settings applied independently to both sessions.');
 
 function errorResult(error: unknown) {
@@ -57,7 +68,7 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
       inputSchema: z.object({
         baselineSessionId: sessionIdSchema.describe('Session representing the known-good or baseline runtime state.'),
         candidateSessionId: sessionIdSchema.describe('Session representing the failing or changed runtime state.'),
-        snapshot: snapshotSchema.default({}),
+        snapshot: snapshotSchema.default(defaultSnapshotOptions),
       }).superRefine((value, context) => {
         if (value.baselineSessionId === value.candidateSessionId) {
           context.addIssue({
