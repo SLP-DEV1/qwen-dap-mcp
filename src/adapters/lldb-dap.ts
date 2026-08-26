@@ -1,11 +1,11 @@
 import { statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { DapError } from '../dap/errors.js';
 import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
 
-export type LldbDapDiscoverySource = 'explicit' | 'environment' | 'path' | 'xcrun';
+export type LldbDapDiscoverySource = 'explicit' | 'environment' | 'path' | 'toolchain' | 'xcrun';
 
 export type LldbDapDiscoveryResult = {
   command: string;
@@ -16,7 +16,9 @@ export type LldbDapDiscoveryResult = {
 export type DiscoverLldbDapOptions = {
   explicitPath?: string;
   env?: NodeJS.ProcessEnv;
+  toolchainCandidates?: string[];
   allowPathFallback?: boolean;
+  allowToolchainFallback?: boolean;
   allowXcrunFallback?: boolean;
 };
 
@@ -48,20 +50,31 @@ function isFile(path: string): boolean {
   }
 }
 
+const LLVM_VERSIONS = ['23', '22', '21', '20', '19', '18', '17'];
+
 function executableNames(): string[] {
   if (process.platform === 'win32') return ['lldb-dap.exe'];
-  // Distribution packages can expose only a versioned binary while upstream
-  // toolchains normally provide the canonical unversioned name.
-  return [
-    'lldb-dap',
-    'lldb-dap-23',
-    'lldb-dap-22',
-    'lldb-dap-21',
-    'lldb-dap-20',
-    'lldb-dap-19',
-    'lldb-dap-18',
-    'lldb-dap-17',
-  ];
+  return ['lldb-dap', ...LLVM_VERSIONS.map((version) => `lldb-dap-${version}`)];
+}
+
+function defaultToolchainCandidates(env: NodeJS.ProcessEnv): string[] {
+  const candidates: string[] = [];
+
+  if (env.LLVM_HOME) {
+    candidates.push(join(resolve(env.LLVM_HOME), 'bin', process.platform === 'win32' ? 'lldb-dap.exe' : 'lldb-dap'));
+  }
+
+  if (process.platform === 'linux') {
+    for (const version of LLVM_VERSIONS) {
+      candidates.push(`/usr/lib/llvm-${version}/bin/lldb-dap`);
+    }
+  } else if (process.platform === 'win32') {
+    for (const root of [env.ProgramFiles, env['ProgramFiles(x86)']].filter((value): value is string => Boolean(value))) {
+      candidates.push(join(root, 'LLVM', 'bin', 'lldb-dap.exe'));
+    }
+  }
+
+  return [...new Set(candidates)];
 }
 
 function findOnPath(command: string): string | undefined {
@@ -120,6 +133,14 @@ export function discoverLldbDap(options: DiscoverLldbDapOptions = {}): LldbDapDi
     }
   }
 
+  if (options.allowToolchainFallback !== false) {
+    for (const rawCandidate of options.toolchainCandidates ?? defaultToolchainCandidates(env)) {
+      const candidate = resolve(rawCandidate);
+      searched.push(candidate);
+      if (isFile(candidate)) return { command: candidate, source: 'toolchain', searched };
+    }
+  }
+
   if (options.allowXcrunFallback !== false && process.platform === 'darwin') {
     searched.push('xcrun --find lldb-dap');
     const candidate = findWithXcrun();
@@ -127,7 +148,7 @@ export function discoverLldbDap(options: DiscoverLldbDapOptions = {}): LldbDapDi
   }
 
   throw new Error(
-    `lldb-dap was not found. Install LLDB, set LLDB_DAP_PATH, or pass adapterPath. Searched: ${searched.join(', ')}`,
+    `lldb-dap was not found. Install LLDB, set LLDB_DAP_PATH/LLVM_HOME, or pass adapterPath. Searched: ${searched.join(', ')}`,
   );
 }
 
