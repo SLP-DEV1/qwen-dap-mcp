@@ -2,6 +2,17 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapConnection, type DapAdapterStartOptions } from './connection.js';
 import { DapError } from './errors.js';
+import { assessSymbolHealth, type SymbolHealth } from './symbol-health.js';
+
+const MAX_READ_MEMORY_BYTES = 1024 * 1024;
+const MAX_DISASSEMBLY_INSTRUCTIONS = 10_000;
+const MAX_RELATIVE_DAP_OFFSET = 2_147_483_647;
+
+function assertSafeIntegerInRange(name: string, value: number, min: number, max: number): void {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new DapError(`${name} must be a safe integer between ${min} and ${max}; received ${String(value)}`);
+  }
+}
 
 export type SourceBreakpointGroup = {
   source: string;
@@ -19,6 +30,7 @@ export type SessionSnapshot = {
   initialized: boolean;
   configured: boolean;
   activeRequest?: 'launch' | 'attach';
+  adapterId?: string;
   capabilities?: DebugProtocol.Capabilities;
   recentEvents: readonly unknown[];
   recentAdapterStderr: readonly string[];
@@ -51,6 +63,7 @@ export type RuntimeSnapshot = {
   scopes: DebugProtocol.Scope[];
   locals: DebugProtocol.Variable[];
   registers: DebugProtocol.Variable[];
+  symbolHealth: SymbolHealth;
   disassembly?: DebugProtocol.DisassembledInstruction[];
   modules?: DebugProtocol.Module[];
   exception?: DebugProtocol.ExceptionInfoResponse['body'];
@@ -79,7 +92,9 @@ export class DapSession {
   private initialized = false;
   private configured = false;
   private activeRequest?: 'launch' | 'attach';
+  private adapterId?: string;
   private capabilities?: DebugProtocol.Capabilities;
+  private dataBreakpoints: DebugProtocol.DataBreakpoint[] = [];
   private requestTimeoutMs = 15_000;
 
   async start(options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
@@ -114,6 +129,7 @@ export class DapSession {
         this.requestTimeoutMs,
       );
       this.capabilities = (response.body ?? {}) as DebugProtocol.Capabilities;
+      this.adapterId = options.adapterId;
       this.initialized = true;
       return this.capabilities;
     } catch (error) {
@@ -186,7 +202,12 @@ export class DapSession {
       { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,
       this.requestTimeoutMs,
     );
+    this.dataBreakpoints = breakpoints.map((breakpoint) => ({ ...breakpoint }));
     return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  dataBreakpointConfiguration(): DebugProtocol.DataBreakpoint[] {
+    return this.dataBreakpoints.map((breakpoint) => ({ ...breakpoint }));
   }
 
   async setExceptionBreakpoints(filters: string[], filterOptions?: DebugProtocol.ExceptionFilterOptions[]): Promise<DebugProtocol.Breakpoint[]> {
@@ -297,6 +318,9 @@ export class DapSession {
   async disassemble(memoryReference: string, instructionCount = 20, instructionOffset = 0, offset = 0, resolveSymbols = true): Promise<DebugProtocol.DisassembledInstruction[]> {
     this.assertConfigured();
     this.assertCapability('supportsDisassembleRequest', 'disassemble');
+    assertSafeIntegerInRange('instructionCount', instructionCount, 1, MAX_DISASSEMBLY_INSTRUCTIONS);
+    assertSafeIntegerInRange('instructionOffset', instructionOffset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
+    assertSafeIntegerInRange('offset', offset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
     const response = await this.connection.sendRequest(
       'disassemble',
       { memoryReference, instructionCount, instructionOffset, offset, resolveSymbols } satisfies DebugProtocol.DisassembleArguments,
@@ -308,6 +332,8 @@ export class DapSession {
   async readMemory(memoryReference: string, count: number, offset = 0): Promise<NonNullable<DebugProtocol.ReadMemoryResponse['body']>> {
     this.assertConfigured();
     this.assertCapability('supportsReadMemoryRequest', 'readMemory');
+    assertSafeIntegerInRange('count', count, 1, MAX_READ_MEMORY_BYTES);
+    assertSafeIntegerInRange('offset', offset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
     const response = await this.connection.sendRequest('readMemory', { memoryReference, count, offset } satisfies DebugProtocol.ReadMemoryArguments, this.requestTimeoutMs);
     return (response.body ?? { address: memoryReference }) as NonNullable<DebugProtocol.ReadMemoryResponse['body']>;
   }
@@ -399,6 +425,7 @@ export class DapSession {
       scopes: frameScopes,
       locals,
       registers,
+      symbolHealth: assessSymbolHealth(stack, loadedModules),
       ...(disassembly === undefined ? {} : { disassembly }),
       ...(loadedModules === undefined ? {} : { modules: loadedModules }),
       ...(exception === undefined ? {} : { exception }),
@@ -413,6 +440,7 @@ export class DapSession {
       initialized: this.initialized,
       configured: this.configured,
       ...(this.activeRequest === undefined ? {} : { activeRequest: this.activeRequest }),
+      ...(this.adapterId === undefined ? {} : { adapterId: this.adapterId }),
       ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),
       recentEvents: this.connection.recentEvents.slice(-25),
       recentAdapterStderr: this.connection.recentStderr.slice(-25),
@@ -435,7 +463,9 @@ export class DapSession {
     this.initialized = false;
     this.configured = false;
     this.activeRequest = undefined;
+    this.adapterId = undefined;
     this.capabilities = undefined;
+    this.dataBreakpoints = [];
   }
 
   private async beginDebugRequest(request: 'launch' | 'attach', configuration: Record<string, unknown>, breakpoints: SourceBreakpointGroup[]): Promise<unknown> {
@@ -444,7 +474,32 @@ export class DapSession {
     this.activeRequest = request;
 
     const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);
-    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs);
+
+    // GNU GDB 15+ follows the corrected DAP ordering implemented upstream:
+    // initialize -> configuration requests -> configurationDone -> launch.
+    // Source breakpoints are intentionally allowed to be pending before GDB
+    // knows the executable. CodeLLDB/lldb-dap retain the traditional path
+    // below where launch/attach starts first and initialized gates config.
+    if (this.adapterId === 'gdb') {
+      try {
+        const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];
+        for (const group of breakpoints) {
+          breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });
+        }
+        if (this.capabilities?.supportsConfigurationDoneRequest) {
+          await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);
+        }
+        const response = await this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
+        this.configured = true;
+        return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };
+      } catch (error) {
+        this.configured = false;
+        this.activeRequest = undefined;
+        throw error;
+      }
+    }
+
+    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);
     const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);
     const requestFailure = new Promise<never>((_resolve, reject) => {
       void requestPromise.catch(reject);

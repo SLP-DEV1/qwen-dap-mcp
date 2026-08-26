@@ -9,6 +9,7 @@ import type {
   SourceBreakpointGroup,
 } from '../dap/session.js';
 import { LOCAL_TARGET_EXECUTION_ANNOTATIONS } from './tool-annotations.js';
+import { debugRunToStopOutputSchema, structuredResult } from './agent-output.js';
 
 export type RunToStopRequest = 'launch' | 'attach';
 
@@ -187,7 +188,7 @@ const snapshotSchema = z.object({
 }).describe('Optional bounds and evidence categories for the snapshot captured only when execution stops.');
 
 function result(value: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+  return structuredResult(value);
 }
 
 function errorResult(error: unknown) {
@@ -202,6 +203,7 @@ export function registerRunToStopTool(server: McpServer, session: RunToStopSessi
       title: 'Run Until Debug Stop or Exit',
       description: 'Run one live launch or attach through an already initialized DAP adapter until the first stopped, exited, or terminated event. Use this when you need deterministic runtime evidence from a reproduction; do not use it for a postmortem dump or when executing/attaching to the local target is not authorized. Launch mode executes application code and attach mode changes debugger control of an existing process, so normal target side effects may occur before the stop. Returns the request result, terminal/stopped outcome, session status, and a bounded snapshot only when a stopped event is captured.',
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      outputSchema: debugRunToStopOutputSchema,
       inputSchema: z.object({
         request: z.enum(['launch', 'attach']).default('launch').describe('Choose launch to start a new target from configuration, or attach to connect to an existing authorized local target.'),
         configuration: jsonRecord,

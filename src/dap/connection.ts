@@ -221,7 +221,12 @@ export class DapConnection extends EventEmitter {
     }
 
     this.rejectAll(new DapError('DAP adapter stopped'));
-    if (this.child === child) this.child = undefined;
+    if (this.child === child) {
+      this.child = undefined;
+      // A direct stop can retire the transport before Node reports an exit.
+      // Wake event waiters deterministically instead of leaving them to timeout.
+      this.emit('adapterExit', { code: child.exitCode, signal: child.signalCode, forcedStop: true });
+    }
   }
 
   sendRequest(
@@ -278,6 +283,7 @@ export class DapConnection extends EventEmitter {
     eventName: string,
     timeoutMs = 15_000,
     predicate?: (event: DebugProtocol.Event) => boolean,
+    includeRecent = false,
   ): Promise<DebugProtocol.Event> {
     return new Promise((resolve, reject) => {
       const eventKey = `event:${eventName}`;
@@ -309,6 +315,31 @@ export class DapConnection extends EventEmitter {
       this.on(eventKey, handler);
       this.on('adapterExit', onAdapterExit);
       this.on('adapterError', onAdapterError);
+
+      // Some valid DAP adapters (notably GNU GDB) emit `initialized`
+      // immediately after the initialize response, before launch/attach.
+      // Register the live listener first, then inspect this transport's
+      // bounded event history so an event cannot race between the two.
+      if (includeRecent) {
+        const recent = [...this.eventHistory].reverse().find((record) => {
+          if (record.event !== eventName) return false;
+          const candidate = {
+            seq: 0,
+            type: 'event' as const,
+            event: record.event,
+            ...(record.body === undefined ? {} : { body: record.body }),
+          } satisfies DebugProtocol.Event;
+          return !predicate || predicate(candidate);
+        });
+        if (recent) {
+          handler({
+            seq: 0,
+            type: 'event',
+            event: recent.event,
+            ...(recent.body === undefined ? {} : { body: recent.body }),
+          });
+        }
+      }
     });
   }
 
@@ -331,20 +362,14 @@ export class DapConnection extends EventEmitter {
       if (headerEnd < 0) {
         if (this.buffer.length > MAX_HEADER_BYTES) {
           const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes without a terminator`);
-          this.buffer = Buffer.alloc(0);
-          logger.warn('DAP protocol error', { error });
-          this.rejectAll(error);
-          this.emit('protocolError', error);
+          this.failProtocol(error);
         }
         return;
       }
 
       if (headerEnd > MAX_HEADER_BYTES) {
         const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes before its terminator`);
-        this.buffer = Buffer.alloc(0);
-        logger.warn('DAP protocol error', { error });
-        this.rejectAll(error);
-        this.emit('protocolError', error);
+        this.failProtocol(error);
         return;
       }
 
@@ -352,25 +377,19 @@ export class DapConnection extends EventEmitter {
       const lengthMatches = [...headerText.matchAll(/(?:^|\r\n)Content-Length:\s*(\d+)\s*(?=\r\n|$)/gi)];
       const contentLengthText = lengthMatches[0]?.[1];
       if (!contentLengthText || lengthMatches.length !== 1) {
-        this.buffer = this.buffer.subarray(headerEnd + HEADER_SEPARATOR.length);
         const error = new DapError(
           lengthMatches.length > 1
             ? 'Invalid DAP header: multiple Content-Length fields are not allowed'
             : `Invalid DAP header: ${headerText.slice(0, 500)}`,
         );
-        logger.warn('DAP protocol error', { error });
-        this.rejectAll(error);
-        this.emit('protocolError', error);
-        continue;
+        this.failProtocol(error);
+        return;
       }
 
       const contentLength = Number.parseInt(contentLengthText, 10);
       if (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > MAX_DAP_PAYLOAD_BYTES) {
         const error = new DapError(`DAP Content-Length ${contentLengthText} exceeds the ${MAX_DAP_PAYLOAD_BYTES}-byte safety limit`);
-        this.buffer = Buffer.alloc(0);
-        logger.warn('DAP protocol error', { error });
-        this.rejectAll(error);
-        this.emit('protocolError', error);
+        this.failProtocol(error);
         return;
       }
 
@@ -388,10 +407,8 @@ export class DapConnection extends EventEmitter {
         const protocolError = new DapError(`Failed to parse DAP JSON payload: ${payload.slice(0, 500)}`, {
           cause: error instanceof Error ? error : undefined,
         });
-        logger.warn('DAP protocol error', { error: protocolError });
-        this.rejectAll(protocolError);
-        this.emit('protocolError', protocolError);
-        continue;
+        this.failProtocol(protocolError);
+        return;
       }
 
       try {
@@ -402,9 +419,8 @@ export class DapConnection extends EventEmitter {
           : new DapError(`Failed to handle DAP message type '${String(message.type)}'`, {
               cause: error instanceof Error ? error : undefined,
             });
-        logger.warn('DAP protocol error', { error: protocolError });
-        this.rejectAll(protocolError);
-        this.emit('protocolError', protocolError);
+        this.failProtocol(protocolError);
+        return;
       }
     }
   }
@@ -477,6 +493,28 @@ export class DapConnection extends EventEmitter {
     }
     logger.debug('DAP adapter wrote to stderr', { lineCount: lines.length });
     this.emit('adapterStderr', chunk);
+  }
+
+  /**
+   * DAP framing/JSON errors are fatal for this transport. Once message
+   * boundaries are untrustworthy, attempting stream resynchronization can
+   * pair a response with the wrong request. Fail closed and retire the adapter.
+   */
+  private failProtocol(error: DapError): void {
+    this.buffer = Buffer.alloc(0);
+    logger.warn('Fatal DAP protocol error; retiring adapter transport', { error });
+    this.rejectAll(error);
+    this.emit('protocolError', error);
+    this.emit('adapterError', error);
+    // Production adapters are ChildProcess instances. The runtime guard also
+    // keeps parser unit-test doubles from turning transport retirement into noise.
+    if (typeof this.child?.kill === 'function') {
+      void this.stop().catch((stopError) => {
+        logger.warn('Failed while retiring DAP adapter after protocol error', { error: stopError });
+      });
+    } else {
+      this.child = undefined;
+    }
   }
 
   private rejectAll(error: Error): void {
