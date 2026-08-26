@@ -116,35 +116,62 @@ function diagnosticText(snapshot: RuntimeSnapshot): string {
   ].filter((value): value is string => Boolean(value)).join(' ').toLowerCase();
 }
 
+function exceptionFatality(snapshot: RuntimeSnapshot): boolean | undefined {
+  const mode = snapshot.exception?.breakMode;
+  if (mode === 'unhandled' || mode === 'userUnhandled') return true;
+  // `always` commonly means the debugger was configured to stop on every
+  // throw/first-chance exception. It is evidence of an exception, not proof
+  // that the process would have crashed if execution continued.
+  if (mode === 'always' || mode === 'never') return false;
+  return undefined;
+}
+
+function crashClassification(
+  category: DiagnosisCategory,
+  defaultConfidence: DiagnosisConfidence,
+  fatality: boolean | undefined,
+): CrashDiagnosis['classification'] {
+  return {
+    category,
+    crashLikely: fatality !== false,
+    confidence: fatality === false ? 'medium' : defaultConfidence,
+  };
+}
+
 function classify(snapshot: RuntimeSnapshot): CrashDiagnosis['classification'] {
   const stopped = snapshot.stopped as DebugProtocol.StoppedEvent['body'] | undefined;
   const text = diagnosticText(snapshot);
+  const fatality = stopped?.reason === 'exception' ? exceptionFatality(snapshot) : undefined;
 
   if (/access violation|exc_bad_access/.test(text)) {
-    return { category: 'access-violation', crashLikely: true, confidence: 'high' };
+    return crashClassification('access-violation', 'high', fatality);
   }
   if (/segmentation fault|sigsegv/.test(text)) {
-    return { category: 'segmentation-fault', crashLikely: true, confidence: 'high' };
+    return crashClassification('segmentation-fault', 'high', fatality);
   }
   if (/stack overflow|stackoverflow|sigstkflt/.test(text)) {
-    return { category: 'stack-overflow', crashLikely: true, confidence: 'high' };
+    return crashClassification('stack-overflow', 'high', fatality);
   }
   if (/divide by zero|division by zero|integer divide|sigfpe/.test(text)) {
-    return { category: 'divide-by-zero', crashLikely: true, confidence: 'high' };
+    return crashClassification('divide-by-zero', 'high', fatality);
   }
   if (/illegal instruction|sigill/.test(text)) {
-    return { category: 'illegal-instruction', crashLikely: true, confidence: 'high' };
+    return crashClassification('illegal-instruction', 'high', fatality);
   }
   if (/heap corruption|double free|invalid free|use[- ]after[- ]free/.test(text)) {
-    return { category: 'heap-corruption', crashLikely: true, confidence: 'high' };
+    return crashClassification('heap-corruption', 'high', fatality);
   }
   if (/sigabrt|\babort\b|assertion failed|\bassert\b/.test(text)) {
-    return { category: 'abort-or-assert', crashLikely: true, confidence: 'high' };
+    return crashClassification('abort-or-assert', 'high', fatality);
   }
 
   switch (stopped?.reason) {
     case 'exception':
-      return { category: 'exception', crashLikely: true, confidence: snapshot.exception ? 'high' : 'medium' };
+      return {
+        category: 'exception',
+        crashLikely: fatality === true,
+        confidence: fatality === undefined ? 'low' : snapshot.exception ? 'high' : 'medium',
+      };
     case 'breakpoint':
       return { category: 'breakpoint', crashLikely: false, confidence: 'high' };
     case 'entry':
@@ -162,7 +189,8 @@ function classify(snapshot: RuntimeSnapshot): CrashDiagnosis['classification'] {
 
 function parseAddress(value: string | undefined): bigint | undefined {
   if (!value) return undefined;
-  const match = /^0x([0-9a-f]+)$/i.exec(value.trim());
+  const compact = value.trim().replace(/[`'_\s]/g, '');
+  const match = /^0x([0-9a-f]+)$/i.exec(compact);
   if (!match?.[1]) return undefined;
   try {
     return BigInt(`0x${match[1]}`);
@@ -228,7 +256,7 @@ function suspiciousValues(snapshot: RuntimeSnapshot): SuspiciousValue[] {
     for (const variable of variables) {
       const normalized = variable.value.trim().toLowerCase();
       const compact = normalized.replace(/[`'_\s]/g, '');
-      const nullLike = /^(?:0x0+|null|nullptr|nil|<null>)$/.test(compact);
+      const nullLike = /^(?:0|0x0+|null|nullptr|nil|<null>)$/.test(compact);
       const poison = POISON_PATTERNS.find((pattern) => compact.includes(pattern));
 
       if (poison) {
@@ -271,6 +299,23 @@ function buildHypotheses(
   const nullValues = suspicious.filter((item) => item.reason === 'null-like-pointer');
   const poisonValues = suspicious.filter((item) => item.reason === 'poison-pattern');
   const location = locationText(snapshot);
+
+  if (!classification.crashLikely && classification.category === 'exception') {
+    hypotheses.push({
+      kind: 'first-chance-or-configured-exception',
+      title: 'The debugger stopped on an exception, but current break-mode evidence does not prove it is fatal.',
+      confidence: 'high',
+      evidence: [
+        `Exception break mode: ${snapshot.exception?.breakMode ?? 'unknown'}.`,
+        `Stopped frame: ${location}.`,
+      ],
+      suggestedChecks: [
+        'Continue the same reproduction to determine whether the exception is handled or reaches an unhandled terminal failure.',
+        'Do not patch source solely because a first-chance/configured exception stop was observed.',
+      ],
+    });
+    return hypotheses;
+  }
 
   if (classification.category === 'access-violation' || classification.category === 'segmentation-fault') {
     if (nullValues.length > 0) {
@@ -433,9 +478,14 @@ export function analyzeRuntimeSnapshot(snapshot: RuntimeSnapshot): CrashDiagnosi
 
   const summary = classification.crashLikely
     ? `${classification.category} is the best current classification; the most relevant frame is ${location}.`
-    : `The debugger stopped for ${stopped?.reason ?? classification.category}; current frame is ${location}. This is not automatically evidence of a crash.`;
+    : classification.category === 'exception'
+      ? `The debugger stopped on an exception at ${location}, but the current break mode does not prove that the process would terminate. Continue the reproduction before treating this as a crash.`
+      : `The debugger stopped for ${stopped?.reason ?? classification.category}; current frame is ${location}. This is not automatically evidence of a crash.`;
 
-  const nextActions = hypotheses.flatMap((hypothesis) => hypothesis.suggestedChecks).filter((value, index, values) => values.indexOf(value) === index).slice(0, 8);
+  const nextActions = hypotheses
+    .flatMap((hypothesis) => hypothesis.suggestedChecks)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 8);
 
   return {
     summary,
