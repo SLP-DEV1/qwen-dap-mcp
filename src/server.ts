@@ -5,13 +5,14 @@ import { registerAgentDiagnosticTools } from './tools/agent-diagnostics.js';
 import { registerDebugTools } from './tools/register-debug-tools.js';
 import { registerDumpTools } from './tools/register-dump-tools.js';
 import { registerRunToStopTool } from './tools/run-to-stop.js';
+import { packageVersion } from './version.js';
 
 export function createServer(): McpServer {
   const session = new GuardedDapSession();
   const server = new McpServer(
     {
       name: 'qwen-dap-mcp',
-      version: '0.11.0',
+      version: packageVersion,
     },
     {
       instructions:
