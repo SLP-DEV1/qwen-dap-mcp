@@ -1,0 +1,121 @@
+name: Apply v0.13.0 release bump
+
+on:
+  push:
+    branches:
+      - release/v0.13.0
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: release/v0.13.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Align v0.13.0 metadata and release notes
+        shell: bash
+        run: |
+          npm version 0.13.0 --no-git-tag-version --allow-same-version
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const version = '0.13.0';
+
+          for (const path of ['qwen-extension.json', 'server.json']) {
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            data.version = version;
+            if (path === 'server.json') {
+              if (!data.packages?.[0]) throw new Error('server.json npm package entry is missing');
+              data.packages[0].version = version;
+            }
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+          }
+
+          const changelogPath = 'CHANGELOG.md';
+          let changelog = fs.readFileSync(changelogPath, 'utf8');
+          const anchor = '## Unreleased\n';
+          if (!changelog.includes(anchor)) throw new Error('CHANGELOG Unreleased anchor is missing');
+          if (!changelog.includes('## 0.13.0 - 2026-08-26')) {
+            const section = `\n## 0.13.0 - 2026-08-26\n\n### Added\n\n- Added first-class upstream LLVM \`lldb-dap\` support alongside CodeLLDB, including explicit/environment/PATH/toolchain/macOS discovery.\n- Added upstream-native launch and authorized PID attach profiles plus frozen core-file inspection through DAP \`attach\` + \`coreFile\`.\n- Added \`debug_this_crash(mode="lldb-dap")\`, \`debug_open_dump(adapter="lldb-dap")\`, and \`dumpAdapter="lldb-dap"\` without expanding the compact default agent toolset.\n- Added manual lldb-dap discovery/start/launch/attach helpers to \`QWEN_DAP_MCP_TOOLSET=full\`.\n- Added a dedicated lldb-dap guide and real Linux adapter validation.\n\n### Fixed / hardened\n\n- Recognize explicit synchronous fatal POSIX signal families such as SIGSEGV from upstream lldb-dap as crash-likely even when the DAP exception reports \`breakMode="always"\`, while preserving conservative handling for generic configured/first-chance exceptions.\n- Discover distro LLVM layouts where lldb-dap is installed as a versioned binary or inside an LLVM toolchain directory instead of an unversioned PATH entry.\n\n### Verified\n\n- Node.js 20/22 CI, package staging, Crash Lab, and Glama container checks pass on the final v0.13 feature head.\n- Real Linux lldb-dap smoke auto-discovers distribution LLDB, launches a native C++ target, verifies source breakpoints and runtime evidence, and exercises the high-level \`debug_this_crash\` path against an intentional SIGSEGV.\n- The default agent MCP surface remains nine high-level tools; manual lldb-dap lifecycle tools are exposed only in \`full\` mode.\n`;
+            changelog = changelog.replace(anchor, anchor + section);
+            fs.writeFileSync(changelogPath, changelog);
+          }
+          NODE
+
+          cat > docs/v0.13.0.md <<'EOF'
+          # qwen-dap-mcp v0.13.0
+
+          v0.13 adds first-class upstream LLVM `lldb-dap` support while preserving CodeLLDB compatibility and the compact default agent toolset.
+
+          ## Upstream LLVM lldb-dap
+
+          The bridge now has a dedicated `lldb-dap` adapter profile instead of treating upstream LLDB as a CodeLLDB alias. It supports:
+
+          - explicit adapter paths and `LLDB_DAP_PATH`,
+          - canonical/versioned PATH binaries and common LLVM toolchain directories,
+          - `LLVM_HOME` and macOS `xcrun --find lldb-dap`,
+          - live launch and authorized PID attach,
+          - read-only core-file inspection through upstream DAP `attach` + `coreFile`,
+          - high-level diagnosis and bounded verification through `debug_this_crash(mode="lldb-dap")`.
+
+          Existing CodeLLDB paths remain available and remain the compatibility default for existing CodeLLDB-specific dump workflows.
+
+          See [lldb-dap.md](lldb-dap.md).
+
+          ## Fatal signal semantics
+
+          Upstream lldb-dap can surface synchronous POSIX failures such as `SIGSEGV` as DAP exceptions with `breakMode="always"`. v0.13 distinguishes explicit fatal signal families from generic configured/first-chance exceptions so genuine crash stops remain crash-likely without weakening the conservative verification model.
+
+          `crashLikely` is diagnostic evidence, not proof of a successful fix. A fix still requires completion of the intended reproduction and evidence comparison.
+
+          ## Compact MCP surface preserved
+
+          The default `agent` toolset still exposes only the nine high-level tools. Manual `lldb-dap` discovery/start/launch/attach helpers are available only with:
+
+          ```text
+          QWEN_DAP_MCP_TOOLSET=full
+          ```
+
+          ## Real validation
+
+          The Linux smoke workflow installs distribution LLDB, discovers the real adapter without a hard-coded major version, compiles native C++ fixtures, and validates:
+
+          - DAP initialization over stdio,
+          - source breakpoints,
+          - stack frames, locals, registers, modules and disassembly,
+          - expression evaluation,
+          - the complete high-level `debug_this_crash(mode="lldb-dap")` crash-diagnosis path against an intentional native SIGSEGV.
+
+          Normal Node.js 20/22 CI, Crash Lab, extension packaging, and container validation remain part of the release gates.
+          EOF
+          sed -i 's/^          //' docs/v0.13.0.md
+
+          npm ci --ignore-scripts
+          npm run check
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const ext = JSON.parse(fs.readFileSync('qwen-extension.json', 'utf8'));
+          const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+          const versions = [pkg.version, lock.version, lock.packages?.['']?.version, ext.version, server.version, server.packages?.[0]?.version];
+          if (versions.some((value) => value !== '0.13.0')) throw new Error(`version alignment failed: ${versions.join(', ')}`);
+          console.log('v0.13.0 metadata is aligned across package, lockfile, Qwen extension and MCP registry manifest.');
+          NODE
+
+      - name: Commit tested release metadata
+        shell: bash
+        run: |
+          git add package.json package-lock.json qwen-extension.json server.json CHANGELOG.md docs/v0.13.0.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: prepare v0.13.0 release'
+          git push origin HEAD:release/v0.13.0
