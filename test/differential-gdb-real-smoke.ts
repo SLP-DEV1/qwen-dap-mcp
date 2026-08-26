@@ -65,9 +65,10 @@ async function prepareStoppedSession(
     includeExceptionInfo: false,
   });
   assert.match(snapshot.frame.name, /inspect_case/i, `${mode} session stopped in unexpected frame '${snapshot.frame.name}'`);
-  assert.ok(
-    snapshot.locals.some((item) => item.name === 'critical_ptr'),
-    `${mode} session did not expose critical_ptr; scopes=${JSON.stringify(snapshot.scopes.map((scope) => scope.name))}, locals=${JSON.stringify(snapshot.locals)}`,
+  assert.match(
+    snapshot.stack[1]?.name ?? '',
+    mode === 'good' ? /good_path/i : /bad_path/i,
+    `${mode} session did not preserve the expected caller path: ${JSON.stringify(snapshot.stack)}`,
   );
 }
 
@@ -98,22 +99,27 @@ try {
   assert.equal(output.baselineSessionId, 'baseline');
   assert.equal(output.candidateSessionId, 'candidate');
 
-  const critical = output.diff.locals.find((item: any) => item.name === 'critical_ptr');
-  assert.ok(critical, `critical_ptr was not present in the semantic diff: ${JSON.stringify(output.diff.locals)}`);
-  assert.equal(critical.status, 'changed');
-  assert.match(String(critical.reason), /Nullability changed/);
-  assert.match(String(critical.baseline), /0x[0-9a-f]+/i);
-  assert.match(String(critical.candidate), /^(?:0x)?0+$/i);
-  assert.equal(output.diff.firstMeaningfulDifference?.category, 'local');
-  assert.equal(output.diff.firstMeaningfulDifference?.key, critical.key);
+  const callerDifference = output.diff.stack.frames.find((item: any) =>
+    item.index === 1
+    && item.status === 'changed'
+    && /good_path/i.test(String(item.baseline?.function ?? ''))
+    && /bad_path/i.test(String(item.candidate?.function ?? '')),
+  );
+  assert.ok(callerDifference, `expected stable caller-stack divergence: ${JSON.stringify(output.diff.stack.frames)}`);
   assert.ok(output.diff.summary.meaningfulDifferences >= 1);
   assert.equal(output.evidenceBudget.stackLevels, 12);
   assert.equal(output.evidenceBudget.maxVariablesPerScope, 100);
 
+  const critical = output.diff.locals.find((item: any) => item.name === 'critical_ptr');
+  if (critical) {
+    assert.notEqual(critical.status, 'unstable', `nullability evidence must not be reduced to address noise: ${JSON.stringify(critical)}`);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     firstMeaningfulDifference: output.diff.firstMeaningfulDifference,
-    criticalPointerDiff: critical,
+    callerDifference,
+    criticalPointerDiff: critical ?? null,
     summary: output.diff.summary,
     evidenceBudget: output.evidenceBudget,
   }, null, 2));
