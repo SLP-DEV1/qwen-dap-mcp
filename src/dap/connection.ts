@@ -275,8 +275,18 @@ export class DapConnection extends EventEmitter {
           const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes without a terminator`);
           this.buffer = Buffer.alloc(0);
           logger.warn('DAP protocol error', { error });
+          this.rejectAll(error);
           this.emit('protocolError', error);
         }
+        return;
+      }
+
+      if (headerEnd > MAX_HEADER_BYTES) {
+        const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes before its terminator`);
+        this.buffer = Buffer.alloc(0);
+        logger.warn('DAP protocol error', { error });
+        this.rejectAll(error);
+        this.emit('protocolError', error);
         return;
       }
 
