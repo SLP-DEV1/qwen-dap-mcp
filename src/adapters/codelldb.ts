@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { DapError } from '../dap/errors.js';
 import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
 
 export type CodeLldbDiscoverySource = 'explicit' | 'environment' | 'extension' | 'path';
@@ -100,9 +101,11 @@ function findOnPath(command: string): string | undefined {
     encoding: 'utf8',
     windowsHide: true,
     shell: false,
+    timeout: 5_000,
+    maxBuffer: 64 * 1024,
   });
 
-  if (result.status !== 0 || !result.stdout) {
+  if (result.error || result.status !== 0 || !result.stdout) {
     return undefined;
   }
 
@@ -174,6 +177,9 @@ export function buildCodeLldbLaunchConfiguration(options: CodeLldbLaunchOptions)
 }
 
 export function buildCodeLldbAttachConfiguration(options: CodeLldbAttachOptions): Record<string, unknown> {
+  if (!Number.isSafeInteger(options.pid) || options.pid <= 0) {
+    throw new DapError(`CodeLLDB attach PID must be a positive safe integer; received ${String(options.pid)}`);
+  }
   const program = options.program
     ? resolveExistingFile(options.program, 'Program image')
     : undefined;
