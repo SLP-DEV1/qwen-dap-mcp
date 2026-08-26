@@ -196,9 +196,22 @@ const runtimeComparisonSideSchema = z.object({
   status: sessionStatusOutputSchema,
 }).catchall(z.unknown());
 
+const differentialEvidenceBudgetSchema = z.object({
+  timeoutMs: z.number().int().positive(),
+  sessions: z.literal(2),
+  stackLevels: z.number().int().positive(),
+  maxVariablesPerScope: z.number().int().positive(),
+  includeDisassembly: z.boolean(),
+  disassemblyInstructionsPerSession: z.number().int().nonnegative(),
+  includeModules: z.boolean(),
+  moduleCountPerSession: z.number().int().nonnegative(),
+  includeExceptionInfo: z.boolean(),
+});
+
 export const debugCompareRunsOutputSchema = z.object({
   baselineSessionId: z.string(),
   candidateSessionId: z.string(),
+  evidenceBudget: differentialEvidenceBudgetSchema,
   baseline: runtimeComparisonSideSchema,
   candidate: runtimeComparisonSideSchema,
   diff: z.object({
