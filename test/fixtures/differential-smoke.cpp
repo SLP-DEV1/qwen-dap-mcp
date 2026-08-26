@@ -10,13 +10,17 @@ int inspect_case(int* critical_ptr, int stable_count) {
 }
 
 __attribute__((noinline))
-int observe_case(bool bad) {
+int good_path() {
   int storage = 7;
-  int* critical_ptr = bad ? nullptr : &storage;
-  return inspect_case(critical_ptr, 42);
+  return inspect_case(&storage, 42);
+}
+
+__attribute__((noinline))
+int bad_path() {
+  return inspect_case(nullptr, 42);
 }
 
 int main(int argc, char** argv) {
   const bool bad = argc > 1 && std::strcmp(argv[1], "bad") == 0;
-  return observe_case(bad) > 0 ? 0 : 1;
+  return (bad ? bad_path() : good_path()) > 0 ? 0 : 1;
 }
