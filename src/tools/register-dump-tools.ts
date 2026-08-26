@@ -22,6 +22,13 @@ export type OpenDumpOptions = {
 
 export async function openDump(session: GuardedDapSession, options: OpenDumpOptions) {
   return session.runExclusiveLifecycle('open dump', async () => {
+    // Validate the local dump/program paths before spawning an adapter. A bad
+    // user path should never leave an otherwise idle CodeLLDB process behind.
+    const configuration = buildCodeLldbDumpConfiguration({
+      dumpPath: options.dumpPath,
+      ...(options.program ? { program: options.program } : {}),
+      ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
+    });
     const adapter = discoverCodeLldb({
       ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}),
     });
@@ -32,11 +39,6 @@ export async function openDump(session: GuardedDapSession, options: OpenDumpOpti
       requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
     });
 
-    const configuration = buildCodeLldbDumpConfiguration({
-      dumpPath: options.dumpPath,
-      ...(options.program ? { program: options.program } : {}),
-      ...(options.sourceMap ? { sourceMap: options.sourceMap } : {}),
-    });
     const attach = await session.attach(configuration);
     session.markPostmortem();
 
