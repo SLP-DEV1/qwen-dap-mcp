@@ -4,6 +4,7 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
   'debug_diagnose_stop',
   'debug_source_disassembly',
+  'debug_find_writer',
   'debug_run_to_stop',
   'debug_open_dump',
   'debug_snapshot',
