@@ -3,10 +3,15 @@ name: CodeLLDB Windows Smoke
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
-      - 'src/dap/session.ts'
+      - 'src/dap/**'
+      - 'src/diagnostics/**'
       - 'src/adapters/codelldb.ts'
+      - 'src/tools/agent-diagnostics.ts'
       - 'src/tools/register-debug-tools.ts'
+      - 'src/tools/run-to-stop.ts'
       - 'test/codelldb-real-smoke.ts'
       - 'test/codelldb-profile.test.ts'
       - 'test/fixtures/native-smoke.cpp'
@@ -21,9 +26,9 @@ jobs:
   real-codelldb:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
