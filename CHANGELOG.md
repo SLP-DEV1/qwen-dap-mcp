@@ -4,6 +4,30 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added `debug_compare_runs` as a read-only known-good versus failing runtime comparison across two explicit stopped DAP sessions, with semantic stack/local/register/exception/symbol/module differences and `firstMeaningfulDifference` prioritization.
+- Added ASLR-aware runtime value comparison that classifies non-null raw address-only changes as `unstable` while preserving null/non-null transitions as meaningful state evidence.
+- Added `debug_trace_value` for a bounded temporal sequence of real DAP data-breakpoint or GDB watchpoint writer stops, including actual stopped-thread/frame evidence and visible before/after values when available.
+- Added explicit differential `evidenceBudget` output and a dedicated `docs/differential-debugging.md` workflow guide.
+- Expanded the compact default agent surface to fourteen tools with `debug_compare_runs` and `debug_trace_value`.
+- Added a real two-process GNU GDB DAP differential regression workflow that drives separate baseline/candidate sessions to comparable stopped states and invokes the real cross-session MCP handler.
+
+### Fixed / hardened
+
+- Added request-local DAP operation contexts with aggregate deadlines and AbortSignal propagation into nested DAP requests and event waiters.
+- Cancelled pending requests now lose completion authority immediately so later adapter responses are orphaned rather than completing an expired workflow.
+- Added transport-generation isolation so late output, errors, responses, or exits from a retired adapter process cannot contaminate a replacement debugger generation.
+- Made operation deadlines authoritative over near-simultaneous local event timers to avoid deadline races that could surface as the wrong timeout class.
+- Kept `debug_compare_runs` inspection-only and outside the normal single-session router because one request intentionally reads two isolated sessions.
+- Kept `debug_trace_value` conservative around target execution: temporary watches are cleaned up, unrelated debugger stops terminate the trace, postmortem targets are rejected, and the whole timeline is bounded by stop/per-stop/aggregate limits.
+- Hardened the real differential regression against adapter-specific variable-scope quirks by proving cross-session execution-path divergence with stable native caller frames while unit tests separately lock down exact nullability semantics.
+
+### Validation in this feature branch
+
+- Unit coverage exercises semantic address instability, nullability changes, Windows path canonicalization, exception/module differences, value-trace matching, operation cancellation, orphaned late responses, and transport-generation isolation.
+- Dedicated GDB DAP, upstream `lldb-dap`, multi-session remote, HOL Guard minimum/latest, standard Node.js 20/22, package, and container workflows are used as the final v0.17 acceptance matrix.
+
 ## 0.15.0 - 2026-08-26
 
 ### Added
@@ -199,7 +223,7 @@ All notable prototype milestones are documented here.
 
 - Final v0.11 feature head and merged `main` pass `npm run check` on Node.js 20 and 22.
 - Real Windows CodeLLDB live DAP smoke passes against an MSVC-built native target.
-- Real Windows minidump smoke builds a native crash fixture with PDB symbols, generates a real `.dmp`, opens it through CodeLLDB, and validates intelligent project-frame selection plus autonomous state/action generation.
+- Real Windows minidump smoke builds a native crash fixture with PDB symbols, generates a real `.dmp`, opens it through CodeLLDB, and validates intelligent project-frame selection plus autonomous state/action generation from the real dump.
 - Self-contained Qwen extension archive builds, validates, and installs successfully with the pinned Qwen Code smoke environment.
 
 ## 0.10.1 - 2026-08-26
