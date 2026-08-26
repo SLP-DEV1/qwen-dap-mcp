@@ -23,3 +23,19 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - run: npm install --ignore-scripts
       - run: npm run check
+      - name: Verify scoped npm package
+        run: |
+          npm pack --dry-run --json > npm-pack.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('npm-pack.json', 'utf8'))[0];
+          if (report.name !== '@slp-dev1/qwen-dap-mcp') {
+            throw new Error(`unexpected npm package name: ${report.name}`);
+          }
+          const files = new Set(report.files.map((entry) => entry.path));
+          for (const required of ['dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE']) {
+            if (!files.has(required)) {
+              throw new Error(`npm package is missing ${required}`);
+            }
+          }
+          NODE
