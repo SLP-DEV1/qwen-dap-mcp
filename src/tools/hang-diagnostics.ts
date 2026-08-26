@@ -462,9 +462,11 @@ export async function captureAllThreadHangEvidence(
     () => session.threads(),
   )).slice(0, maxThreads);
   const output: HangThreadEvidence[] = [];
+  let captureDeadlineExpired = false;
 
   for (const thread of threads) {
-    if (Date.now() >= deadline) {
+    if (captureDeadlineExpired || Date.now() >= deadline) {
+      captureDeadlineExpired = true;
       output.push({
         thread,
         stack: [],
@@ -484,6 +486,7 @@ export async function captureAllThreadHangEvidence(
       );
     } catch (error) {
       collectionErrors.push(`stackTrace: ${errorMessage(error)}`);
+      if (isCaptureDeadlineError(error)) captureDeadlineExpired = true;
     }
 
     const projectIndex = assessProjectFrames(stack, analysisOptions)
@@ -496,24 +499,33 @@ export async function captureAllThreadHangEvidence(
       .slice(0, framesWithVariables);
 
     const variableFrames: HangFrameVariables[] = [];
-    if (Date.now() < deadline) {
+    if (!captureDeadlineExpired && Date.now() < deadline) {
       for (const frameIndex of frameIndexes) {
         const frame = stack[frameIndex];
         if (!frame) continue;
         try {
-          variableFrames.push(await collectFrameVariables(
+          const frameVariables = await collectFrameVariables(
             session,
             frame,
             frameIndex,
             maxVariablesPerFrame,
             deadline,
-          ));
+          );
+          variableFrames.push(frameVariables);
+          if (frameVariables.collectionErrors?.some((message) => message.includes(CAPTURE_DEADLINE_PREFIX))) {
+            captureDeadlineExpired = true;
+          }
         } catch (error) {
           collectionErrors.push(`frame ${frameIndex} variables: ${errorMessage(error)}`);
+          if (isCaptureDeadlineError(error)) captureDeadlineExpired = true;
         }
-        if (Date.now() >= deadline) break;
+        if (captureDeadlineExpired || Date.now() >= deadline) {
+          captureDeadlineExpired = true;
+          break;
+        }
       }
     } else if (stack.length > 0) {
+      captureDeadlineExpired = true;
       collectionErrors.push(`${CAPTURE_DEADLINE_PREFIX} before variable collection for thread ${thread.id}.`);
     }
 
