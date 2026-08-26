@@ -99,6 +99,11 @@ export async function runToStop(
     // Arm the event listener before launch/attach so an immediate stop or fast
     // process exit cannot race past the composite tool between DAP requests.
     const outcomeWait = createOutcomeWait(session, timeoutMs);
+    // launch/attach may itself take longer than the outcome timer. Observe a
+    // possible early timeout immediately so Node never reports it as an
+    // unhandled rejection; the original promise is still awaited below and
+    // retains its normal timeout behavior on the success path.
+    void outcomeWait.promise.catch(() => undefined);
 
     let requestResult: unknown;
     try {
