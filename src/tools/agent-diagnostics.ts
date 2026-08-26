@@ -1,10 +1,21 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { DebugProtocol } from '@vscode/debugprotocol';
 import * as z from 'zod/v4';
 
 import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';
 import { analyzeRuntimeSnapshot, correlateSourceDisassembly } from '../diagnostics/analyze-snapshot.js';
+import {
+  analyzeInstructionOperands,
+  buildIntelligentDiagnosis,
+  compareVerificationBaseline,
+  selectProjectFrame,
+  type FrameEvidence,
+  type IntelligentCrashDiagnosis,
+  type IntelligentDiagnosisOptions,
+  type VerificationBaseline,
+} from '../diagnostics/intelligent-diagnosis.js';
 import { DapError } from '../dap/errors.js';
-import type { RuntimeSnapshotOptions, SourceBreakpointGroup } from '../dap/session.js';
+import type { RuntimeSnapshot, RuntimeSnapshotOptions, SourceBreakpointGroup } from '../dap/session.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import { openDump, type OpenDumpOptions } from './register-dump-tools.js';
 import { runToStop } from './run-to-stop.js';
@@ -24,6 +35,41 @@ const snapshotSchema = z.object({
   includeModules: z.boolean().default(true),
   moduleCount: z.number().int().positive().max(500).default(100),
   includeExceptionInfo: z.boolean().default(true),
+});
+const analysisSchema = z.object({
+  projectRoots: z.array(z.string().min(1)).max(20).optional(),
+  projectModules: z.array(z.string().min(1)).max(50).optional(),
+  callerDepth: z.number().int().nonnegative().max(5).default(2),
+});
+const diagnosisCategorySchema = z.enum([
+  'access-violation',
+  'segmentation-fault',
+  'stack-overflow',
+  'divide-by-zero',
+  'illegal-instruction',
+  'abort-or-assert',
+  'heap-corruption',
+  'exception',
+  'signal',
+  'breakpoint',
+  'entry',
+  'manual-stop',
+  'step',
+  'unknown',
+]);
+const verificationBaselineSchema = z.object({
+  classification: diagnosisCategorySchema,
+  crashLikely: z.boolean(),
+  faultFunction: z.string(),
+  projectFunction: z.string(),
+  projectSourcePath: z.string().optional(),
+  projectLine: z.number().int().nonnegative(),
+  hypothesisKinds: z.array(z.string()).max(8),
+  suspiciousNames: z.array(z.string()).max(12),
+});
+const workflowSchema = z.object({
+  stage: z.enum(['diagnose', 'verify']).default('diagnose'),
+  baseline: verificationBaselineSchema.optional(),
 });
 
 function result(value: unknown) {
@@ -64,7 +110,127 @@ function terminalOutcomeDiagnosis(outcome: { event: 'exited' | 'terminated'; bod
   };
 }
 
-async function captureDiagnosticSnapshot(session: GuardedDapSession, options: RuntimeSnapshotOptions = {}) {
+function dedupeVariables(variables: DebugProtocol.Variable[]): DebugProtocol.Variable[] {
+  const seen = new Set<string>();
+  const output: DebugProtocol.Variable[] = [];
+  for (const variable of variables) {
+    const key = `${variable.name}\u0000${variable.value}\u0000${variable.type ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(variable);
+  }
+  return output;
+}
+
+async function captureFrameEvidence(
+  session: GuardedDapSession,
+  frame: DebugProtocol.StackFrame,
+  index: number,
+  options: RuntimeSnapshotOptions,
+  includeDisassembly: boolean,
+): Promise<FrameEvidence> {
+  const scopes = await session.scopes(frame.id);
+  const maxVariables = options.maxVariablesPerScope ?? 100;
+  const localScopes = scopes.filter((scope) => /locals?|arguments?|parameters?/i.test(scope.name));
+  const registerScope = scopes.find((scope) => /register/i.test(scope.name));
+
+  const locals: DebugProtocol.Variable[] = [];
+  for (const scope of localScopes.slice(0, 3)) {
+    if (scope.variablesReference <= 0) continue;
+    locals.push(...await session.variables(scope.variablesReference, 0, maxVariables));
+  }
+
+  const registers = registerScope && registerScope.variablesReference > 0
+    ? await session.variables(registerScope.variablesReference, 0, maxVariables)
+    : [];
+
+  let disassembly: DebugProtocol.DisassembledInstruction[] | undefined;
+  if (includeDisassembly && frame.instructionPointerReference) {
+    try {
+      const before = options.disassembleBefore ?? 8;
+      const after = options.disassembleAfter ?? 12;
+      disassembly = await session.disassemble(
+        frame.instructionPointerReference,
+        before + after + 1,
+        -before,
+        0,
+        true,
+      );
+    } catch {
+      // Some adapters advertise disassembly but cannot resolve a particular frame/IP.
+      // The intelligent diagnosis remains useful from stack/variables alone.
+    }
+  }
+
+  return {
+    index,
+    frame,
+    locals: dedupeVariables(locals).slice(0, maxVariables),
+    registers: dedupeVariables(registers).slice(0, maxVariables),
+    ...(disassembly === undefined ? {} : { disassembly }),
+  };
+}
+
+function mergedAnalysisOptions(
+  analysis: IntelligentDiagnosisOptions | undefined,
+  program?: string,
+  cwd?: string,
+): IntelligentDiagnosisOptions {
+  return {
+    ...(analysis ?? {}),
+    ...(program ? { program } : {}),
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+async function diagnoseSnapshot(
+  session: GuardedDapSession,
+  snapshot: RuntimeSnapshot,
+  snapshotOptions: RuntimeSnapshotOptions,
+  analysisOptions: IntelligentDiagnosisOptions,
+): Promise<IntelligentCrashDiagnosis> {
+  const base = analyzeRuntimeSnapshot(snapshot);
+  const selection = selectProjectFrame(snapshot.stack, analysisOptions);
+  const callerDepth = analysisOptions.callerDepth ?? 2;
+  const evidenceIndexes = [
+    selection.selected.index,
+    ...selection.assessments
+      .filter((item) => item.index > selection.selected.index && item.projectControlled)
+      .slice(0, callerDepth)
+      .map((item) => item.index),
+  ];
+
+  const evidence: FrameEvidence[] = [];
+  for (const index of [...new Set(evidenceIndexes)]) {
+    const frame = snapshot.stack[index];
+    if (!frame) continue;
+    if (index === 0) {
+      evidence.push({
+        index,
+        frame,
+        locals: snapshot.locals,
+        registers: snapshot.registers,
+        ...(snapshot.disassembly === undefined ? {} : { disassembly: snapshot.disassembly }),
+      });
+      continue;
+    }
+    evidence.push(await captureFrameEvidence(
+      session,
+      frame,
+      index,
+      snapshotOptions,
+      index === selection.selected.index,
+    ));
+  }
+
+  return buildIntelligentDiagnosis(snapshot, base, selection, evidence);
+}
+
+async function captureDiagnosticSnapshot(
+  session: GuardedDapSession,
+  options: RuntimeSnapshotOptions = {},
+  analysisOptions: IntelligentDiagnosisOptions = {},
+) {
   const snapshot = await session.runtimeSnapshot({
     ...options,
     includeDisassembly: options.includeDisassembly ?? true,
@@ -73,7 +239,39 @@ async function captureDiagnosticSnapshot(session: GuardedDapSession, options: Ru
   });
   return {
     snapshot,
-    diagnosis: analyzeRuntimeSnapshot(snapshot),
+    diagnosis: await diagnoseSnapshot(session, snapshot, options, analysisOptions),
+  };
+}
+
+function terminalForVerification(outcome: { event: 'exited' | 'terminated'; body?: unknown }) {
+  const body = outcome.body as { exitCode?: number } | undefined;
+  return {
+    event: outcome.event,
+    ...(typeof body?.exitCode === 'number' ? { exitCode: body.exitCode } : {}),
+  };
+}
+
+function workflowMetadata(
+  stage: 'diagnose' | 'verify',
+  baseline: VerificationBaseline | undefined,
+  diagnosis?: IntelligentCrashDiagnosis,
+  terminal?: { event: 'exited' | 'terminated'; exitCode?: number },
+) {
+  if (stage === 'verify' && !baseline) {
+    throw new DapError('debug_this_crash workflow.stage="verify" requires the verificationBaseline returned by the original diagnosis.');
+  }
+
+  return {
+    stage,
+    ...(diagnosis
+      ? {
+          verificationBaseline: diagnosis.verificationBaseline,
+          fixWorkflow: diagnosis.fixWorkflow,
+        }
+      : {}),
+    ...(stage === 'verify' && baseline
+      ? { verification: compareVerificationBaseline(baseline, diagnosis, terminal) }
+      : {}),
   };
 }
 
@@ -83,12 +281,16 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Diagnose Current Debug Stop',
       description:
-        'Capture the current stopped state and produce an agent-friendly diagnosis with crash classification, exception evidence, suspicious values, ranked hypotheses, source/disassembly correlation, and next checks.',
-      inputSchema: snapshotSchema,
+        'Capture the current stopped state and produce an agent-friendly diagnosis with crash classification, automatic project-frame selection, operand/register/variable bindings, call-chain provenance, ranked hypotheses, and a fix/rebuild/reproduce/verify plan.',
+      inputSchema: snapshotSchema.extend({ analysis: analysisSchema.optional() }),
     },
-    async (options) => {
+    async ({ analysis, ...options }) => {
       try {
-        return result(await captureDiagnosticSnapshot(session, options as RuntimeSnapshotOptions));
+        return result(await captureDiagnosticSnapshot(
+          session,
+          options as RuntimeSnapshotOptions,
+          analysis as IntelligentDiagnosisOptions | undefined,
+        ));
       } catch (error) {
         return errorResult(error);
       }
@@ -100,29 +302,46 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Correlate Source and Disassembly',
       description:
-        'Correlate the current top source frame and instruction pointer with nearby disassembly, highlighting the current/nearest instruction and surrounding instructions.',
+        'Select the first likely project-controlled frame, correlate its instruction pointer with nearby disassembly, and bind instruction operands back to registers and pointer-like locals when possible.',
       inputSchema: z.object({
         threadId: z.number().int().positive().optional(),
         stackLevels: z.number().int().positive().max(100).default(12),
         disassembleBefore: z.number().int().nonnegative().max(100).default(8),
         disassembleAfter: z.number().int().nonnegative().max(100).default(12),
+        analysis: analysisSchema.optional(),
       }),
     },
-    async ({ threadId, stackLevels, disassembleBefore, disassembleAfter }) => {
+    async ({ threadId, stackLevels, disassembleBefore, disassembleAfter, analysis }) => {
       try {
-        const snapshot = await session.runtimeSnapshot({
+        const snapshotOptions: RuntimeSnapshotOptions = {
           ...(threadId === undefined ? {} : { threadId }),
           stackLevels,
-          maxVariablesPerScope: 20,
+          maxVariablesPerScope: 40,
           includeDisassembly: true,
           disassembleBefore,
           disassembleAfter,
           includeModules: false,
           includeExceptionInfo: false,
-        });
+        };
+        const snapshot = await session.runtimeSnapshot(snapshotOptions);
+        const selection = selectProjectFrame(snapshot.stack, analysis as IntelligentDiagnosisOptions | undefined);
+        const selectedFrame = snapshot.stack[selection.selected.index];
+        if (!selectedFrame) throw new DapError('Unable to resolve the selected project frame.');
+        const evidence = selection.selected.index === 0
+          ? {
+              index: 0,
+              frame: selectedFrame,
+              locals: snapshot.locals,
+              registers: snapshot.registers,
+              ...(snapshot.disassembly === undefined ? {} : { disassembly: snapshot.disassembly }),
+            }
+          : await captureFrameEvidence(session, selectedFrame, selection.selected.index, snapshotOptions, true);
+
         return result({
-          correlation: correlateSourceDisassembly(snapshot),
-          frame: snapshot.frame,
+          frameSelection: selection,
+          faultCorrelation: correlateSourceDisassembly(snapshot),
+          projectFrame: selectedFrame,
+          operandAnalysis: analyzeInstructionOperands(evidence),
         });
       } catch (error) {
         return errorResult(error);
@@ -135,7 +354,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Debug This Crash',
       description:
-        'High-level agent workflow. Diagnose the current stop, run an initialized DAP session until stop/exit, auto-start CodeLLDB and run a local native program, or open a crash dump; then return structured evidence and likely causes.',
+        'High-level agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. Automatically selects project frames, traces operand/register/variable evidence through callers, proposes the narrowest evidence-backed fix, and can verify the same scenario against a previous diagnosis baseline.',
       inputSchema: z.object({
         mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current'),
 
@@ -159,6 +378,8 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
         sourceMap: z.record(z.string(), z.string()).optional(),
 
         snapshot: snapshotSchema.optional(),
+        analysis: analysisSchema.optional(),
+        workflow: workflowSchema.optional(),
       }),
     },
     async ({
@@ -177,15 +398,26 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
       dumpPath,
       sourceMap,
       snapshot,
+      analysis,
+      workflow,
     }) => {
       try {
         return result(await session.runExclusiveLifecycle('debug this crash', async () => {
           const snapshotOptions = (snapshot ?? {}) as RuntimeSnapshotOptions;
+          const analysisOptions = mergedAnalysisOptions(
+            analysis as IntelligentDiagnosisOptions | undefined,
+            program,
+            cwd,
+          );
+          const stage = workflow?.stage ?? 'diagnose';
+          const baseline = workflow?.baseline as VerificationBaseline | undefined;
 
           if (mode === 'current') {
+            const captured = await captureDiagnosticSnapshot(session, snapshotOptions, analysisOptions);
             return {
               mode,
-              ...(await captureDiagnosticSnapshot(session, snapshotOptions)),
+              ...captured,
+              workflow: workflowMetadata(stage, baseline, captured.diagnosis),
               status: session.snapshot(),
             };
           }
@@ -206,10 +438,12 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               includeModules: true,
               moduleCount: snapshotOptions.moduleCount ?? 100,
             } satisfies OpenDumpOptions);
+            const diagnosis = await diagnoseSnapshot(session, opened.snapshot, snapshotOptions, analysisOptions);
             return {
               mode,
               dump: opened,
-              diagnosis: analyzeRuntimeSnapshot(opened.snapshot),
+              diagnosis,
+              workflow: workflowMetadata(stage, baseline, diagnosis),
               status: session.snapshot(),
             };
           }
@@ -244,14 +478,20 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
                 includeExceptionInfo: true,
               },
             });
+            const diagnosis = run.snapshot
+              ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
+              : undefined;
+            const terminal = run.snapshot
+              ? undefined
+              : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
             return {
               mode,
               adapter,
               capabilities,
               run,
-              diagnosis: run.snapshot
-                ? analyzeRuntimeSnapshot(run.snapshot)
-                : terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+              diagnosis: diagnosis
+                ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+              workflow: workflowMetadata(stage, baseline, diagnosis, terminal),
               status: session.snapshot(),
             };
           }
@@ -269,12 +509,18 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               includeExceptionInfo: true,
             },
           });
+          const diagnosis = run.snapshot
+            ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
+            : undefined;
+          const terminal = run.snapshot
+            ? undefined
+            : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
           return {
             mode,
             run,
-            diagnosis: run.snapshot
-              ? analyzeRuntimeSnapshot(run.snapshot)
-              : terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+            diagnosis: diagnosis
+              ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+            workflow: workflowMetadata(stage, baseline, diagnosis, terminal),
             status: session.snapshot(),
           };
         }));

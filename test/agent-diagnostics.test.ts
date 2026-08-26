@@ -3,6 +3,14 @@ import test from 'node:test';
 
 import type { RuntimeSnapshot } from '../src/dap/session.js';
 import { analyzeRuntimeSnapshot, correlateSourceDisassembly } from '../src/diagnostics/analyze-snapshot.js';
+import {
+  analyzeCallChain,
+  analyzeInstructionOperands,
+  buildIntelligentDiagnosis,
+  compareVerificationBaseline,
+  selectProjectFrame,
+  type FrameEvidence,
+} from '../src/diagnostics/intelligent-diagnosis.js';
 
 function baseSnapshot(): RuntimeSnapshot {
   const frame = {
@@ -112,4 +120,257 @@ test('generic exception reports preserve adapter exception evidence', () => {
   assert.equal(diagnosis.exception?.exceptionId, 'MY_RUNTIME_EXCEPTION');
   assert.equal(diagnosis.hypotheses[0]?.kind, 'reported-exception');
   assert.match(diagnosis.hypotheses[0]?.title ?? '', /Unhandled runtime exception/);
+});
+
+test('project-frame selection skips system/runtime frames and prefers explicit project roots', () => {
+  const stack = [
+    {
+      id: 1,
+      name: 'RtlReportFatalFailure',
+      moduleId: 'ntdll.dll',
+      line: 0,
+      column: 0,
+      instructionPointerReference: '0x7000',
+    },
+    {
+      id: 2,
+      name: 'abort',
+      moduleId: 'ucrtbase.dll',
+      line: 0,
+      column: 0,
+      instructionPointerReference: '0x6000',
+    },
+    {
+      id: 3,
+      name: 'Widget::render',
+      moduleId: 'myapp.exe',
+      source: { name: 'widget.cpp', path: 'C:\\work\\myapp\\src\\widget.cpp' },
+      line: 88,
+      column: 5,
+      instructionPointerReference: '0x401000',
+    },
+  ];
+
+  const selection = selectProjectFrame(stack, {
+    projectRoots: ['C:\\work\\myapp'],
+    program: 'C:\\work\\myapp\\build\\myapp.exe',
+  });
+
+  assert.equal(selection.selected.index, 2);
+  assert.equal(selection.selected.frame.name, 'Widget::render');
+  assert.equal(selection.selected.projectControlled, true);
+  assert.equal(selection.selected.confidence, 'high');
+  assert.equal(selection.skippedRuntimeFrames, 2);
+});
+
+test('operand analysis binds a selected-frame memory register back to a pointer local', () => {
+  const frame = {
+    id: 3,
+    name: 'Widget::render',
+    source: { path: 'C:\\work\\myapp\\src\\widget.cpp' },
+    line: 88,
+    column: 5,
+    instructionPointerReference: '0x401000',
+  };
+  const evidence: FrameEvidence = {
+    index: 2,
+    frame,
+    locals: [{ name: 'widgetPtr', value: '0x0', type: 'Widget *', variablesReference: 0 }],
+    registers: [
+      { name: 'rax', value: '0x0', variablesReference: 0 },
+      { name: 'rcx', value: '0x1234', variablesReference: 0 },
+    ],
+    disassembly: [
+      { address: '0x400ffc', instruction: 'mov rax, rcx' },
+      { address: '0x401000', instruction: 'mov eax, dword ptr [rax]' },
+      { address: '0x401004', instruction: 'ret' },
+    ],
+  };
+
+  const analysis = analyzeInstructionOperands(evidence);
+
+  assert.equal(analysis.mnemonic, 'mov');
+  assert.equal(analysis.likelyFaultOperand?.register, 'rax');
+  assert.equal(analysis.likelyFaultOperand?.value, '0x0');
+  assert.equal(analysis.likelyFaultOperand?.confidence, 'medium');
+  assert.equal(analysis.likelyFaultOperand?.faultingFrame, false);
+  assert.equal(analysis.variableBindings[0]?.variable, 'widgetPtr');
+  assert.equal(analysis.variableBindings[0]?.register, 'rax');
+  assert.equal(analysis.variableBindings[0]?.confidence, 'high');
+});
+
+test('call-chain analysis traces distinctive poison values through project callers', () => {
+  const stack = [
+    {
+      id: 10,
+      name: 'Widget::render',
+      moduleId: 'myapp.exe',
+      source: { path: 'C:\\work\\myapp\\src\\widget.cpp' },
+      line: 88,
+      column: 5,
+    },
+    {
+      id: 11,
+      name: 'Scene::draw',
+      moduleId: 'myapp.exe',
+      source: { path: 'C:\\work\\myapp\\src\\scene.cpp' },
+      line: 51,
+      column: 3,
+    },
+    {
+      id: 12,
+      name: 'main',
+      moduleId: 'myapp.exe',
+      source: { path: 'C:\\work\\myapp\\src\\main.cpp' },
+      line: 20,
+      column: 3,
+    },
+  ];
+  const selection = selectProjectFrame(stack, { projectRoots: ['C:\\work\\myapp'] });
+  const evidence: FrameEvidence[] = [
+    {
+      index: 0,
+      frame: stack[0]!,
+      locals: [{ name: 'widget', value: '0xFEEEFEEE', type: 'Widget *', variablesReference: 0 }],
+      registers: [],
+    },
+    {
+      index: 1,
+      frame: stack[1]!,
+      locals: [{ name: 'selectedWidget', value: '0xFEEEFEEE', type: 'Widget *', variablesReference: 0 }],
+      registers: [],
+    },
+  ];
+
+  const chain = analyzeCallChain(selection, evidence);
+
+  assert.equal(chain.firstProjectFrame.function, 'Widget::render');
+  assert.equal(chain.projectCallerFrames[0]?.function, 'Scene::draw');
+  assert.equal(chain.provenance[0]?.value, '0xfeeefeee');
+  assert.deepEqual(chain.provenance[0]?.frames.map((frame) => frame.index), [0, 1]);
+  assert.equal(chain.provenance[0]?.confidence, 'high');
+});
+
+test('null values repeated across callers remain low-confidence provenance', () => {
+  const stack = [
+    { id: 20, name: 'callee', source: { path: '/work/src/a.cpp' }, line: 10, column: 1 },
+    { id: 21, name: 'caller', source: { path: '/work/src/b.cpp' }, line: 20, column: 1 },
+  ];
+  const selection = selectProjectFrame(stack, { projectRoots: ['/work'] });
+  const chain = analyzeCallChain(selection, [
+    {
+      index: 0,
+      frame: stack[0]!,
+      locals: [{ name: 'leftPtr', value: '0x0', type: 'Node *', variablesReference: 0 }],
+      registers: [],
+    },
+    {
+      index: 1,
+      frame: stack[1]!,
+      locals: [{ name: 'rightPtr', value: '0x0', type: 'Node *', variablesReference: 0 }],
+      registers: [],
+    },
+  ]);
+
+  assert.equal(chain.provenance[0]?.confidence, 'low');
+  assert.equal(chain.rootCauseCandidate.confidence, 'medium');
+});
+
+test('intelligent diagnosis emits a verification baseline and detects the same reproduced crash', () => {
+  const snapshot = baseSnapshot();
+  snapshot.exception = {
+    exceptionId: 'EXCEPTION_ACCESS_VIOLATION',
+    description: 'Access violation reading address 0x0',
+    breakMode: 'unhandled',
+  };
+  snapshot.locals = [{ name: 'userPtr', value: '0x0', type: 'User *', variablesReference: 0 }];
+  snapshot.registers = [{ name: 'rax', value: '0x0', variablesReference: 0 }];
+
+  const base = analyzeRuntimeSnapshot(snapshot);
+  const selection = selectProjectFrame(snapshot.stack, { projectRoots: ['/tmp'] });
+  const evidence: FrameEvidence[] = [{
+    index: 0,
+    frame: snapshot.frame,
+    locals: snapshot.locals,
+    registers: snapshot.registers,
+    disassembly: snapshot.disassembly,
+  }];
+  const diagnosis = buildIntelligentDiagnosis(snapshot, base, selection, evidence);
+
+  assert.equal(diagnosis.projectFrame.function, 'crash_here');
+  assert.equal(diagnosis.operandAnalysis.likelyFaultOperand?.register, 'rax');
+  assert.equal(diagnosis.operandAnalysis.likelyFaultOperand?.faultingFrame, true);
+  assert.equal(diagnosis.fixWorkflow.status, 'proposal-only');
+  assert.equal(diagnosis.fixWorkflow.phases.map((phase) => phase.phase).join(','), 'diagnose,fix,rebuild,reproduce,verify');
+
+  const verification = compareVerificationBaseline(diagnosis.verificationBaseline, diagnosis);
+  assert.equal(verification.verdict, 'not-fixed');
+  assert.equal(verification.confidence, 'high');
+});
+
+test('verification marks a clean reproduction exit as fixed with high confidence', () => {
+  const snapshot = baseSnapshot();
+  const base = analyzeRuntimeSnapshot(snapshot);
+  const selection = selectProjectFrame(snapshot.stack, { projectRoots: ['/tmp'] });
+  const diagnosis = buildIntelligentDiagnosis(snapshot, base, selection, [{
+    index: 0,
+    frame: snapshot.frame,
+    locals: snapshot.locals,
+    registers: snapshot.registers,
+    disassembly: snapshot.disassembly,
+  }]);
+
+  const verification = compareVerificationBaseline(
+    diagnosis.verificationBaseline,
+    undefined,
+    { event: 'exited', exitCode: 0 },
+  );
+
+  assert.equal(verification.verdict, 'fixed');
+  assert.equal(verification.confidence, 'high');
+});
+
+test('verification does not treat a non-crash breakpoint stop as proof of a fix', () => {
+  const crashSnapshot = baseSnapshot();
+  crashSnapshot.exception = {
+    exceptionId: 'EXCEPTION_ACCESS_VIOLATION',
+    description: 'Access violation reading address 0x0',
+    breakMode: 'unhandled',
+  };
+  const crashDiagnosis = buildIntelligentDiagnosis(
+    crashSnapshot,
+    analyzeRuntimeSnapshot(crashSnapshot),
+    selectProjectFrame(crashSnapshot.stack, { projectRoots: ['/tmp'] }),
+    [{
+      index: 0,
+      frame: crashSnapshot.frame,
+      locals: crashSnapshot.locals,
+      registers: crashSnapshot.registers,
+      disassembly: crashSnapshot.disassembly,
+    }],
+  );
+
+  const breakpointSnapshot = baseSnapshot();
+  breakpointSnapshot.stopped = { reason: 'breakpoint', threadId: 1, allThreadsStopped: true };
+  breakpointSnapshot.exception = undefined;
+  const breakpointDiagnosis = buildIntelligentDiagnosis(
+    breakpointSnapshot,
+    analyzeRuntimeSnapshot(breakpointSnapshot),
+    selectProjectFrame(breakpointSnapshot.stack, { projectRoots: ['/tmp'] }),
+    [{
+      index: 0,
+      frame: breakpointSnapshot.frame,
+      locals: breakpointSnapshot.locals,
+      registers: breakpointSnapshot.registers,
+      disassembly: breakpointSnapshot.disassembly,
+    }],
+  );
+
+  const verification = compareVerificationBaseline(
+    crashDiagnosis.verificationBaseline,
+    breakpointDiagnosis,
+  );
+
+  assert.equal(verification.verdict, 'inconclusive');
+  assert.equal(verification.confidence, 'low');
 });

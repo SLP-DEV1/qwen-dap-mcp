@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { buildCodeLldbDumpConfiguration } from '../src/adapters/codelldb-dump.js';
 import { DapSession } from '../src/dap/session.js';
+import { analyzeRuntimeSnapshot } from '../src/diagnostics/analyze-snapshot.js';
+import {
+  buildIntelligentDiagnosis,
+  selectProjectFrame,
+  type FrameEvidence,
+} from '../src/diagnostics/intelligent-diagnosis.js';
 
 function arg(name: string): string {
   const index = process.argv.indexOf(name);
@@ -65,11 +71,17 @@ try {
   assert.ok(projectFrame.instructionPointerReference, 'Expected an instruction pointer for the crash frame');
 
   const scopes = await session.scopes(projectFrame.id);
-  const localsScope = scopes.find((scope) => /locals?|arguments?/i.test(scope.name));
-  const locals =
-    localsScope && localsScope.variablesReference > 0
-      ? await session.variables(localsScope.variablesReference, 0, 100)
-      : [];
+  const localScopes = scopes.filter((scope) => /locals?|arguments?|parameters?/i.test(scope.name));
+  const registerScope = scopes.find((scope) => /register/i.test(scope.name));
+  const locals = [];
+  for (const scope of localScopes.slice(0, 3)) {
+    if (scope.variablesReference > 0) {
+      locals.push(...await session.variables(scope.variablesReference, 0, 100));
+    }
+  }
+  const registers = registerScope && registerScope.variablesReference > 0
+    ? await session.variables(registerScope.variablesReference, 0, 100)
+    : [];
 
   const modules = capabilities.supportsModulesRequest
     ? await session.modules(0, 100)
@@ -95,11 +107,50 @@ try {
   assert.ok(snapshot.stack.length > 0);
   assert.ok(snapshot.modules && snapshot.modules.length > 0);
 
+  const frameSelection = selectProjectFrame(snapshot.stack, {
+    projectRoots: [dirname(source)],
+    program,
+    callerDepth: 2,
+  });
+  assert.equal(
+    frameSelection.selected.frame.source?.path?.toLowerCase(),
+    source.toLowerCase(),
+    'Expected v0.9 frame selection to choose the project crash frame from the real dump',
+  );
+  assert.equal(frameSelection.selected.projectControlled, true);
+  assert.equal(frameSelection.selected.confidence, 'high');
+
+  const selectedIndex = frameSelection.selected.index;
+  const selectedEvidence: FrameEvidence = {
+    index: selectedIndex,
+    frame: frameSelection.selected.frame,
+    locals,
+    registers,
+    disassembly,
+  };
+  const intelligentDiagnosis = buildIntelligentDiagnosis(
+    snapshot,
+    analyzeRuntimeSnapshot(snapshot),
+    frameSelection,
+    [selectedEvidence],
+  );
+
+  assert.equal(intelligentDiagnosis.projectFrame.sourcePath?.toLowerCase(), source.toLowerCase());
+  assert.equal(intelligentDiagnosis.projectFrame.confidence, 'high');
+  assert.equal(intelligentDiagnosis.fixWorkflow.status, 'proposal-only');
+  assert.equal(intelligentDiagnosis.verificationBaseline.projectFunction, intelligentDiagnosis.projectFrame.function);
+  assert.ok(
+    intelligentDiagnosis.fixWorkflow.phases.some((phase) => phase.phase === 'verify'),
+    'Expected the intelligent diagnosis to include the verification phase',
+  );
+
   console.log('CodeLLDB crash-dump smoke: PASS');
   console.log(`threads: ${threads.length}`);
   console.log(`selected thread: ${selectedThread.id} ${selectedThread.name}`);
   console.log(`project frame: ${projectFrame.name}`);
   console.log(`source: ${projectFrame.source?.path ?? '<none>'}:${projectFrame.line}`);
+  console.log(`v0.9 frame index: ${frameSelection.selected.index}`);
+  console.log(`v0.9 frame confidence: ${frameSelection.selected.confidence}`);
   console.log(`instruction pointer: ${projectFrame.instructionPointerReference}`);
   console.log(`locals: ${locals.map((variable) => `${variable.name}=${variable.value}`).join(', ')}`);
   console.log(`modules: ${modules.length}`);

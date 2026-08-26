@@ -39,10 +39,27 @@ function validateSkill(content: string): void {
     assert.ok(content.includes(tool), `Skill must reference ${tool}`);
   }
 
+  const requiredV09Concepts = [
+    'projectFrame',
+    'frameSelection',
+    'operandAnalysis',
+    'callChain',
+    'fixWorkflow',
+    'verificationBaseline',
+    'changed-failure',
+    'inconclusive',
+  ];
+
+  for (const concept of requiredV09Concepts) {
+    assert.ok(content.includes(concept), `Skill must explain ${concept}`);
+  }
+
+  assert.match(content, /workflow\s*=\s*\{[\s\S]*?stage\s*:\s*["']verify["'][\s\S]*?baseline\s*:/i);
   assert.match(content, /authorized local targets/i);
   assert.match(content, /confidence/i);
   assert.match(content, /rebuild/i);
-  assert.match(content, /verify/i);
+  assert.match(content, /reproduce/i);
+  assert.match(content, /clean successful terminal outcome/i);
 }
 
 test('project and extension native-runtime-debug skills stay identical and valid', async () => {
