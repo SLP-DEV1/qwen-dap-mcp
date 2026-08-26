@@ -44,8 +44,11 @@ function validateSkill(content: string): void {
     'frameSelection',
     'operandAnalysis',
     'callChain',
+    'rootCauseBacktrack',
     'fixWorkflow',
     'verificationBaseline',
+    'verificationQuality',
+    'faultCorrelation',
     'changed-failure',
     'inconclusive',
   ];
@@ -55,10 +58,13 @@ function validateSkill(content: string): void {
   }
 
   const requiredAutonomousConcepts = [
+    'protocolVersion',
     'workflow.autonomousAgent',
     'rootFingerprint',
     'activeFingerprint',
     'nextActions',
+    'requires',
+    'propose-fix',
     'agentState',
     'needs-reproduction',
     'budget-exhausted',
@@ -77,6 +83,8 @@ function validateSkill(content: string): void {
   assert.match(content, /rebuild/i);
   assert.match(content, /reproduce/i);
   assert.match(content, /clean successful terminal outcome/i);
+  assert.match(content, /do \*\*not\*\* automatically revert/i);
+  assert.match(content, /external-unverified/i);
 }
 
 test('project and extension native-runtime-debug skills stay identical and valid', async () => {
