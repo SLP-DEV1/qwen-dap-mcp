@@ -1,6 +1,6 @@
 # GNU GDB DAP
 
-`qwen-dap-mcp` v0.14 adds a first-class GNU GDB path using GDB's built-in Debug Adapter Protocol interpreter.
+`qwen-dap-mcp` supports GNU GDB 14+ through GDB's built-in Debug Adapter Protocol interpreter.
 
 ## Requirements
 
@@ -36,9 +36,11 @@ Modern GDB DAP differs from CodeLLDB and `lldb-dap` in an important ordering det
 initialize -> initialized -> setBreakpoints -> configurationDone -> launch
 ```
 
-Source breakpoints can therefore be reported as pending before GDB knows the executable and become resolved when `launch` loads and starts the program. The bridge handles this ordering only for the GDB adapter path while preserving the existing CodeLLDB/`lldb-dap` lifecycle. The Linux smoke workflow exercises this sequence against the distribution GDB instead of relying only on mocked protocol ordering.
+Source breakpoints can therefore be reported as pending before GDB knows the executable and become resolved when `launch` loads and starts the program. The bridge handles this ordering only for the GDB adapter path while preserving the existing CodeLLDB/`lldb-dap` lifecycle. The Linux smoke workflow exercises this sequence against real distribution GDB.
 
-## High-level crash workflow
+## High-level workflows
+
+Crash diagnosis:
 
 ```text
 debug_this_crash(
@@ -49,7 +51,9 @@ debug_this_crash(
 )
 ```
 
-The same diagnosis, verification fingerprint, and bounded autonomous workflow used by CodeLLDB and `lldb-dap` are applied after GDB produces a stopped-state snapshot.
+Hang diagnosis uses the same adapter path through `debug_this_hang(mode="gdb", ...)`.
+
+After separate known-good/failing GDB sessions are stopped at comparable states, v0.17 can compare them with `debug_compare_runs`. A suspicious live value can then be followed with bounded `debug_trace_value` writer evidence when it is safe to resume that target.
 
 ## Manual full-toolset helpers
 
@@ -61,7 +65,24 @@ With `QWEN_DAP_MCP_TOOLSET=full`:
 - `debug_attach_gdb`
 - `debug_attach_gdb_remote`
 
-GDB's DAP `attach` request supports a local PID, a `target remote` string, or a core file. `debug_attach_gdb_remote` only connects to an endpoint you provide; the MCP server does not start `gdbserver` or open a listener.
+`debug_attach_gdb` is the dedicated local PID helper. `debug_attach_gdb_remote` is the dedicated hardened `gdbserver` helper.
+
+The underlying GDB DAP implementation can understand additional native GDB attach configuration shapes, but qwen-dap-mcp does **not** expose an arbitrary GDB target-string escape hatch through MCP. Remote MCP input is restricted to validated TCP endpoints.
+
+Preferred remote form:
+
+```text
+debug_attach_gdb_remote(
+  sessionId="remote-gdb",
+  host="127.0.0.1",
+  port=1234,
+  program="/local/symbols/app"
+)
+```
+
+The legacy `target` field on this dedicated helper is accepted only when it parses as a strict TCP `host:port` such as `localhost:1234` or `[::1]:1234`. Serial devices, arbitrary `target remote` syntax, injected debugger commands, and non-allowlisted network hosts are rejected. The MCP server never starts `gdbserver` itself.
+
+See [remote-debugging.md](remote-debugging.md) for the endpoint policy and tunneling guidance.
 
 ## Core files
 
@@ -75,9 +96,9 @@ debug_open_dump(
 
 Core-file sessions are marked postmortem/read-only by the same session guard used for CodeLLDB and upstream `lldb-dap` dumps.
 
-## Find the writer
+## Find or trace a writer
 
-`debug_find_writer` remains a high-level adapter-independent workflow, but GDB currently needs a compatibility path. In the real Ubuntu 24.04 smoke environment, GDB 15.1 does not advertise DAP `supportsDataBreakpoints`, even though GDB itself supports hardware watchpoints.
+`debug_find_writer` is the high-level one-shot writer workflow. GDB currently needs a compatibility path because real distribution GDB may support hardware watchpoints without advertising DAP `supportsDataBreakpoints`.
 
 For adapters that advertise native DAP data breakpoints, the bridge uses `dataBreakpointInfo` and `setDataBreakpoints`. For GDB without that capability flag, the bridge uses a deliberately bounded DAP `evaluate` request in `repl` context to issue exactly one of `watch`, `rwatch`, or `awatch` for the supplied expression:
 
@@ -88,6 +109,10 @@ debug_find_writer(
 )
 ```
 
-The GDB fallback does not expose a general command shell through the agent tool. The watch expression is length-bounded and rejects control characters or line breaks; conditional and hit-count watches are rejected on this fallback. The bridge parses the newly created GDB watchpoint number and later deletes only that temporary watchpoint.
+The fallback does not expose a general command shell through the agent tool. The watch expression is length-bounded and rejects control characters or line breaks; conditional and hit-count watches are rejected on this fallback. The bridge parses the newly created GDB watchpoint number and later deletes only that temporary watchpoint.
 
-After installation, the target resumes only to the first stop, exit, or termination. A confirmed data-breakpoint/watchpoint stop returns the immediate writer frame and bounded runtime evidence. An unrelated breakpoint, exception, or signal is returned without automatically continuing through it.
+`debug_trace_value` reuses the same bounded writer mechanism repeatedly to construct a temporal sequence. It stops on unrelated debugger events instead of silently continuing and is invalid for frozen postmortem targets.
+
+## Validation
+
+The Linux workflows exercise real GDB DAP for local launch/breakpoint/stack/variable evidence, real `gdbserver` attach, watchpoint behavior, concurrent remote multi-session isolation, and the v0.17 two-session Differential Runtime smoke.
