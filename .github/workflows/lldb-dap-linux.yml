@@ -13,6 +13,7 @@ on:
       - 'src/tools/register-lldb-dap-tools.ts'
       - 'test/lldb-dap-*.ts'
       - 'test/fixtures/native-smoke.cpp'
+      - 'test/fixtures/lldb-dap-crash.cpp'
       - '.github/workflows/lldb-dap-linux.yml'
       - 'package.json'
       - 'package-lock.json'
@@ -25,6 +26,7 @@ on:
       - 'src/tools/register-lldb-dap-tools.ts'
       - 'test/lldb-dap-*.ts'
       - 'test/fixtures/native-smoke.cpp'
+      - 'test/fixtures/lldb-dap-crash.cpp'
       - '.github/workflows/lldb-dap-linux.yml'
       - 'package.json'
       - 'package-lock.json'
@@ -63,14 +65,21 @@ jobs:
       - name: Install project dependencies
         run: npm ci --ignore-scripts
 
-      - name: Build project and native fixture
+      - name: Build project and native fixtures
         run: |
           npm run build
           mkdir -p build/lldb-dap-smoke
           g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/lldb-dap-smoke/native-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/lldb-dap-crash.cpp -o build/lldb-dap-smoke/lldb-dap-crash
 
       - name: Run real lldb-dap launch smoke through auto-discovery
         run: |
           env -u LLDB_DAP_PATH npx tsx test/lldb-dap-real-smoke.ts \
             --program build/lldb-dap-smoke/native-smoke \
             --source test/fixtures/native-smoke.cpp
+
+      - name: Run high-level debug_this_crash lldb-dap smoke
+        run: |
+          env -u LLDB_DAP_PATH npx tsx test/lldb-dap-high-level-smoke.ts \
+            --program build/lldb-dap-smoke/lldb-dap-crash \
+            --source test/fixtures/lldb-dap-crash.cpp
