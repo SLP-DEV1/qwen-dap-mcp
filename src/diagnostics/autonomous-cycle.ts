@@ -266,7 +266,11 @@ function action(
 
 export function buildRootCauseBacktrack(diagnosis: IntelligentCrashDiagnosis): RootCauseBacktrack {
   const operand = diagnosis.operandAnalysis.likelyFaultOperand;
-  const binding = diagnosis.operandAnalysis.variableBindings[0];
+  const binding = operand
+    ? diagnosis.operandAnalysis.variableBindings.find(
+        (candidate) => candidate.register.toLowerCase() === operand.register.toLowerCase(),
+      )
+    : diagnosis.operandAnalysis.variableBindings[0];
   const targetValue = normalizedValue(operand?.value ?? binding?.variableValue);
   const matchingTrail = targetValue
     ? diagnosis.callChain.provenance.find((item) => normalizedValue(item.value) === targetValue)
