@@ -4,6 +4,8 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.17.0 - 2026-08-26
+
 ### Added
 
 - Added `debug_compare_runs` as a read-only known-good versus failing runtime comparison across two explicit stopped DAP sessions, with semantic stack/local/register/exception/symbol/module differences and `firstMeaningfulDifference` prioritization.

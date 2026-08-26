@@ -1,8 +1,8 @@
 # Remote debugging and multi-session workflows
 
-v0.16 adds isolated debugger sessions plus hardened TCP attach paths for GNU `gdbserver` and LLVM `lldb-server gdbserver`.
+v0.16 introduced isolated debugger sessions plus hardened TCP attach paths for GNU `gdbserver` and LLVM `lldb-server gdbserver`. v0.17 builds on that session model with cross-session differential comparison.
 
-The MCP server itself is still local stdio. "Remote" here means that a local GDB/lldb-dap adapter connects to a native debug server endpoint that the user has explicitly authorized.
+The MCP server itself is still local stdio. "Remote" here means that a local GDB/lldb-dap adapter connects to a native debug-server endpoint that the user has explicitly authorized.
 
 ## Multi-session model
 
@@ -13,16 +13,21 @@ debug_sessions(action="create", sessionId="server-a")
 debug_sessions(action="create", sessionId="server-b")
 ```
 
-Then pass `sessionId` to any other `debug_*` tool:
+Most debugger tools take one optional `sessionId`:
 
 ```text
 debug_start_gdb(sessionId="server-a")
 debug_start_lldb_dap(sessionId="server-b")
 ```
 
-Omitting `sessionId` always targets `default`.
+Omitting `sessionId` on those routed tools always targets `default`.
 
-Session selection is request-local rather than process-global. Concurrent calls for `server-a` and `server-b` therefore route to separate `GuardedDapSession` instances. Each session owns its own adapter connection, lifecycle serialization, capabilities, configured/postmortem state, recent events/stderr, data-breakpoint state, timeout/uncertain-state handling, and HOL Guard context.
+Two exceptions matter:
+
+- `debug_sessions` manages the registry and is not routed through one selected session.
+- `debug_compare_runs` intentionally inspects two sessions at once and uses `baselineSessionId` plus `candidateSessionId` instead of a single `sessionId`.
+
+Session selection for normal single-session calls is request-local rather than process-global. Concurrent calls for `server-a` and `server-b` therefore route to separate `GuardedDapSession` instances. Each session owns its own adapter connection, lifecycle serialization, capabilities, configured/postmortem state, recent events/stderr, data-breakpoint state, timeout/operation state, and HOL Guard context.
 
 The default registry is bounded to eight sessions. Session IDs are 1-64 characters, begin with an alphanumeric character, and may otherwise contain letters, digits, `.`, `_`, or `-`.
 
@@ -38,7 +43,20 @@ Close a non-default session:
 debug_sessions(action="close", sessionId="server-a", terminateDebuggee=false)
 ```
 
-A session cannot be closed while a routed request is still active. Closing `default` disconnects/reset its debugger but preserves the default registry slot.
+A session cannot be closed while a routed request is still active. Closing `default` disconnects/resets its debugger but preserves the default registry slot.
+
+## Differential use of remote sessions
+
+Remote and local sessions can participate in the same read-only v0.17 comparison once both are already stopped at comparable logical states:
+
+```text
+debug_compare_runs(
+  baselineSessionId="server-a",
+  candidateSessionId="server-b"
+)
+```
+
+The comparison does not launch, attach, pause, continue, or mutate either target. Keep symbols/binaries matched to each corresponding session before interpreting source-level differences.
 
 ## Why remote endpoints are restricted
 
@@ -110,7 +128,7 @@ debug_attach_gdb_remote(
 
 `program` is optional but recommended when a matching local unstripped image is available. The local executable/debug symbols must correspond to the remote binary.
 
-For backwards compatibility, `target="localhost:1234"` is accepted only when it parses as a TCP `host:port`. Serial devices and arbitrary `target remote` argument strings are rejected.
+For backwards compatibility, `target="localhost:1234"` is accepted by the dedicated remote helper only when it parses as a validated TCP `host:port`. Serial devices and arbitrary `target remote` argument strings are rejected.
 
 After attach, use the same routed inspection/control tools as a local session:
 
@@ -128,7 +146,7 @@ Start the target through `lldb-server gdbserver`:
 lldb-server gdbserver 127.0.0.1:1235 -- ./build/app --repro
 ```
 
-For automated local tests, lldb-server also supports selecting an ephemeral port with `127.0.0.1:0` and reporting it through `--pipe`; qwen-dap-mcp's CI uses that path to avoid fixed-port collisions.
+For automated local tests, lldb-server can select an ephemeral port with `127.0.0.1:0` and report it through `--pipe`; qwen-dap-mcp CI uses that path to avoid fixed-port collisions.
 
 Create and initialize a separate lldb-dap session:
 
@@ -172,7 +190,7 @@ debug_attach_gdb_remote(sessionId="linux-gdb", host="127.0.0.1", port=1234, prog
 debug_attach_lldb_dap_remote(sessionId="service-lldb", host="127.0.0.1", port=1235, program="/symbols/b")
 ```
 
-Subsequent requests carry the matching `sessionId`. AsyncLocalStorage keeps the route bound to each individual MCP request, so interleaved operations do not overwrite a shared selector.
+Subsequent single-session requests carry the matching `sessionId`. `AsyncLocalStorage` keeps the route bound to each individual MCP request, so interleaved operations do not overwrite a shared selector.
 
 ## CI evidence
 
@@ -181,8 +199,9 @@ The Linux adapter workflows contain real end-to-end remote smoke tests:
 - GDB DAP starts and connects to a real `gdbserver`, sets a source breakpoint, continues, and verifies stack/variable evidence.
 - lldb-dap starts and connects to a real `lldb-server gdbserver`, sets a source breakpoint, continues, and verifies stack/variable evidence.
 - The LLDB smoke intentionally covers the compatibility path used by lldb-dap 18.
+- A separate multi-session remote smoke runs real GDB/gdbserver and lldb-dap/lldb-server concurrently and verifies session isolation.
 
-These are in addition to the existing local GDB watchpoint, lldb-dap launch/crash, Crash Lab, Hang Lab, package, container, and HOL Guard matrix.
+These are in addition to local GDB watchpoint, lldb-dap launch/crash, Differential Runtime, Crash Lab, Hang Lab, package, container, and HOL Guard coverage.
 
 ## Trust and HOL Guard
 
