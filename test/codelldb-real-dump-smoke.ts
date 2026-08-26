@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { dirname, resolve } from 'node:path';
 
-import { buildCodeLldbDumpConfiguration } from '../src/adapters/codelldb-dump.js';
-import { DapSession } from '../src/dap/session.js';
+import { GuardedDapSession } from '../src/dap/guarded-session.js';
 import { analyzeRuntimeSnapshot } from '../src/diagnostics/analyze-snapshot.js';
 import { startAutonomousCycle } from '../src/diagnostics/autonomous-cycle.js';
 import {
@@ -10,6 +9,7 @@ import {
   selectProjectFrame,
   type FrameEvidence,
 } from '../src/diagnostics/intelligent-diagnosis.js';
+import { openDump } from '../src/tools/register-dump-tools.js';
 
 function arg(name: string): string {
   const index = process.argv.indexOf(name);
@@ -23,19 +23,27 @@ const program = arg('--program');
 const dumpPath = arg('--dump');
 const source = arg('--source');
 
-const session = new DapSession();
+const session = new GuardedDapSession();
 
 try {
-  const capabilities = await session.start({
-    command: adapter,
-    adapterId: 'lldb',
+  const opened = await openDump(session, {
+    dumpPath,
+    program,
+    adapterPath: adapter,
     requestTimeoutMs: 45_000,
+    stackLevels: 30,
+    maxVariablesPerScope: 100,
+    includeModules: true,
+    moduleCount: 100,
+    includeDisassembly: true,
   });
 
-  const attach = await session.attach(
-    buildCodeLldbDumpConfiguration({ dumpPath, program }),
-  );
+  const { capabilities, attach } = opened;
   assert.equal((attach as { request?: string }).request, 'attach');
+  assert.equal(opened.mode, 'postmortem');
+  assert.equal(opened.readOnlyTarget, true);
+  assert.equal(opened.snapshot.postmortem, true);
+  assert.equal(session.isPostmortem(), true);
 
   const threads = await session.threads();
   assert.ok(threads.length > 0, 'Expected at least one thread in the crash dump');
@@ -105,6 +113,7 @@ try {
     includeExceptionInfo: true,
   });
 
+  assert.equal(snapshot.postmortem, true, 'Expected runtime snapshots from the dump session to preserve postmortem context');
   assert.ok(snapshot.stack.length > 0);
   assert.ok(snapshot.modules && snapshot.modules.length > 0);
 
@@ -138,6 +147,7 @@ try {
 
   assert.equal(intelligentDiagnosis.projectFrame.sourcePath?.toLowerCase(), source.toLowerCase());
   assert.equal(intelligentDiagnosis.projectFrame.confidence, 'high');
+  assert.equal(intelligentDiagnosis.classification.crashLikely, true);
   assert.equal(intelligentDiagnosis.fixWorkflow.status, 'proposal-only');
   assert.equal(intelligentDiagnosis.verificationBaseline.projectFunction, intelligentDiagnosis.projectFrame.function);
   assert.ok(

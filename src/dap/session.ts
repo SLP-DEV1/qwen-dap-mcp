@@ -42,6 +42,8 @@ export type RuntimeSnapshotCollectionError = {
 };
 
 export type RuntimeSnapshot = {
+  /** True when the captured state comes from a frozen core/minidump session. */
+  postmortem?: boolean;
   stopped?: unknown;
   thread: DebugProtocol.Thread;
   stack: DebugProtocol.StackFrame[];

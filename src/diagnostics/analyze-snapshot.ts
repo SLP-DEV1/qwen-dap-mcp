@@ -119,9 +119,12 @@ function diagnosticText(snapshot: RuntimeSnapshot): string {
 function exceptionFatality(snapshot: RuntimeSnapshot): boolean | undefined {
   const mode = snapshot.exception?.breakMode;
   if (mode === 'unhandled' || mode === 'userUnhandled') return true;
-  // `always` commonly means the debugger was configured to stop on every
-  // throw/first-chance exception. It is evidence of an exception, not proof
-  // that the process would have crashed if execution continued.
+  // In a live session `always` commonly means a configured first-chance stop.
+  // A frozen postmortem snapshot cannot be continued to determine handling, so
+  // do not let that adapter break-mode downgrade a recognized crash family.
+  // Returning undefined keeps generic/unknown exceptions conservative while
+  // allowing explicit access-violation/SIGSEGV/etc. evidence to remain crash-likely.
+  if (snapshot.postmortem && (mode === 'always' || mode === 'never')) return undefined;
   if (mode === 'always' || mode === 'never') return false;
   return undefined;
 }
