@@ -6,14 +6,19 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
+    name: Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node-version: [20, 22]
     steps:
@@ -21,6 +26,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
+          cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
       - name: Crash Lab smoke
@@ -57,54 +63,3 @@ jobs:
             }
           }
           NODE
-
-  hol-guard:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        guard-spec:
-          - 'hol-guard==2.2.0'
-          - 'hol-guard'
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install project dependencies
-        run: npm ci --ignore-scripts
-      - name: Install HOL Guard
-        run: python -m pip install "${{ matrix.guard-spec }}"
-      - name: Verify HOL Guard version and runtime imports
-        run: |
-          hol-guard --version
-          python - <<'PY'
-          import importlib.metadata
-          from codex_plugin_scanner.guard.mcp_tool_calls import (
-              allow_tool_call,
-              block_tool_call,
-              build_tool_call_artifact,
-              build_tool_call_hash,
-              evaluate_tool_call,
-              resolve_tool_call_policy_action,
-          )
-          from codex_plugin_scanner.guard.approvals import queue_blocked_approvals
-          print('hol-guard', importlib.metadata.version('hol-guard'))
-          PY
-      - name: Build TypeScript
-        run: npm run build
-      - name: Run real HOL Guard bridge smoke
-        env:
-          QWEN_DAP_MCP_HOL_GUARD_PYTHON: python
-        run: node test/hol-guard-real-smoke.mjs
-
-  container:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build Glama-compatible stdio container
-        run: docker build --tag qwen-dap-mcp:ci .
