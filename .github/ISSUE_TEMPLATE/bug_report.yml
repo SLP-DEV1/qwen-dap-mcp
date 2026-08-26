@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible debugger, MCP, packaging, or crash-analysis problem
+description: Report a reproducible debugger, MCP, packaging, policy, or runtime-analysis problem
 title: "bug: "
 labels:
   - bug
@@ -12,28 +12,28 @@ body:
     id: version
     attributes:
       label: qwen-dap-mcp version
-      placeholder: v0.11.1
+      placeholder: v0.17.0
     validations:
       required: true
   - type: input
     id: platform
     attributes:
       label: OS / architecture
-      placeholder: Windows 11 x64
+      placeholder: Windows 11 x64 or Ubuntu 24.04 x86_64
     validations:
       required: true
   - type: input
     id: node
     attributes:
       label: Node.js version
-      placeholder: 22.x
+      placeholder: 20.x or 22.x
     validations:
       required: true
   - type: input
     id: adapter
     attributes:
       label: DAP adapter / version
-      placeholder: CodeLLDB 1.x
+      placeholder: CodeLLDB 1.12.x, lldb-dap 18+, or GDB 14+
     validations:
       required: true
   - type: dropdown
@@ -42,10 +42,16 @@ body:
       label: Workflow
       options:
         - Live launch
-        - Live attach
-        - Crash dump / minidump
-        - Autonomous debug workflow
-        - Packaging / installation
+        - Local PID attach
+        - Remote gdbserver / lldb-server attach
+        - Crash dump / core / minidump
+        - Crash diagnosis / autonomous verification
+        - Hang / deadlock triage
+        - Multi-session routing
+        - Differential compare_runs
+        - Writer tracing / trace_value / find_writer
+        - HOL Guard / DAP policy
+        - Packaging / installation / publishing
         - Other
     validations:
       required: true
@@ -53,7 +59,7 @@ body:
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: Give the smallest reliable sequence that reproduces the problem.
+      description: Give the smallest reliable sequence that reproduces the problem, including session IDs when multi-session behavior matters.
     validations:
       required: true
   - type: textarea
@@ -72,7 +78,7 @@ body:
     id: logs
     attributes:
       label: Sanitized logs / debugger evidence
-      description: Include relevant stderr output or DAP evidence. Remove secrets and private data.
+      description: Include relevant stderr output, DAP evidence, symbol-health limitations, or workflow output. Remove secrets and private data.
       render: text
   - type: checkboxes
     id: checks
@@ -81,5 +87,7 @@ body:
       options:
         - label: I searched existing issues for the same problem.
           required: true
-        - label: I removed secrets, confidential source, and sensitive dump data.
+        - label: I removed secrets, confidential source, sensitive dump data, and identifying local paths.
+          required: true
+        - label: Any live/remote target in this report is a target I am authorized to debug.
           required: true
