@@ -107,7 +107,10 @@ export async function runToStop(
         : await session.launch(options.configuration, breakpoints);
     } catch (error) {
       outcomeWait.cancel();
-      await outcomeWait.promise;
+      // The outcome timer may already have rejected while launch/attach was
+      // still failing. That stale wait must never mask the actionable DAP
+      // request error that brought us here.
+      await outcomeWait.promise.catch(() => undefined);
       throw error;
     }
 
