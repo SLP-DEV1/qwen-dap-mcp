@@ -44,7 +44,7 @@ const snapshotSchema = z.object({
 const analysisSchema = z.object({
   projectRoots: z.array(z.string().min(1)).max(20).optional(),
   projectModules: z.array(z.string().min(1)).max(50).optional(),
-  callerDepth: z.number().int().nonnegative().max(5).default(2),
+  callerDepth: z.number().int().nonnegative().max(8).default(3),
 });
 const diagnosisCategorySchema = z.enum([
   'access-violation',
@@ -232,7 +232,7 @@ async function diagnoseSnapshot(
 ): Promise<IntelligentCrashDiagnosis> {
   const base = analyzeRuntimeSnapshot(snapshot);
   const selection = selectProjectFrame(snapshot.stack, analysisOptions);
-  const callerDepth = analysisOptions.callerDepth ?? 2;
+  const callerDepth = analysisOptions.callerDepth ?? 3;
   const evidenceIndexes = [
     selection.selected.index,
     ...selection.assessments
@@ -310,6 +310,7 @@ function workflowMetadata(
         return {
           stage,
           autonomousAgent: {
+            protocolVersion: 2,
             shouldContinue: false,
             status: 'blocked',
             stopReason: terminal?.event === 'exited' && terminal.exitCode === 0
@@ -434,17 +435,15 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Debug This Crash',
       description:
-        'High-level debugging-agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. workflow.stage="autonomous" adds a bounded serialized agent loop with crash fingerprints, iteration history, next-action decisions, changed-failure re-baselining, and deterministic fixed/blocked/budget-exhausted stop conditions.',
+        'High-level debugging-agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. workflow.stage="autonomous" adds a bounded serialized agent loop with formal action dependencies, runtime root-cause backtracking, verification quality scoring, crash fingerprints, changed-failure re-baselining, and deterministic fixed/blocked/budget-exhausted stop conditions.',
       inputSchema: z.object({
         mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current'),
 
-        // Generic initialized-session live mode.
         request: z.enum(['launch', 'attach']).default('launch'),
         configuration: jsonRecord.optional(),
         breakpoints: z.array(breakpointGroupSchema).optional(),
         timeoutMs: z.number().int().min(1000).max(120000).default(30000),
 
-        // CodeLLDB one-call launch mode and dump mode.
         program: z.string().min(1).optional(),
         args: z.array(z.string()).optional(),
         cwd: z.string().optional(),
@@ -453,7 +452,6 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
         adapterPath: z.string().min(1).optional(),
         requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000),
 
-        // Dump mode.
         dumpPath: z.string().min(1).optional(),
         sourceMap: z.record(z.string(), z.string()).optional(),
 
@@ -532,6 +530,16 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
 
           if (mode === 'codelldb') {
             if (!program) throw new DapError("debug_this_crash mode='codelldb' requires program.");
+
+            // Validate program/cwd before spawning CodeLLDB. A bad local input
+            // should fail as a preflight error and leave the session idle.
+            const launchConfiguration = buildCodeLldbLaunchConfiguration({
+              program,
+              ...(args ? { args } : {}),
+              ...(cwd ? { cwd } : {}),
+              ...(env ? { env } : {}),
+              stopOnEntry,
+            });
             const adapter = discoverCodeLldb({
               ...(adapterPath ? { explicitPath: adapterPath } : {}),
             });
@@ -540,13 +548,6 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               adapterId: 'lldb',
               ...(cwd ? { cwd } : {}),
               requestTimeoutMs,
-            });
-            const launchConfiguration = buildCodeLldbLaunchConfiguration({
-              program,
-              ...(args ? { args } : {}),
-              ...(cwd ? { cwd } : {}),
-              ...(env ? { env } : {}),
-              stopOnEntry,
             });
             const run = await runToStop(session, {
               request: 'launch',
