@@ -1,0 +1,51 @@
+name: Apply v0.12.1 hardening on macOS
+
+on:
+  push:
+    branches:
+      - hardening/v0.12.1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: hardening/v0.12.1
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Reuse hardening patch from primary helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/apply-v0121-hardening.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY", start)
+          body = workflow[start:end]
+          code = '\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines())
+          exec(compile(code, '<hardening-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+
+      - name: Generate lockfile and verify clean install
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+
+      - name: Commit project changes and remove helpers
+        run: |
+          git rm .github/workflows/apply-v0121-hardening.yml .github/workflows/apply-v0121-hardening-macos.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: harden packaging and release pipeline for v0.12.1'
+          git push origin HEAD:hardening/v0.12.1
