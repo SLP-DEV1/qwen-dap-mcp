@@ -4,6 +4,7 @@ export type ToolsetMode = 'agent' | 'full';
 
 export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
+  'debug_this_hang',
   'debug_diagnose_stop',
   'debug_source_disassembly',
   'debug_find_writer',

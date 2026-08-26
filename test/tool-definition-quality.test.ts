@@ -5,6 +5,7 @@ import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js'
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
+import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
 import { AGENT_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
 
@@ -26,13 +27,14 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
       definitions.set(name, config);
     },
   };
-  const agentServer = filterToolRegistrar(server as never, new Set<string>(AGENT_TOOL_NAMES));
+  const agentServer = filterToolRegistrar(server as never, 'agent');
   const session = {} as never;
 
   registerDebugTools(agentServer as never, session);
   registerDumpTools(agentServer as never, session);
   registerRunToStopTool(agentServer as never, session);
   registerAgentDiagnosticTools(agentServer as never, session);
+  registerHangDiagnosticTool(agentServer as never, session);
   registerFindWriterTool(agentServer as never, session);
 
   return definitions;
@@ -87,7 +89,14 @@ test('agent tool annotations distinguish inspection from target execution', () =
     assert.equal(annotations?.openWorldHint, false, `${name} is local-only inspection`);
   }
 
-  for (const name of ['debug_this_crash', 'debug_find_writer', 'debug_run_to_stop', 'debug_continue', 'debug_disconnect']) {
+  for (const name of [
+    'debug_this_crash',
+    'debug_this_hang',
+    'debug_find_writer',
+    'debug_run_to_stop',
+    'debug_continue',
+    'debug_disconnect',
+  ]) {
     assert.equal(
       definitions.get(name)?.annotations?.readOnlyHint,
       false,
@@ -95,11 +104,17 @@ test('agent tool annotations distinguish inspection from target execution', () =
     );
   }
 
-  for (const name of ['debug_this_crash', 'debug_find_writer', 'debug_run_to_stop', 'debug_continue']) {
+  for (const name of [
+    'debug_this_crash',
+    'debug_this_hang',
+    'debug_find_writer',
+    'debug_run_to_stop',
+    'debug_continue',
+  ]) {
     assert.equal(
       definitions.get(name)?.annotations?.destructiveHint,
       true,
-      `${name} can execute target code with application side effects`,
+      `${name} can execute or pause target code with application side effects`,
     );
     assert.equal(
       definitions.get(name)?.annotations?.openWorldHint,

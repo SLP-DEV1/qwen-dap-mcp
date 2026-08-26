@@ -93,6 +93,31 @@ export const debugThisCrashOutputSchema = z.object({
   status: sessionStatusOutputSchema,
 }).catchall(z.unknown());
 
+export const debugThisHangOutputSchema = z.object({
+  mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'gdb']),
+  observation: z.object({
+    suspectedHang: z.boolean(),
+    trigger: z.string(),
+  }).catchall(z.unknown()),
+  evidence: z.array(z.unknown()).optional(),
+  diagnosis: z.object({
+    summary: z.string(),
+    classification: z.enum(['deadlock-candidate', 'lock-contention', 'global-wait', 'io-wait', 'mixed-wait', 'no-deadlock-signal', 'unknown']),
+    confidence: z.enum(['low', 'medium', 'high']),
+    allThreadTriage: z.array(z.unknown()),
+    deadlock: z.unknown(),
+    pointerProvenance: z.object({
+      version: z.literal(2),
+      groups: z.array(z.unknown()),
+      nullLike: z.array(z.unknown()),
+      limitations: z.array(z.string()),
+    }).catchall(z.unknown()),
+    nextActions: z.array(z.string()),
+    limitations: z.array(z.string()),
+  }).catchall(z.unknown()).optional(),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
 export const debugFindWriterOutputSchema = z.object({
   query: z.object({
     name: z.string(),
@@ -153,6 +178,7 @@ export const debugDisconnectOutputSchema = z.object({ disconnected: z.literal(tr
 
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
+  debug_this_hang: debugThisHangOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,

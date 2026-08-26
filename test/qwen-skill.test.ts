@@ -18,11 +18,12 @@ const builtServerPath = fileURLToPath(new URL('../dist/index.js', import.meta.ur
 
 function validateSkill(content: string): void {
   assert.match(content, /^---\r?\nname: native-runtime-debug\r?\n/m);
-  assert.match(content, /description:\s*Diagnose native C\/C\+\+ runtime bugs/);
+  assert.match(content, /description:\s*Diagnose native C\/C\+\+/);
   assert.match(content, /\r?\n---\r?\n/);
 
   const requiredTools = [
     'debug_this_crash',
+    'debug_this_hang',
     'debug_diagnose_stop',
     'debug_source_disassembly',
     'debug_run_to_stop',

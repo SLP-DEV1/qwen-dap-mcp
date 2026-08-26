@@ -18,10 +18,12 @@ test('agent is the default toolset and full remains opt-in', () => {
 
 test('agent toolset exposes the high-level workflow surface and hides manual tools', () => {
   assert.ok(AGENT_TOOL_NAMES.has('debug_this_crash'));
+  assert.ok(AGENT_TOOL_NAMES.has('debug_this_hang'));
   assert.ok(AGENT_TOOL_NAMES.has('debug_open_dump'));
   assert.ok(AGENT_TOOL_NAMES.has('debug_find_writer'));
   assert.ok(AGENT_TOOL_NAMES.has('debug_disconnect'));
   assert.equal(toolsetAllows('agent', 'debug_this_crash'), true);
+  assert.equal(toolsetAllows('agent', 'debug_this_hang'), true);
   assert.equal(toolsetAllows('agent', 'debug_find_writer'), true);
   assert.equal(toolsetAllows('agent', 'debug_set_data_breakpoints'), false);
   assert.equal(toolsetAllows('agent', 'debug_read_memory'), false);
@@ -38,11 +40,11 @@ test('registration filter suppresses hidden schemas without changing handlers', 
   };
 
   const agent = filterToolRegistrar(registrar, 'agent');
-  const allowed = agent.registerTool('debug_this_crash', {}, () => undefined);
+  const allowed = agent.registerTool('debug_this_hang', {}, () => undefined);
   const hidden = agent.registerTool('debug_evaluate', {}, () => undefined);
 
-  assert.deepEqual(registered, ['debug_this_crash']);
-  assert.deepEqual(allowed, { name: 'debug_this_crash' });
+  assert.deepEqual(registered, ['debug_this_hang']);
+  assert.deepEqual(allowed, { name: 'debug_this_hang' });
   assert.equal(typeof hidden.disable, 'function');
   assert.equal(typeof hidden.enable, 'function');
   assert.equal(typeof hidden.update, 'function');

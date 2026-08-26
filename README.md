@@ -2,7 +2,7 @@
 
 **Give Qwen Code a real native debugger.**
 
-A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash analysis, and bounded autonomous fix/verify loops.
+A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash/hang analysis, and bounded autonomous fix/verify loops.
 
 [![CI](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SLP-DEV1/qwen-dap-mcp)](https://github.com/SLP-DEV1/qwen-dap-mcp/releases/latest)
@@ -16,14 +16,15 @@ Published on **npm** as [`@slp-dev1/qwen-dap-mcp`](https://www.npmjs.com/package
 
 ## Why this exists
 
-Coding agents are good at reading and editing source, but native crashes often need evidence that only a debugger can provide: stack frames, registers, locals, disassembly, exception state, memory, modules, and crash dumps.
+Coding agents are good at reading and editing source, but native crashes and hangs often need evidence that only a debugger can provide: all-thread stacks, registers, locals, disassembly, exception state, memory, modules, wait states, and crash dumps.
 
 `qwen-dap-mcp` exposes that evidence through MCP so Qwen Code and other MCP clients can reason about native failures without embedding a debugger protocol inside the agent.
 
 ### What it can do
 
 - **Autonomous crash debugging** — diagnose → inspect source → propose fix → apply fix → build → reproduce → verify.
-- **Real native debugger evidence** — stack, registers, locals, exception state, modules, disassembly, memory, and source correlation.
+- **Native hang/deadlock triage** — `debug_this_hang` captures bounded all-thread stacks, classifies waits, identifies deadlock candidates, and correlates Pointer-Provenance v2 across threads.
+- **Real native debugger evidence** — stacks, registers, locals, exception state, modules, disassembly, memory, wait states, and source correlation.
 - **CodeLLDB integration** — launch or attach to authorized local native targets through DAP.
 - **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.
 - **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, remote-target, and core-file support through `--interpreter=dap`.
@@ -118,7 +119,7 @@ Qwen Code is the primary integration and the path covered by the project's exten
 
 ## Debugger adapters
 
-CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` for LLVM's adapter or `debug_this_crash(mode="gdb")` for GDB 14+. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `dumpAdapter="lldb-dap"`.
+CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` / `debug_this_hang(mode="lldb-dap")` for LLVM's adapter or the corresponding `mode="gdb"` for GDB 14+. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `debug_this_crash(..., dumpAdapter="lldb-dap")`.
 
 LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md) and [docs/gdb-dap.md](docs/gdb-dap.md).
 
@@ -155,14 +156,14 @@ The roadmap is intentionally ordered around capabilities that make the bridge mo
 | Release | Focus | Planned capabilities |
 | --- | --- | --- |
 | **v0.14** | GNU debugger + runtime provenance | First-class GDB DAP, `debug_find_writer`, structured MCP results/output schemas, symbol-health reporting, real GDB Linux smoke coverage |
-| **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, pointer provenance v2, expanded Crash Lab |
+| **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, Pointer-Provenance v2, deterministic native Hang Lab |
 | **v0.16** | Remote/multi-session + evidence | hardened gdbserver/lldb-server workflows, multi-session architecture, existing LLDB-session interoperability where practical, cross-adapter benchmark matrix |
 
 Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
 
 ### Structured agent results
 
-The ten default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
+The eleven default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
 
 ## Autonomous crash debugging
 
@@ -232,6 +233,36 @@ The server keeps no hidden autonomous-loop memory. Qwen Code performs requested 
 | `budget-exhausted` | Maximum automatic fix attempts reached |
 | `blocked` | Trustworthy evidence for another autonomous edit is unavailable |
 
+## Hang and concurrency triage (v0.15)
+
+`debug_this_hang` is the high-level workflow for a process that appears stuck, deadlocked, permanently waiting, or spinning. It can inspect the current configured session or own a CodeLLDB/lldb-dap/GDB launch/attach, observe it for a bounded interval, pause the target when necessary, then collect all-thread evidence.
+
+```text
+debug_this_hang(
+  mode="codelldb",
+  request="launch",
+  program="C:\\build\\app.exe",
+  args=["--repro-hang"],
+  cwd="C:\\repo\\app",
+  observeMs=5000,
+  analysis={projectRoots:["C:\\repo\\app"]}
+)
+```
+
+The result includes:
+
+- `observation` — whether the target timed out, stopped, exited, or terminated during the bounded observation window,
+- `allThreadTriage` — bounded stacks plus recognized wait/runnable state for every captured thread,
+- `deadlock` — conservative global classification such as `deadlock-candidate`, `lock-contention`, `global-wait`, `io-wait`, or `mixed-wait`,
+- `pointerProvenance` — Pointer-Provenance v2 groups equal pointer/memory-reference values across thread/frame boundaries,
+- `nextActions` and explicit limitations.
+
+Generic DAP does not expose a portable lock-owner graph, so stack/wait evidence alone never sets `cycleProven=true`. A `deadlock-candidate` is evidence consistent with deadlock, not proof. Normal condition-variable/event/semaphore/timer worker waits are not promoted to deadlock by themselves. Equal cross-thread pointer addresses are alias evidence, not proof of lock ownership or causality.
+
+If an existing stop is only thread-local, `debug_this_hang` does not silently treat it as a process-wide freeze; it attempts bounded pauses for remaining threads before triage. Launch, attach, and pause continue through the same built-in/HOL Guard policy boundaries as the rest of the debugger.
+
+See [docs/hang-debugging.md](docs/hang-debugging.md) for the full evidence model, modes, safety semantics, and deterministic Hang Lab.
+
 ## Intelligent diagnosis
 
 The diagnosis layer separates raw debugger facts from inference and reports:
@@ -276,8 +307,10 @@ Qwen Code / MCP client
    qwen-dap-mcp
         │
         ├── lifecycle/concurrency guard
-        ├── bounded DAP snapshot layer
+        ├── bounded DAP snapshot + all-thread capture layer
         ├── crash classification
+        ├── wait/deadlock heuristics
+        ├── Pointer-Provenance v2 cross-thread correlation
         ├── project-frame scoring
         ├── operand/register/local correlation
         ├── call-chain provenance
@@ -287,7 +320,7 @@ Qwen Code / MCP client
         │
         │ DAP over stdio
         ▼
- CodeLLDB / lldb-dap / DAP adapter
+ CodeLLDB / lldb-dap / GDB DAP adapter
         │
         ├── authorized live target
         └── crash dump / core file
@@ -297,13 +330,14 @@ The MCP server has no HTTP listener. The adapter is spawned locally without a sh
 
 ## MCP toolsets
 
-The default `agent` toolset deliberately exposes only the ten high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
+The default `agent` toolset deliberately exposes only the eleven high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
 
 ### Default `agent` tools
 
 | Tool | Purpose |
 | --- | --- |
 | `debug_this_crash` | High-level live/CodeLLDB/lldb-dap/dump diagnosis, verification, and autonomous orchestration |
+| `debug_this_hang` | High-level hang/deadlock workflow with bounded all-thread triage, wait heuristics, and Pointer-Provenance v2 |
 | `debug_diagnose_stop` | Intelligent diagnosis of the current stopped state |
 | `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |
 | `debug_find_writer` | Temporarily watch a suspicious value and stop at its immediate runtime writer |
@@ -358,6 +392,15 @@ npm run check
 
 `npm run check` performs TypeScript build, tests, and extension-package staging. CI runs Node 20 and 22.
 
+The deterministic native Hang Lab can also be built and reproduced directly:
+
+```bash
+npm run demo:hang:build -- deadlock
+npm run demo:hang:repro -- deadlock
+```
+
+The hang repro succeeds only when the process remains blocked until its bounded timeout.
+
 ## Safety model
 
 - local stdio MCP transport only,
@@ -367,6 +410,9 @@ npm run check
 - optional HOL Guard 2.2+ policy gate for adapter spawn and mutating/executable DAP actions,
 - HOL Guard approvals bound to canonical adapter identity, executable hash, workspace, arguments, and environment fingerprint,
 - secret-bearing DAP/adapter values are hashed before entering the HOL Guard policy bridge,
+- `debug_this_hang` launch/attach/pause operations use the same guarded DAP boundaries,
+- deadlock/wait classifications are bounded heuristics and never fabricate a lock-owner cycle,
+- Pointer-Provenance v2 treats cross-thread address equality as correlation evidence, not ownership proof,
 - no automatic source rollback without external evidence,
 - live attach intended only for authorized local targets,
 - postmortem dumps frozen against execution-control operations,

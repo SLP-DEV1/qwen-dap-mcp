@@ -1,13 +1,63 @@
 ---
 name: native-runtime-debug
-description: Diagnose native C/C++ runtime bugs and crash dumps with qwen-dap-mcp and DAP. Use for crashes, minidumps/core dumps, bad runtime state, unexpected variable changes, breakpoint-driven investigation, and verifying native fixes with CodeLLDB or another authorized local DAP target.
+description: Diagnose native C/C++ crashes, hangs/deadlocks, bad runtime state, and crash dumps with qwen-dap-mcp and DAP. Use for crashes, minidumps/core dumps, processes that stop making progress, lock/wait triage, unexpected variable changes, breakpoint-driven investigation, and verifying native fixes with CodeLLDB or another authorized local DAP target.
 ---
 
 # Native Runtime Debugging
 
 Use `qwen-dap-mcp` to reason from structured debugger evidence instead of guessing from logs. This skill is for software, crash artifacts, and authorized local targets the user owns or is permitted to debug.
 
-## Prefer `debug_this_crash`
+## Choose the high-level workflow first
+
+Use `debug_this_crash` for fatal exceptions/signals, invalid memory accesses, aborts, and crash verification. Use `debug_this_hang` when the process appears stuck, deadlocked, waiting forever, or spinning without useful forward progress.
+
+Do not use a crash-only interpretation for a hang snapshot and do not turn a hang heuristic into certainty.
+
+## Prefer `debug_this_hang` for hangs and deadlocks
+
+For a suspected hang in an already configured session:
+
+```text
+debug_this_hang(
+  mode="current",
+  analysis={projectRoots:[...], projectModules:[...]}
+)
+```
+
+For a bounded live reproduction:
+
+```text
+debug_this_hang(
+  mode="codelldb",
+  request="launch",
+  program=...,
+  args=[...],
+  cwd=...,
+  observeMs=5000,
+  analysis={projectRoots:[...]}
+)
+```
+
+Read the result in this order:
+
+1. `observation`: why the capture happened. A timeout establishes only that no stop/exit/termination happened in the bounded window; it is not proof of zero forward progress.
+2. `allThreadTriage`: every bounded debugger-visible thread, its top/project frame, and recognized wait state.
+3. `deadlock`: global wait/deadlock classification plus limitations.
+4. `pointerProvenance`: Pointer-Provenance v2 cross-thread aliases and synchronization-related addresses.
+5. `nextActions`: the narrowest evidence needed to confirm ownership or investigate forward progress.
+
+Important interpretation rules:
+
+- `deadlock-candidate` means the capture is **consistent with deadlock**, not that a wait-for cycle is proven.
+- Generic DAP has no portable lock-owner graph. Respect `cycleProven=false` / `ownershipGraphAvailable=false` unless separate adapter-specific evidence closes the ownership edges.
+- Condition-variable, semaphore, event, scheduler, and timer waits are common in healthy worker pools and are not enough by themselves to call deadlock.
+- Equal pointer addresses across threads are correlation/alias evidence. They do not prove ownership, object lifetime, or causality.
+- A single-thread `stopped` event is not automatically an all-thread freeze. `debug_this_hang` attempts bounded pauses of remaining threads before triage when the adapter did not report `allThreadsStopped=true`.
+- If no blocking primitive is recognized and a project-controlled thread appears runnable, investigate busy-loop/livelock behavior rather than forcing a deadlock diagnosis.
+
+Launch/attach/pause can change the target's execution state. Use executable/attach modes only for authorized targets. When HOL Guard is enabled, these boundaries remain policy-gated; read-only thread/stack/scope/variable collection stays on the inspection fast path.
+
+## Prefer `debug_this_crash` for crashes
 
 For crash-fixing work, prefer the high-level workflow instead of manually chaining raw DAP calls:
 
@@ -26,7 +76,7 @@ The first autonomous call returns `workflow.autonomousAgent`. Treat it as a form
 
 Read:
 
-- `protocolVersion`: action protocol version. v0.11 uses version 2.
+- `protocolVersion`: action protocol version.
 - `state.rootFingerprint`: immutable signature of the original failure.
 - `state.activeFingerprint`: crash currently being fixed.
 - `state.iteration` / `maxIterations`: bounded fix-attempt budget.
@@ -67,7 +117,7 @@ When evidence is weak the MCP emits `collect-evidence` instead of a patch action
 
 qwen-dap-mcp intentionally does not expose a general shell, arbitrary source writer, git reset, or arbitrary memory-write primitive. Use Qwen Code's normal authorized coding/build tools for source inspection, editing, builds, tests, and repository operations.
 
-## Continue an autonomous cycle
+## Continue an autonomous crash cycle
 
 After the requested edit/rebuild, reproduce the same scenario and pass the returned state back unchanged:
 
@@ -100,9 +150,9 @@ Do not invent, partially copy, or edit serialized state yourself. The MCP owns f
 
 ### Rollback policy
 
-Do **not** automatically revert a patch just because verification reports `changed-failure`. A changed crash can mean either a regression or that the original fix exposed a downstream defect. qwen-dap-mcp therefore does not automatically emit a rollback action. Preserve the patch, diagnose the changed failure, compare the causal evidence, and only use normal source-control tools to revert when the source/build evidence supports that decision.
+Do **not** automatically revert a patch just because verification reports `changed-failure`. A changed crash can mean either a regression or that the original fix exposed a downstream defect. Preserve the patch, diagnose the changed failure, compare the causal evidence, and only use normal source-control tools to revert when the source/build evidence supports that decision.
 
-## Read the intelligent diagnosis in this order
+## Read the intelligent crash diagnosis in this order
 
 1. `classification`: crash/stop family and confidence.
 2. `faultLocation`: raw debugger stop frame.
@@ -194,7 +244,7 @@ A DAP exception stop whose exception info indicates an always/configured break c
 
 ## Manual diagnose → fix → rebuild → reproduce → verify
 
-Autonomous mode is optional.
+Autonomous crash mode is optional.
 
 Diagnose, preserve the returned baseline, edit with normal coding tools, rebuild with matching symbols, then run:
 
@@ -255,6 +305,8 @@ Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
 
 A stale original dump cannot verify a source fix. Use a rebuilt live reproduction or a newly generated dump.
 
+A frozen dump/core can also be fed to `debug_this_hang(mode="current")` only after the dump has already been opened in the shared session. Treat that as wait-state inspection, not proof that the original live process was hung.
+
 ## Raw/live fallback
 
 Use lower-level tools only for a concrete unanswered question from the high-level diagnosis.
@@ -276,7 +328,7 @@ Typical fallback:
 
 ### Unexpected variable write
 
-Use a live data breakpoint instead of repeatedly stepping:
+Use `debug_find_writer` when possible instead of manually chaining the watchpoint setup. For the full manual surface:
 
 ```text
 1. debug_snapshot()
@@ -290,11 +342,11 @@ Use a live data breakpoint instead of repeatedly stepping:
 
 ## Windows CodeLLDB pause caveat
 
-A requested `debug_pause` on Windows can surface as `DebugBreak` / `0x80000003`. Do not classify that alone as an application crash when it immediately follows a requested pause.
+A requested `debug_pause` on Windows can surface as `DebugBreak` / `0x80000003`. Do not classify that alone as an application crash when it immediately follows a requested pause. The same applies to a pause initiated by `debug_this_hang`: the pause exists to freeze evidence, not to manufacture a crash classification.
 
 ## Completion standard
 
-A strong final result records:
+For a crash, a strong final result records:
 
 - how state was captured
 - raw exception/stop evidence
@@ -310,4 +362,14 @@ A strong final result records:
 - verification quality and its external-unverified fields
 - exact clean reproduction evidence when claiming `fixed`
 
-Never call a bug fixed solely because the source looks plausible or execution reached a nonfatal stop.
+For a hang, record:
+
+- how the suspected hang was established or observed,
+- whether all-thread stop was confirmed or only best-effort,
+- all-thread wait/runnable classification,
+- deadlock classification and its explicit limitations,
+- Pointer-Provenance v2 cross-thread aliases used as evidence,
+- any independent lock-owner/ownership evidence,
+- source change and reproduction result if a fix is attempted.
+
+Never call a crash fixed solely because the source looks plausible or execution reached a nonfatal stop, and never call a deadlock proven solely from generic stack wait heuristics.

@@ -4,6 +4,7 @@ import test from 'node:test';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
 import { AGENT_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-output.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
+import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
@@ -27,6 +28,7 @@ function captureRegistrations() {
   const session = { snapshot: () => status };
 
   registerAgentDiagnosticTools(server as never, session as never);
+  registerHangDiagnosticTool(server as never, session as never);
   registerFindWriterTool(server as never, session as never);
   registerRunToStopTool(server as never, session as never);
   registerDumpTools(server as never, session as never);
