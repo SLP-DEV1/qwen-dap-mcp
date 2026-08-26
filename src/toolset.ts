@@ -99,7 +99,27 @@ export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
   return mode === 'full' || AGENT_TOOL_NAMES.has(toolName);
 }
 
+/**
+ * Add explicit MCP behavior metadata to legacy/manual tool registrations.
+ * This is intentionally separate from toolset filtering so callers that use
+ * filterToolRegistrar(..., 'full') retain the historical identity/no-op path.
+ */
+export function annotateToolRegistrar<T extends ToolRegistrar>(registrar: T): T {
+  return new Proxy(registrar, {
+    get(target, property, receiver) {
+      if (property === 'registerTool') {
+        return (name: string, ...args: any[]) =>
+          target.registerTool.call(target, name, ...withBehaviorAnnotations(name, args));
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode: ToolsetMode): T {
+  if (mode === 'full') return registrar;
+
   return new Proxy(registrar, {
     get(target, property, receiver) {
       if (property === 'registerTool') {
@@ -108,7 +128,7 @@ export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode:
             logger.debug('Tool registration filtered by active toolset', { mode, tool: name });
             return FILTERED_TOOL_HANDLE;
           }
-          return target.registerTool.call(target, name, ...withBehaviorAnnotations(name, args));
+          return target.registerTool.call(target, name, ...args);
         };
       }
 
