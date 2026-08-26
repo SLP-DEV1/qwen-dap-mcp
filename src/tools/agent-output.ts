@@ -223,10 +223,37 @@ export const debugCompareRunsOutputSchema = z.object({
   guidance: z.array(z.string()),
 }).catchall(z.unknown());
 
+export const debugTraceValueOutputSchema = z.object({
+  query: z.object({
+    name: z.string(),
+    accessType: z.enum(['write', 'readWrite']),
+    maxStops: z.number().int().positive(),
+    timeoutMs: z.number().int().positive(),
+    perStopTimeoutMs: z.number().int().positive(),
+  }).catchall(z.unknown()),
+  events: z.array(z.object({
+    index: z.number().int().positive(),
+    strategy: z.enum(['dap-data-breakpoint', 'gdb-watch']),
+    hitConfirmed: z.boolean(),
+    outcome: z.object({ event: z.enum(['stopped', 'exited', 'terminated']), body: z.unknown().optional() }),
+    writerFrame: dapFrameSchema.optional(),
+    writerCorrelation: z.unknown().optional(),
+    beforeValue: z.unknown().optional(),
+    afterValue: z.unknown().optional(),
+    valueChanged: z.boolean().optional(),
+  }).catchall(z.unknown())),
+  stopReason: z.enum(['max-stops', 'target-exited', 'target-terminated', 'unrelated-stop', 'no-writer-snapshot', 'error']),
+  terminalError: z.string().optional(),
+  finalSnapshot: runtimeSnapshotOutputSchema,
+  guidance: z.array(z.string()),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
   debug_compare_runs: debugCompareRunsOutputSchema,
+  debug_trace_value: debugTraceValueOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,
