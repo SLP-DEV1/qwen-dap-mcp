@@ -27,6 +27,11 @@ type ResumeOutcome = {
   body?: unknown;
 };
 
+type ResumeWait = {
+  promise: Promise<ResumeOutcome>;
+  cancel: () => void;
+};
+
 type WatchInstallation = {
   strategy: 'dap-data-breakpoint' | 'gdb-watch';
   resolution: unknown;
@@ -60,20 +65,85 @@ function gdbWatchCommand(accessType: 'read' | 'write' | 'readWrite', expression:
 }
 
 function parseGdbWatchpointId(result: string): number | undefined {
-  const match = result.match(/\bwatchpoint\s+(\d+)\b/i);
+  const match = result.match(/\b(?:hardware\s+)?(?:access\s+|read\s+)?watchpoint(?:\s+number)?\s+(\d+)\b/i);
   if (!match) return undefined;
   const value = Number(match[1]);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+function parseGdbWatchpointIdFromListing(result: string, expression: string): number | undefined {
+  const normalizedExpression = expression.trim().toLowerCase();
+  for (const line of result.split(/\r?\n/)) {
+    const lowered = line.toLowerCase();
+    if (!/watchpoint/.test(lowered) || !lowered.includes(normalizedExpression)) continue;
+    const match = /^\s*(\d+)\b/.exec(line);
+    const value = match?.[1] ? Number(match[1]) : NaN;
+    if (Number.isSafeInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function createResumeWait(session: GuardedDapSession, timeoutMs: number): ResumeWait {
+  let settled = false;
+  let timer!: NodeJS.Timeout;
+  let resolvePromise!: (outcome: ResumeOutcome) => void;
+  let rejectPromise!: (error: Error) => void;
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    session.connection.off('event', onEvent);
+    session.connection.off('adapterExit', onAdapterExit);
+    session.connection.off('adapterError', onAdapterError);
+  };
+  const finish = (outcome?: ResumeOutcome, error?: Error) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    if (error) rejectPromise(error);
+    else resolvePromise(outcome!);
+  };
+  const onEvent = (event: DebugProtocol.Event) => {
+    if (event.event !== 'stopped' && event.event !== 'exited' && event.event !== 'terminated') return;
+    finish({ event: event.event, body: event.body });
+  };
+  const onAdapterExit = () => finish(undefined, new DapError('DAP adapter exited while waiting for writer watch outcome.'));
+  const onAdapterError = (error: unknown) => finish(
+    undefined,
+    error instanceof Error ? error : new DapError('DAP adapter failed while waiting for writer watch outcome.'),
+  );
+
+  const promise = new Promise<ResumeOutcome>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+    timer = setTimeout(
+      () => finish(undefined, new DapError(`Timed out after ${timeoutMs} ms waiting for writer watch outcome.`)),
+      timeoutMs,
+    );
+    session.connection.on('event', onEvent);
+    session.connection.on('adapterExit', onAdapterExit);
+    session.connection.on('adapterError', onAdapterError);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolvePromise({ event: 'terminated', body: { cancelled: true } });
+    },
+  };
+}
+
 async function continueToOutcome(session: GuardedDapSession, threadId: number, timeoutMs: number): Promise<ResumeOutcome> {
-  const outcome = Promise.any([
-    session.connection.waitForEvent('stopped', timeoutMs).then((event) => ({ event: 'stopped' as const, body: event.body })),
-    session.connection.waitForEvent('exited', timeoutMs).then((event) => ({ event: 'exited' as const, body: event.body })),
-    session.connection.waitForEvent('terminated', timeoutMs).then((event) => ({ event: 'terminated' as const, body: event.body })),
-  ]);
-  await session.continueExecution(threadId, false, timeoutMs);
-  return outcome;
+  const waiter = createResumeWait(session, timeoutMs);
+  try {
+    await session.continueExecution(threadId, false, timeoutMs);
+    return await waiter.promise;
+  } catch (error) {
+    waiter.cancel();
+    throw error;
+  }
 }
 
 async function restoreDataBreakpoints(
@@ -148,10 +218,20 @@ async function installGdbWatchpoint(
 
   const command = gdbWatchCommand(requestedAccess, options.name);
   const response = await session.evaluate(command, frameId, 'repl');
-  const watchpointId = parseGdbWatchpointId(response.result);
+  let watchpointId = parseGdbWatchpointId(response.result);
+  let listingResult: string | undefined;
+  if (!watchpointId) {
+    try {
+      const listing = await session.evaluate('info breakpoints', frameId, 'repl');
+      listingResult = listing.result;
+      watchpointId = parseGdbWatchpointIdFromListing(listing.result, options.name);
+    } catch {
+      // Keep the original parse failure below; never issue a broad delete/clear command.
+    }
+  }
   if (!watchpointId) {
     throw new DapError(
-      `GDB accepted the watch command but qwen-dap-mcp could not identify the temporary watchpoint number for safe cleanup. GDB response: ${response.result}`,
+      `GDB accepted the watch command but qwen-dap-mcp could not identify the temporary watchpoint number for safe cleanup. GDB response: ${response.result}${listingResult ? `; breakpoint listing: ${listingResult}` : ''}`,
     );
   }
 
@@ -236,7 +316,9 @@ export async function findWriter(session: GuardedDapSession, options: FindWriter
 
     let after;
     if (outcome.event === 'stopped') {
-      after = await session.runtimeSnapshot({ ...snapshotOptions, threadId: selectedThreadId });
+      const stopped = outcome.body as DebugProtocol.StoppedEvent['body'] | undefined;
+      const stoppedThreadId = stopped?.threadId ?? selectedThreadId;
+      after = await session.runtimeSnapshot({ ...snapshotOptions, threadId: stoppedThreadId });
     }
     const cleanupWarning = await watch.cleanup(after?.frame.id ?? frameId);
     const hitConfirmed = outcome.event === 'stopped' && isDataBreakpointStop(outcome.body);
@@ -268,7 +350,7 @@ export async function findWriter(session: GuardedDapSession, options: FindWriter
         : {}),
       ...(cleanupWarning ? { cleanupWarning } : {}),
       guidance: hitConfirmed
-        ? 'The debugger reported a data-breakpoint/watchpoint stop. The top frame is the immediate writer candidate; inspect its source and callers before making a causal claim.'
+        ? 'The debugger reported a data-breakpoint/watchpoint stop. The stopped event thread is captured as the immediate writer candidate; inspect its source and callers before making a causal claim.'
         : outcome.event === 'stopped'
           ? 'Execution stopped for another reason before the watched write. Inspect this stop; call debug_find_writer again only if it is safe to continue the reproduction.'
           : 'The target exited or terminated before the watched write was observed.',
