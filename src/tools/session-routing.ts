@@ -28,7 +28,8 @@ function extendInputSchema(config: any): any {
  *
  * debug_sessions itself is excluded because its sessionId field identifies the
  * session being managed rather than the session that should receive a routed
- * debugger operation.
+ * debugger operation. debug_compare_runs is also excluded because it explicitly
+ * owns two independent session IDs in one read-only comparison request.
  */
 export function routeSessionToolRegistrar<T extends ToolRegistrar>(
   registrar: T,
@@ -38,7 +39,7 @@ export function routeSessionToolRegistrar<T extends ToolRegistrar>(
     get(target, property, receiver) {
       if (property === 'registerTool') {
         return (name: string, ...args: any[]) => {
-          if (!name.startsWith('debug_') || name === 'debug_sessions') {
+          if (!name.startsWith('debug_') || name === 'debug_sessions' || name === 'debug_compare_runs') {
             return target.registerTool.call(target, name, ...args);
           }
 

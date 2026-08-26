@@ -1,6 +1,6 @@
 ---
 name: native-runtime-debug
-description: Diagnose native C/C++ crashes, hangs/deadlocks, bad runtime state, and crash dumps with qwen-dap-mcp and DAP. Use for crashes, minidumps/core dumps, processes that stop making progress, lock/wait triage, unexpected variable changes, breakpoint-driven investigation, and verifying native fixes with CodeLLDB or another authorized local DAP target.
+description: Diagnose native C/C++ crashes, hangs/deadlocks, bad runtime state, and crash dumps with qwen-dap-mcp and DAP. Use for crashes, minidumps/core dumps, processes that stop making progress, lock/wait triage, unexpected variable changes, differential good-versus-bad runtime comparison, bounded value/write tracing, breakpoint-driven investigation, and verifying native fixes with CodeLLDB or another authorized local DAP target.
 ---
 
 # Native Runtime Debugging
@@ -11,7 +11,65 @@ Use `qwen-dap-mcp` to reason from structured debugger evidence instead of guessi
 
 Use `debug_this_crash` for fatal exceptions/signals, invalid memory accesses, aborts, and crash verification. Use `debug_this_hang` when the process appears stuck, deadlocked, waiting forever, or spinning without useful forward progress.
 
-Do not use a crash-only interpretation for a hang snapshot and do not turn a hang heuristic into certainty.
+When a known-good reproduction and a failing/changed reproduction can be stopped at comparable runtime states, use `debug_compare_runs` before guessing from source. If that comparison identifies a suspicious debugger-visible value and the live target is safe to resume, use `debug_trace_value` to gather bounded temporal writer evidence.
+
+Do not use a crash-only interpretation for a hang snapshot and do not turn a hang heuristic, static runtime difference, or observed writer into certainty.
+
+## Differential and causal debugging
+
+For a known-good versus failing comparison, keep the two runs in different DAP sessions:
+
+```text
+debug_sessions(action="create", sessionId="baseline")
+debug_sessions(action="create", sessionId="candidate")
+```
+
+Drive each session to the same logical phase using the normal lifecycle or high-level tools, then compare the stopped states:
+
+```text
+debug_compare_runs(
+  baselineSessionId="baseline",
+  candidateSessionId="candidate",
+  timeoutMs=30000,
+  snapshot={stackLevels:20, maxVariablesPerScope:100, includeModules:true}
+)
+```
+
+`debug_compare_runs` is read-only. Read its result in this order:
+
+1. `diff.firstMeaningfulDifference`: prioritized semantic difference, not proof of causality.
+2. `diff.locals`: local/argument value changes.
+3. `diff.exception`: exception-state differences.
+4. `diff.stack`: changed call path/frame identity.
+5. `diff.registers`: lower-level register differences.
+6. `diff.symbolHealth` and `diff.modules`: comparison-quality drift.
+7. `evidenceBudget`: actual bounded capture limits used for both sessions.
+8. `diff.limitations`: explicit interpretation limits.
+
+Raw non-null pointer addresses frequently differ across independent processes because of ASLR, allocation, stack layout, or timing. qwen-dap-mcp therefore marks non-null address-only changes as `unstable` instead of promoting them to causal evidence. A null/non-null transition is a semantic state change and is meaningful evidence.
+
+If a suspicious value needs temporal evidence, trace it in the live candidate session:
+
+```text
+debug_trace_value(
+  sessionId="candidate",
+  name="critical_ptr",
+  accessType="write",
+  maxStops=8,
+  timeoutMs=60000,
+  perStopTimeoutMs=15000
+)
+```
+
+`debug_trace_value` repeatedly installs one temporary data breakpoint/watchpoint, resumes to the next confirmed writer, captures the actual stopped thread/frame and before/after visible value when available, removes only its own temporary watch, and repeats within an aggregate deadline. It stops on unrelated debugger events rather than silently continuing through them.
+
+Use `debug_find_writer` when one immediate writer is enough. Use `debug_trace_value` when the sequence of writes matters.
+
+A confirmed writer is temporal evidence, not automatic root-cause proof. Confirm assignment, lifetime, and ownership semantics in source. `debug_trace_value` changes execution state and must not be used for frozen dumps or targets that are unsafe to resume. Built-in DAP policy and optional HOL Guard enforcement still apply.
+
+The v0.17 operation context propagates aggregate deadlines/cancellation into nested DAP requests and event waits. Cancelled pending requests lose authority immediately, and transport-generation isolation prevents late responses/output from a retired adapter from contaminating a later workflow.
+
+See `docs/differential-debugging.md` in the project for the complete evidence model and real GDB regression coverage.
 
 ## Prefer `debug_this_hang` for hangs and deadlocks
 
@@ -300,6 +358,7 @@ Never use these on a dump:
 - `debug_pause`
 - `debug_data_breakpoint_info`
 - `debug_set_data_breakpoints`
+- `debug_trace_value`
 
 Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
 
@@ -328,7 +387,7 @@ Typical fallback:
 
 ### Unexpected variable write
 
-Use `debug_find_writer` when possible instead of manually chaining the watchpoint setup. For the full manual surface:
+Use `debug_find_writer` when one immediate writer is enough. Use `debug_trace_value` when repeated live writes must be observed as a bounded sequence. For the full manual surface:
 
 ```text
 1. debug_snapshot()
@@ -345,6 +404,18 @@ Use `debug_find_writer` when possible instead of manually chaining the watchpoin
 A requested `debug_pause` on Windows can surface as `DebugBreak` / `0x80000003`. Do not classify that alone as an application crash when it immediately follows a requested pause. The same applies to a pause initiated by `debug_this_hang`: the pause exists to freeze evidence, not to manufacture a crash classification.
 
 ## Completion standard
+
+For differential/causal debugging, record:
+
+- baseline and candidate session/reproduction identities,
+- whether the two stops represent a comparable logical execution phase,
+- `evidenceBudget` used for each comparison,
+- the first meaningful semantic difference and relevant alternate differences,
+- which raw address differences were deliberately classified `unstable`,
+- any nullability/state transition used as stronger evidence,
+- the bounded `debug_trace_value` writer timeline when temporal evidence was needed,
+- unrelated/terminal stop reason and operation deadline/budget,
+- source-confirmed producer/ownership semantics before calling a writer causal.
 
 For a crash, a strong final result records:
 
@@ -372,4 +443,4 @@ For a hang, record:
 - any independent lock-owner/ownership evidence,
 - source change and reproduction result if a fix is attempted.
 
-Never call a crash fixed solely because the source looks plausible or execution reached a nonfatal stop, and never call a deadlock proven solely from generic stack wait heuristics.
+Never call a crash fixed solely because the source looks plausible or execution reached a nonfatal stop, never call a deadlock proven solely from generic stack wait heuristics, and never call a differential value or observed writer the root cause without source/temporal evidence that supports the causal link.

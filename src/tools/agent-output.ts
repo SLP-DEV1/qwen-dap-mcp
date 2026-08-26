@@ -190,9 +190,83 @@ export const debugSessionsOutputSchema = z.object({
   })),
 }).catchall(z.unknown());
 
+const runtimeComparisonSideSchema = z.object({
+  sessionId: z.string(),
+  snapshot: runtimeSnapshotOutputSchema,
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
+const differentialEvidenceBudgetSchema = z.object({
+  timeoutMs: z.number().int().positive(),
+  sessions: z.literal(2),
+  stackLevels: z.number().int().positive(),
+  maxVariablesPerScope: z.number().int().positive(),
+  includeDisassembly: z.boolean(),
+  disassemblyInstructionsPerSession: z.number().int().nonnegative(),
+  includeModules: z.boolean(),
+  moduleCountPerSession: z.number().int().nonnegative(),
+  includeExceptionInfo: z.boolean(),
+});
+
+export const debugCompareRunsOutputSchema = z.object({
+  baselineSessionId: z.string(),
+  candidateSessionId: z.string(),
+  evidenceBudget: differentialEvidenceBudgetSchema,
+  baseline: runtimeComparisonSideSchema,
+  candidate: runtimeComparisonSideSchema,
+  diff: z.object({
+    summary: z.object({
+      meaningfulDifferences: z.number().int().nonnegative(),
+      changedLocals: z.number().int().nonnegative(),
+      changedRegisters: z.number().int().nonnegative(),
+      unstableValues: z.number().int().nonnegative(),
+      stackChanges: z.number().int().nonnegative(),
+      addedModules: z.number().int().nonnegative(),
+      removedModules: z.number().int().nonnegative(),
+    }),
+    stack: z.unknown(),
+    locals: z.array(z.unknown()),
+    registers: z.array(z.unknown()),
+    exception: z.unknown(),
+    symbolHealth: z.unknown(),
+    modules: z.unknown(),
+    firstMeaningfulDifference: z.unknown().optional(),
+    limitations: z.array(z.string()),
+  }).catchall(z.unknown()),
+  guidance: z.array(z.string()),
+}).catchall(z.unknown());
+
+export const debugTraceValueOutputSchema = z.object({
+  query: z.object({
+    name: z.string(),
+    accessType: z.enum(['write', 'readWrite']),
+    maxStops: z.number().int().positive(),
+    timeoutMs: z.number().int().positive(),
+    perStopTimeoutMs: z.number().int().positive(),
+  }).catchall(z.unknown()),
+  events: z.array(z.object({
+    index: z.number().int().positive(),
+    strategy: z.enum(['dap-data-breakpoint', 'gdb-watch']),
+    hitConfirmed: z.boolean(),
+    outcome: z.object({ event: z.enum(['stopped', 'exited', 'terminated']), body: z.unknown().optional() }),
+    writerFrame: dapFrameSchema.optional(),
+    writerCorrelation: z.unknown().optional(),
+    beforeValue: z.unknown().optional(),
+    afterValue: z.unknown().optional(),
+    valueChanged: z.boolean().optional(),
+  }).catchall(z.unknown())),
+  stopReason: z.enum(['max-stops', 'target-exited', 'target-terminated', 'unrelated-stop', 'no-writer-snapshot', 'error']),
+  terminalError: z.string().optional(),
+  finalSnapshot: runtimeSnapshotOutputSchema,
+  guidance: z.array(z.string()),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
+  debug_compare_runs: debugCompareRunsOutputSchema,
+  debug_trace_value: debugTraceValueOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,

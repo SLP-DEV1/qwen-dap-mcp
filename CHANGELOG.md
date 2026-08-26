@@ -4,6 +4,54 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added `debug_compare_runs` as a read-only known-good versus failing runtime comparison across two explicit stopped DAP sessions, with semantic stack/local/register/exception/symbol/module differences and `firstMeaningfulDifference` prioritization.
+- Added ASLR-aware runtime value comparison that classifies non-null raw address-only changes as `unstable` while preserving null/non-null transitions as meaningful state evidence.
+- Added `debug_trace_value` for a bounded temporal sequence of real DAP data-breakpoint or GDB watchpoint writer stops, including actual stopped-thread/frame evidence and visible before/after values when available.
+- Added explicit differential `evidenceBudget` output and a dedicated `docs/differential-debugging.md` workflow guide.
+- Expanded the compact default agent surface to fourteen tools with `debug_compare_runs` and `debug_trace_value`.
+- Added a real two-process GNU GDB DAP differential regression workflow that drives separate baseline/candidate sessions to comparable stopped states and invokes the real cross-session MCP handler.
+
+### Fixed / hardened
+
+- Added request-local DAP operation contexts with aggregate deadlines and AbortSignal propagation into nested DAP requests and event waiters.
+- Cancelled pending requests now lose completion authority immediately so later adapter responses are orphaned rather than completing an expired workflow.
+- Added transport-generation isolation so late output, errors, responses, or exits from a retired adapter process cannot contaminate a replacement debugger generation.
+- Made operation deadlines authoritative over near-simultaneous local event timers to avoid deadline races that could surface as the wrong timeout class.
+- Kept `debug_compare_runs` inspection-only and outside the normal single-session router because one request intentionally reads two isolated sessions.
+- Kept `debug_trace_value` conservative around target execution: temporary watches are cleaned up, unrelated debugger stops terminate the trace, postmortem targets are rejected, and the whole timeline is bounded by stop/per-stop/aggregate limits.
+- Hardened the real differential regression against adapter-specific variable-scope quirks by proving cross-session execution-path divergence with stable native caller frames while unit tests separately lock down exact nullability semantics.
+
+### Validation in this feature branch
+
+- Unit coverage exercises semantic address instability, nullability changes, Windows path canonicalization, exception/module differences, value-trace matching, operation cancellation, orphaned late responses, and transport-generation isolation.
+- Dedicated GDB DAP, upstream `lldb-dap`, multi-session remote, HOL Guard minimum/latest, standard Node.js 20/22, package, and container workflows are used as the final v0.17 acceptance matrix.
+
+## 0.16.0 - 2026-08-26
+
+### Added
+
+- Added bounded request-local multi-session debugging with `DapSessionRegistry`, a backward-compatible `default` session, and `debug_sessions` create/list/close lifecycle management.
+- Added optional `sessionId` routing across debugger tools through `AsyncLocalStorage`, keeping each session's DAP transport, lifecycle state, events, watchpoints, timeout state, postmortem state, and HOL Guard context isolated.
+- Added hardened GNU GDB DAP → `gdbserver` remote attach through validated TCP host/port endpoints and exact non-loopback allowlisting via `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS`.
+- Added hardened upstream `lldb-dap` → `lldb-server gdbserver` remote attach with the same endpoint policy and a generated single `gdb-remote host:port` compatibility command for lldb-dap 18.
+- Added real Linux remote and concurrent cross-adapter multi-session smoke coverage for GDB/gdbserver and lldb-dap/lldb-server.
+- Expanded the compact default agent surface to twelve tools with `debug_sessions`.
+
+### Fixed / hardened
+
+- Removed process-global session selection from concurrent MCP calls; session identity is bound to each asynchronous request and stripped before existing tool handlers run.
+- Fail closed on unknown/invalid session IDs and refuse user-facing close while a routed request is active.
+- Restricted remote debugger targets to validated TCP endpoints, rejected arbitrary GDB target syntax and user-supplied LLDB attach commands, and kept loopback as the default trust boundary.
+- Preserved per-session debugger/HOL Guard policy isolation and cleanly tear down all owned adapter transports on MCP server shutdown without terminating debuggees by default.
+
+### Verified
+
+- Node.js 20/22 `npm run check`, Crash Lab, Hang Lab, scoped npm package verification, and container build passed on the v0.16 feature head.
+- HOL Guard latest and minimum supported `2.2.0` real bridge smoke passed.
+- Real GDB/gdbserver, lldb-dap/lldb-server, and concurrent cross-adapter multi-session remote smoke passed before the `v0.16.0` release.
+
 ## 0.15.0 - 2026-08-26
 
 ### Added

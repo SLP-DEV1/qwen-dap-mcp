@@ -7,9 +7,11 @@ import { AGENT_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-outpu
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
+import { registerDifferentialTools } from '../src/tools/register-differential-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
+import { registerValueTracingTool } from '../src/tools/value-tracing.js';
 import { AGENT_TOOL_NAMES } from '../src/toolset.js';
 
 function captureRegistrations() {
@@ -31,9 +33,11 @@ function captureRegistrations() {
   const registry = new DapSessionRegistry();
 
   registerSessionTools(server as never, registry);
+  registerDifferentialTools(server as never, registry);
   registerAgentDiagnosticTools(server as never, session as never);
   registerHangDiagnosticTool(server as never, session as never);
   registerFindWriterTool(server as never, session as never);
+  registerValueTracingTool(server as never, session as never);
   registerRunToStopTool(server as never, session as never);
   registerDumpTools(server as never, session as never);
   registerDebugTools(server as never, session as never);

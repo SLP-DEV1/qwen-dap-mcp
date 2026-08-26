@@ -5,6 +5,7 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import { resolveExistingDirectory } from '../local-path.js';
 import { logger } from '../logger.js';
 import { DapError, DapRequestError, DapTimeoutError } from './errors.js';
+import { currentDapOperationContext } from './operation-context.js';
 import {
   createDapRequestPolicy,
   resolveDapPolicyMode,
@@ -14,9 +15,11 @@ import {
 
 type PendingRequest = {
   command: string;
+  generation: number;
   resolve: (response: DebugProtocol.Response) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  cleanup: () => void;
 };
 
 export type DapAdapterStartOptions = {
@@ -74,6 +77,7 @@ export class DapConnection extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private buffer = Buffer.alloc(0);
   private nextSeq = 1;
+  private transportGeneration = 0;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly eventHistory: DapEventRecord[] = [];
   private readonly stderrLines: string[] = [];
@@ -98,6 +102,10 @@ export class DapConnection extends EventEmitter {
     return this.child?.pid;
   }
 
+  get generation(): number {
+    return this.transportGeneration;
+  }
+
   get recentEvents(): readonly DapEventRecord[] {
     return this.eventHistory;
   }
@@ -117,6 +125,7 @@ export class DapConnection extends EventEmitter {
     logger.debug('Starting DAP adapter', { command: options.command, ...(cwd ? { cwd } : {}) });
 
     this.rejectAll(new DapError('DAP adapter session replaced'));
+    this.transportGeneration += 1;
     this.child = undefined;
     this.buffer = Buffer.alloc(0);
     this.nextSeq = 1;
@@ -169,6 +178,7 @@ export class DapConnection extends EventEmitter {
       }
       logger.info('DAP adapter exited', { pid: child.pid, code, signal });
       const detail = signal ? `signal ${signal}` : `exit code ${String(code)}`;
+      this.transportGeneration += 1;
       this.rejectAll(new DapError(`DAP adapter exited with ${detail}`));
       this.child = undefined;
       this.emit('adapterExit', { code, signal });
@@ -202,6 +212,9 @@ export class DapConnection extends EventEmitter {
     const child = this.child;
     if (!child) return;
 
+    this.transportGeneration += 1;
+    this.rejectAll(new DapError('DAP adapter stopped'));
+
     if (!childHasExited(child)) {
       logger.debug('Stopping DAP adapter', { pid: child.pid });
       if (!child.killed) child.kill();
@@ -217,7 +230,6 @@ export class DapConnection extends EventEmitter {
       }
     }
 
-    this.rejectAll(new DapError('DAP adapter stopped'));
     if (this.child === child) {
       this.child = undefined;
       this.emit('adapterExit', { code: child.exitCode, signal: child.signalCode, forcedStop: true });
@@ -229,6 +241,9 @@ export class DapConnection extends EventEmitter {
     args?: unknown,
     timeoutMs = 15_000,
   ): Promise<DebugProtocol.Response> {
+    const operation = currentDapOperationContext();
+    operation?.throwIfAborted();
+
     let decision;
     try {
       const policyResult = this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
@@ -238,6 +253,8 @@ export class DapConnection extends EventEmitter {
         cause: error instanceof Error ? error : undefined,
       });
     }
+
+    operation?.throwIfAborted();
 
     if (!decision.allow) {
       logger.warn('Blocked outgoing DAP request by policy', { command, reason: decision.reason });
@@ -250,6 +267,8 @@ export class DapConnection extends EventEmitter {
     }
 
     const seq = this.nextSeq++;
+    const generation = this.transportGeneration;
+    const effectiveTimeoutMs = operation?.remainingMs(timeoutMs) ?? timeoutMs;
     const request: DebugProtocol.Request = {
       seq,
       type: 'request',
@@ -258,19 +277,39 @@ export class DapConnection extends EventEmitter {
     };
 
     return new Promise<DebugProtocol.Response>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let abortHandler: (() => void) | undefined;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (abortHandler && operation) operation.signal.removeEventListener('abort', abortHandler);
+      };
+      const rejectPending = (error: Error) => {
+        const pending = this.pending.get(seq);
+        if (!pending || pending.generation !== generation) return;
         this.pending.delete(seq);
-        reject(new DapTimeoutError(`response to '${command}'`, timeoutMs));
-      }, timeoutMs);
+        cleanup();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        rejectPending(new DapTimeoutError(`response to '${command}'`, effectiveTimeoutMs));
+      }, effectiveTimeoutMs);
 
-      this.pending.set(seq, { command, resolve, reject, timer });
+      this.pending.set(seq, { command, generation, resolve, reject, timer, cleanup });
+
+      if (operation) {
+        abortHandler = () => {
+          rejectPending(new DapError(`DAP request '${command}' cancelled by ${operation.label}`));
+        };
+        operation.signal.addEventListener('abort', abortHandler, { once: true });
+        if (operation.signal.aborted) {
+          abortHandler();
+          return;
+        }
+      }
 
       try {
         this.writeMessage(request);
       } catch (error) {
-        clearTimeout(timer);
-        this.pending.delete(seq);
-        reject(error instanceof Error ? error : new DapError(String(error)));
+        rejectPending(error instanceof Error ? error : new DapError(String(error)));
       }
     });
   }
@@ -281,6 +320,10 @@ export class DapConnection extends EventEmitter {
     predicate?: (event: DebugProtocol.Event) => boolean,
     includeRecent = false,
   ): Promise<DebugProtocol.Event> {
+    const operation = currentDapOperationContext();
+    operation?.throwIfAborted();
+    const effectiveTimeoutMs = operation?.remainingMs(timeoutMs) ?? timeoutMs;
+
     return new Promise((resolve, reject) => {
       const eventKey = `event:${eventName}`;
       const handler = (event: DebugProtocol.Event) => {
@@ -298,19 +341,30 @@ export class DapConnection extends EventEmitter {
           ? error
           : new DapError(`DAP adapter failed while waiting for event '${eventName}'`));
       };
+      const onAbort = () => {
+        cleanup();
+        reject(new DapError(`DAP event wait '${eventName}' cancelled${operation ? ` by ${operation.label}` : ''}`));
+      };
       const timer = setTimeout(() => {
         cleanup();
-        reject(new DapTimeoutError(`DAP event '${eventName}'`, timeoutMs));
-      }, timeoutMs);
+        reject(new DapTimeoutError(`DAP event '${eventName}'`, effectiveTimeoutMs));
+      }, effectiveTimeoutMs);
       const cleanup = () => {
         clearTimeout(timer);
         this.off(eventKey, handler);
         this.off('adapterExit', onAdapterExit);
         this.off('adapterError', onAdapterError);
+        operation?.signal.removeEventListener('abort', onAbort);
       };
       this.on(eventKey, handler);
       this.on('adapterExit', onAdapterExit);
       this.on('adapterError', onAdapterError);
+      operation?.signal.addEventListener('abort', onAbort, { once: true });
+
+      if (operation?.signal.aborted) {
+        onAbort();
+        return;
+      }
 
       if (includeRecent) {
         const recent = [...this.eventHistory].reverse().find((record) => {
@@ -427,7 +481,20 @@ export class DapConnection extends EventEmitter {
         return;
       }
 
-      clearTimeout(pending.timer);
+      if (pending.generation !== this.transportGeneration) {
+        pending.cleanup();
+        this.pending.delete(response.request_seq);
+        logger.debug('Ignoring late DAP response from a retired transport generation', {
+          requestSeq: response.request_seq,
+          command: response.command,
+          requestGeneration: pending.generation,
+          activeGeneration: this.transportGeneration,
+        });
+        this.emit('orphanResponse', response);
+        return;
+      }
+
+      pending.cleanup();
       this.pending.delete(response.request_seq);
 
       if (response.success) {
@@ -489,6 +556,7 @@ export class DapConnection extends EventEmitter {
 
   private failProtocol(error: DapError): void {
     this.buffer = Buffer.alloc(0);
+    this.transportGeneration += 1;
     logger.warn('Fatal DAP protocol error; retiring adapter transport', { error });
     this.rejectAll(error);
     this.emit('protocolError', error);
@@ -504,7 +572,7 @@ export class DapConnection extends EventEmitter {
 
   private rejectAll(error: Error): void {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
+      pending.cleanup();
       pending.reject(error);
     }
     this.pending.clear();

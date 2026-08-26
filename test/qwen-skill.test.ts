@@ -30,6 +30,10 @@ function validateSkill(content: string): void {
   const requiredTools = [
     'debug_this_crash',
     'debug_this_hang',
+    'debug_compare_runs',
+    'debug_trace_value',
+    'debug_find_writer',
+    'debug_sessions',
     'debug_diagnose_stop',
     'debug_source_disassembly',
     'debug_run_to_stop',
@@ -64,6 +68,21 @@ function validateSkill(content: string): void {
     assert.ok(content.includes(concept), `Skill must explain ${concept}`);
   }
 
+  const requiredDifferentialConcepts = [
+    'baselineSessionId',
+    'candidateSessionId',
+    'firstMeaningfulDifference',
+    'evidenceBudget',
+    'unstable',
+    'null/non-null',
+    'aggregate deadline',
+    'transport-generation isolation',
+  ];
+
+  for (const concept of requiredDifferentialConcepts) {
+    assert.ok(content.includes(concept), `Skill must explain differential concept ${concept}`);
+  }
+
   const requiredAutonomousConcepts = [
     'protocolVersion',
     'workflow.autonomousAgent',
@@ -92,6 +111,8 @@ function validateSkill(content: string): void {
   assert.match(content, /clean successful terminal outcome/i);
   assert.match(content, /do \*\*not\*\* automatically revert/i);
   assert.match(content, /external-unverified/i);
+  assert.match(content, /read-only/i);
+  assert.match(content, /must not be used for frozen dumps/i);
 }
 
 function validateRemoteSkill(content: string): void {

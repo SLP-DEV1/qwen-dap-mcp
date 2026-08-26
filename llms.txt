@@ -2,7 +2,7 @@
 
 > Give AI coding agents a real native debugger.
 
-qwen-dap-mcp is an open-source TypeScript bridge from the Debug Adapter Protocol (DAP) to the Model Context Protocol (MCP). It is designed primarily for Qwen Code and exposes structured native-debugger evidence such as stack frames, registers, locals, exception state, modules, disassembly, bounded memory reads, and crash dumps.
+qwen-dap-mcp is an open-source TypeScript bridge from the Debug Adapter Protocol (DAP) to the Model Context Protocol (MCP). It is designed primarily for Qwen Code and exposes structured native-debugger evidence such as stack frames, registers, locals, exception state, modules, disassembly, bounded memory reads, crash dumps, multi-session differential comparisons, and bounded runtime writer traces.
 
 ## Canonical links
 
@@ -29,8 +29,14 @@ npx -y @slp-dev1/qwen-dap-mcp
 ## Core capabilities
 
 - DAP-to-MCP bridge for native debugging
-- CodeLLDB launch and attach workflows
-- structured crash and stop diagnosis
+- CodeLLDB, upstream lldb-dap, and GNU GDB DAP workflows
+- structured crash, hang, and stop diagnosis
+- isolated request-local multi-session debugging
+- hardened gdbserver/lldb-server remote attach
+- semantic known-good versus failing runtime comparison with `debug_compare_runs`
+- ASLR-aware value comparison that separates unstable raw addresses from semantic state changes
+- bounded temporal writer timelines with `debug_trace_value`
+- request-local operation deadlines, cancellation propagation, and transport-generation isolation
 - stack, registers, locals, scopes, modules and exception evidence
 - disassembly and bounded memory inspection
 - Windows minidump/postmortem analysis
@@ -40,11 +46,14 @@ npx -y @slp-dev1/qwen-dap-mcp
 
 ## Safety boundaries
 
-The MCP server is local stdio only. It does not expose a general shell primitive, a general source-writing primitive, or unrestricted memory writes. Live attach is intended only for authorized local targets. Dump sessions are read-only.
+The MCP server is local stdio only. It does not expose a general shell primitive, a general source-writing primitive, or unrestricted memory writes. Live attach and execution-control/value-tracing operations are intended only for authorized targets. Dump sessions are read-only. Optional HOL Guard integration can fail closed before protected adapter starts or mutating/executable DAP actions cross the transport boundary.
 
 ## Documentation
 
 - README.md: overview, installation, tools, architecture and examples
+- docs/differential-debugging.md: v0.17 good/bad comparison, value tracing, evidence budgets, and cancellation semantics
+- docs/remote-debugging.md: multi-session gdbserver/lldb-server workflows and host policy
+- docs/hol-guard.md: optional debugger-side policy enforcement
 - CONTRIBUTING.md: development and contribution guidance
 - SECURITY.md: security model and reporting
 - docs/publishing.md: npm and MCP Registry release process
