@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { z } from 'zod';
+import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
+import { registerSessionTools } from '../src/tools/register-session-tools.js';
 import { AGENT_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
 
 type ToolDefinition = {
@@ -30,6 +32,7 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
   const agentServer = filterToolRegistrar(server as never, 'agent');
   const session = {} as never;
 
+  registerSessionTools(agentServer as never, new DapSessionRegistry());
   registerDebugTools(agentServer as never, session);
   registerDumpTools(agentServer as never, session);
   registerRunToStopTool(agentServer as never, session);
@@ -96,6 +99,7 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_run_to_stop',
     'debug_continue',
     'debug_disconnect',
+    'debug_sessions',
   ]) {
     assert.equal(
       definitions.get(name)?.annotations?.readOnlyHint,
@@ -125,4 +129,6 @@ test('agent tool annotations distinguish inspection from target execution', () =
 
   assert.equal(definitions.get('debug_disconnect')?.annotations?.destructiveHint, true);
   assert.equal(definitions.get('debug_disconnect')?.annotations?.openWorldHint, false);
+  assert.equal(definitions.get('debug_sessions')?.annotations?.destructiveHint, true);
+  assert.equal(definitions.get('debug_sessions')?.annotations?.openWorldHint, false);
 });
