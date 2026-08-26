@@ -4,6 +4,27 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.13.0 - 2026-08-26
+
+### Added
+
+- Added first-class upstream LLVM `lldb-dap` support alongside CodeLLDB, including explicit/environment/PATH/toolchain/macOS discovery.
+- Added upstream-native launch and authorized PID attach profiles plus frozen core-file inspection through DAP `attach` + `coreFile`.
+- Added `debug_this_crash(mode="lldb-dap")`, `debug_open_dump(adapter="lldb-dap")`, and `dumpAdapter="lldb-dap"` without expanding the compact default agent toolset.
+- Added manual lldb-dap discovery/start/launch/attach helpers to `QWEN_DAP_MCP_TOOLSET=full`.
+- Added a dedicated lldb-dap guide and real Linux adapter validation.
+
+### Fixed / hardened
+
+- Recognize explicit synchronous fatal POSIX signal families such as SIGSEGV from upstream lldb-dap as crash-likely even when the DAP exception reports `breakMode="always"`, while preserving conservative handling for generic configured/first-chance exceptions.
+- Discover distro LLVM layouts where lldb-dap is installed as a versioned binary or inside an LLVM toolchain directory instead of an unversioned PATH entry.
+
+### Verified
+
+- Node.js 20/22 CI, package staging, Crash Lab, and Glama container checks pass on the final v0.13 feature head.
+- Real Linux lldb-dap smoke auto-discovers distribution LLDB, launches a native C++ target, verifies source breakpoints and runtime evidence, and exercises the high-level `debug_this_crash` path against an intentional SIGSEGV.
+- The default agent MCP surface remains nine high-level tools; manual lldb-dap lifecycle tools are exposed only in `full` mode.
+
 ## 0.12.1 - 2026-08-26
 
 ### Changed / hardened
