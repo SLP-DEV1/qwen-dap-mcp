@@ -53,11 +53,32 @@ const packageJson = JSON.parse(
 const extensionManifest = JSON.parse(
   await readFile(path.join(projectRoot, 'qwen-extension.json'), 'utf8'),
 );
+const registryManifest = JSON.parse(
+  await readFile(path.join(projectRoot, 'server.json'), 'utf8'),
+);
 
-if (packageJson.version !== extensionManifest.version) {
+const registryPackage = registryManifest.packages?.find(
+  (entry) => entry?.registryType === 'npm' && entry?.identifier === packageJson.name,
+);
+const alignedVersions = [
+  ['package.json', packageJson.version],
+  ['qwen-extension.json', extensionManifest.version],
+  ['server.json', registryManifest.version],
+  ['server.json npm package', registryPackage?.version],
+];
+const mismatchedVersions = alignedVersions.filter(([, version]) => version !== packageJson.version);
+if (mismatchedVersions.length > 0) {
   throw new Error(
-    `Version mismatch: package.json=${packageJson.version}, qwen-extension.json=${extensionManifest.version}`,
+    `Version mismatch: ${alignedVersions.map(([name, version]) => `${name}=${String(version)}`).join(', ')}`,
   );
+}
+if (registryManifest.name !== packageJson.mcpName) {
+  throw new Error(
+    `MCP name mismatch: package.json mcpName=${String(packageJson.mcpName)}, server.json name=${String(registryManifest.name)}`,
+  );
+}
+if (!registryPackage) {
+  throw new Error(`server.json must publish npm package ${packageJson.name}`);
 }
 
 await rm(outputRoot, { recursive: true, force: true });
