@@ -90,7 +90,7 @@ jobs:
                 return;
               }
               if (current.sha !== expectedSha) {
-                core.info(`Keeping ${branch}: current SHA ${current.sha} differs from merged head ${expectedSha}.`);
+                core.info(`Keeping ${branch}: current SHA ${current.sha} differs from expected ${expectedSha}.`);
                 return;
               }
 
@@ -102,9 +102,17 @@ jobs:
               await deleteExactBranch(branch, pr.head.sha, `merged PR #${pr.number}`);
             }
 
-            // These two branches were temporary connector smoke branches. They are
-            // deleted only when their current commit is already an ancestor of main.
-            for (const branch of ['noop-check', 'noop-temp']) {
+            // Historical one-off branches are removed only when their current
+            // commit is already a clean ancestor of the default branch.
+            const legacyAncestorBranches = [
+              'noop-check',
+              'noop-temp',
+              'tmp-do-not-use',
+              'v0.6-release',
+              'v0.7-dump',
+            ];
+
+            for (const branch of legacyAncestorBranches) {
               if (openHeads.has(branch)) continue;
               const current = await currentBranch(branch);
               if (!current || current.protected) continue;
