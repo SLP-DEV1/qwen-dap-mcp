@@ -165,14 +165,14 @@ export function registerValueTracingTool(server: McpServer, session: GuardedDapS
     'debug_trace_value',
     {
       title: 'Trace Runtime Value Writes',
-      description: 'Build a bounded temporal write timeline for one debugger-visible variable/expression by repeatedly installing a temporary data breakpoint/watchpoint, resuming to the next confirmed writer, capturing runtime evidence, removing only the temporary watch, and repeating. Stops on unrelated debugger events instead of auto-continuing through them. Use after differential/crash evidence identifies a suspicious value and temporal writer evidence is safe to collect.',
+      description: 'Build a bounded temporal write timeline for one debugger-visible variable or expression. Use this after differential or crash evidence identifies a suspicious value and repeated live-target resume is safe. The tool installs one temporary data breakpoint or watchpoint at a time, resumes to the next confirmed writer, captures bounded runtime evidence, removes only its own temporary watch, and repeats. Do not use it for crash dumps, unsafe-to-resume targets, or as proof that an observed writer is the root cause; it stops on unrelated debugger events rather than continuing through them.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
       outputSchema: debugTraceValueOutputSchema,
       inputSchema: z.object({
-        name: z.string().min(1).max(512).describe('Debugger-visible variable or expression to watch. Control characters/line breaks are rejected by the GDB fallback.'),
+        name: z.string().min(1).max(512).describe('Debugger-visible variable or expression to watch. Control characters and line breaks are rejected by the GDB fallback.'),
         accessType: z.enum(['write', 'readWrite']).default('write').describe('Watch writes only by default; readWrite may be used when read access is also relevant.'),
         threadId: z.number().int().positive().optional().describe('Initial stopped thread; omit to use the debugger-selected stopped thread. Writer snapshots follow the actual stopped event thread.'),
-        maxStops: z.number().int().min(1).max(16).default(8).describe('Maximum confirmed/unrelated writer-stop observations before the trace ends.'),
+        maxStops: z.number().int().min(1).max(16).default(8).describe('Maximum confirmed or unrelated writer-stop observations before the trace ends.'),
         timeoutMs: z.number().int().min(1000).max(120_000).default(60_000).describe('Aggregate operation deadline across the entire write timeline.'),
         perStopTimeoutMs: z.number().int().min(250).max(30_000).default(15_000).describe('Maximum bounded wait allocated to each individual writer observation, also capped by the aggregate deadline.'),
         snapshot: z.object({
@@ -184,7 +184,7 @@ export function registerValueTracingTool(server: McpServer, session: GuardedDapS
           includeModules: z.boolean().default(false),
           moduleCount: z.number().int().positive().max(500).default(50),
           includeExceptionInfo: z.boolean().default(true),
-        }).optional(),
+        }).optional().describe('Optional bounded evidence settings for each observed writer stop.'),
       }),
     },
     async (options) => {
