@@ -1,0 +1,194 @@
+name: Publish npm and MCP Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: Publish the package to npm when this version is not already present
+        required: true
+        default: true
+        type: boolean
+      publish_mcp:
+        description: Publish server.json to the official MCP Registry
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-registries
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Require main and select the released version
+        id: release
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo '::error::Registry publication must be dispatched from the main branch.'
+            exit 1
+          fi
+
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+
+          if ! git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Release tag ${tag} does not exist. Publish the GitHub release first."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "refs/tags/${tag}" origin/main; then
+            echo "::error::Release tag ${tag} is not an ancestor of main."
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          git checkout --detach "refs/tags/${tag}"
+          echo "Publishing artifacts from $(git rev-parse HEAD) (${tag})"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build and test
+        run: npm run check
+
+      - name: Verify release metadata
+        id: metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const ext = JSON.parse(fs.readFileSync('qwen-extension.json', 'utf8'));
+          const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+
+          const expectedName = 'io.github.SLP-DEV1/qwen-dap-mcp';
+          const expectedPackage = '@slp-dev1/qwen-dap-mcp';
+
+          if (pkg.name !== expectedPackage) throw new Error(`unexpected package name: ${pkg.name}`);
+          if (pkg.mcpName !== expectedName) throw new Error(`package.json mcpName mismatch: ${pkg.mcpName}`);
+          if (server.name !== expectedName) throw new Error(`server.json name mismatch: ${server.name}`);
+          if (server.packages?.[0]?.identifier !== expectedPackage) throw new Error('server.json npm identifier mismatch');
+          if (pkg.version !== ext.version || pkg.version !== server.version || pkg.version !== server.packages?.[0]?.version) {
+            throw new Error(`version mismatch: package=${pkg.version}, extension=${ext.version}, server=${server.version}, registryPackage=${server.packages?.[0]?.version}`);
+          }
+          console.log(`Validated ${pkg.name}@${pkg.version} -> ${server.name}`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `package=${pkg.name}\nversion=${pkg.version}\nserver=${server.name}\n`);
+          NODE
+
+      - name: Verify selected release version
+        shell: bash
+        run: |
+          if [ "${{ steps.metadata.outputs.version }}" != "${{ steps.release.outputs.version }}" ]; then
+            echo '::error::The checked-out release version does not match the version selected from main.'
+            exit 1
+          fi
+
+      - name: Verify npm package contents
+        run: |
+          npm pack --dry-run --json > npm-pack.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('npm-pack.json', 'utf8'))[0];
+          const files = new Set(report.files.map((entry) => entry.path));
+          for (const required of ['dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE']) {
+            if (!files.has(required)) throw new Error(`npm package is missing ${required}`);
+          }
+          NODE
+
+      - name: Check whether npm version already exists
+        id: npm_version
+        shell: bash
+        run: |
+          if npm view "${{ steps.metadata.outputs.package }}@${{ steps.metadata.outputs.version }}" version >/dev/null 2>&1; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo 'npm version already exists; publication will be skipped.'
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'npm version is not published yet.'
+          fi
+
+      - name: Configure bootstrap npm token when available
+        if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+            echo 'Configured the temporary npm bootstrap credential.'
+          else
+            echo 'No NPM_TOKEN secret is configured; npm publish will use Trusted Publishing/OIDC if the package is already configured for this workflow.'
+          fi
+
+      - name: Publish package to npm
+        if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
+        run: npm publish --access public
+
+      - name: Remove bootstrap npm token from runner config
+        if: ${{ always() && inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
+        shell: bash
+        run: npm config delete //registry.npmjs.org/:_authToken || true
+
+      - name: Verify package is visible on npm
+        if: ${{ inputs.publish_mcp }}
+        shell: bash
+        run: |
+          for attempt in {1..20}; do
+            published_mcp_name="$(npm view "${{ steps.metadata.outputs.package }}@${{ steps.metadata.outputs.version }}" mcpName 2>/dev/null || true)"
+            if [ "$published_mcp_name" = "${{ steps.metadata.outputs.server }}" ]; then
+              echo "npm ownership metadata verified: $published_mcp_name"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo '::error::The exact package/version is not visible on npm with the expected mcpName. Publish npm first or check the npm scope/credentials.'
+          exit 1
+
+      - name: Install mcp-publisher
+        if: ${{ inputs.publish_mcp }}
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error \
+            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+
+      - name: Authenticate to MCP Registry with GitHub OIDC
+        if: ${{ inputs.publish_mcp }}
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        if: ${{ inputs.publish_mcp }}
+        run: ./mcp-publisher publish server.json
+
+      - name: Summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo '## Registry publication'
+            echo
+            echo "- release tag: ${{ steps.release.outputs.tag }}"
+            echo "- npm: ${{ steps.metadata.outputs.package }}@${{ steps.metadata.outputs.version }}"
+            echo "- MCP name: ${{ steps.metadata.outputs.server }}"
+            echo "- npm publish requested: ${{ inputs.publish_npm }}"
+            echo "- MCP publish requested: ${{ inputs.publish_mcp }}"
+          } >> "$GITHUB_STEP_SUMMARY"
