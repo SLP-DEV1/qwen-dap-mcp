@@ -5,6 +5,11 @@ import * as z from 'zod/v4';
 import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';
 import { analyzeRuntimeSnapshot, correlateSourceDisassembly } from '../diagnostics/analyze-snapshot.js';
 import {
+  advanceAutonomousCycle,
+  startAutonomousCycle,
+  type AutonomousAgentState,
+} from '../diagnostics/autonomous-cycle.js';
+import {
   analyzeInstructionOperands,
   buildIntelligentDiagnosis,
   compareVerificationBaseline,
@@ -57,6 +62,8 @@ const diagnosisCategorySchema = z.enum([
   'step',
   'unknown',
 ]);
+const diagnosisConfidenceSchema = z.enum(['low', 'medium', 'high']);
+const verificationVerdictSchema = z.enum(['fixed', 'not-fixed', 'changed-failure', 'inconclusive']);
 const verificationBaselineSchema = z.object({
   classification: diagnosisCategorySchema,
   crashLikely: z.boolean(),
@@ -67,9 +74,43 @@ const verificationBaselineSchema = z.object({
   hypothesisKinds: z.array(z.string()).max(8),
   suspiciousNames: z.array(z.string()).max(12),
 });
+const autonomousAgentStatusSchema = z.enum([
+  'needs-evidence',
+  'needs-fix',
+  'retry-fix',
+  'needs-reproduction',
+  'changed-failure',
+  'fixed',
+  'budget-exhausted',
+  'blocked',
+]);
+const autonomousHistorySchema = z.object({
+  iteration: z.number().int().nonnegative(),
+  phase: z.enum(['diagnosis', 'verification']),
+  fingerprint: z.string().min(8).max(64),
+  verdict: verificationVerdictSchema.optional(),
+  confidence: diagnosisConfidenceSchema.optional(),
+  projectFunction: z.string().optional(),
+  projectSourcePath: z.string().optional(),
+  projectLine: z.number().int().nonnegative().optional(),
+  summary: z.string(),
+});
+const autonomousAgentStateSchema = z.object({
+  schemaVersion: z.literal(1),
+  iteration: z.number().int().positive().max(10),
+  maxIterations: z.number().int().positive().max(10),
+  status: autonomousAgentStatusSchema,
+  rootBaseline: verificationBaselineSchema,
+  activeBaseline: verificationBaselineSchema,
+  rootFingerprint: z.string().min(8).max(64),
+  activeFingerprint: z.string().min(8).max(64),
+  history: z.array(autonomousHistorySchema).max(24),
+});
 const workflowSchema = z.object({
-  stage: z.enum(['diagnose', 'verify']).default('diagnose'),
+  stage: z.enum(['diagnose', 'verify', 'autonomous']).default('diagnose'),
   baseline: verificationBaselineSchema.optional(),
+  agentState: autonomousAgentStateSchema.optional(),
+  maxIterations: z.number().int().positive().max(10).default(3),
 });
 
 function result(value: unknown) {
@@ -252,13 +293,52 @@ function terminalForVerification(outcome: { event: 'exited' | 'terminated'; body
 }
 
 function workflowMetadata(
-  stage: 'diagnose' | 'verify',
+  stage: 'diagnose' | 'verify' | 'autonomous',
   baseline: VerificationBaseline | undefined,
   diagnosis?: IntelligentCrashDiagnosis,
   terminal?: { event: 'exited' | 'terminated'; exitCode?: number },
+  agentState?: AutonomousAgentState,
+  maxIterations?: number,
 ) {
   if (stage === 'verify' && !baseline) {
     throw new DapError('debug_this_crash workflow.stage="verify" requires the verificationBaseline returned by the original diagnosis.');
+  }
+
+  if (stage === 'autonomous') {
+    if (!agentState) {
+      if (!diagnosis) {
+        return {
+          stage,
+          autonomousAgent: {
+            shouldContinue: false,
+            status: 'blocked',
+            stopReason: terminal?.event === 'exited' && terminal.exitCode === 0
+              ? 'The initial autonomous reproduction exited cleanly; no crash stop was observed to diagnose.'
+              : 'The initial autonomous reproduction did not produce a stopped-state crash diagnosis.',
+            nextActions: [],
+          },
+        };
+      }
+      return {
+        stage,
+        verificationBaseline: diagnosis.verificationBaseline,
+        fixWorkflow: diagnosis.fixWorkflow,
+        autonomousAgent: startAutonomousCycle(diagnosis, maxIterations),
+      };
+    }
+
+    const verification = compareVerificationBaseline(agentState.activeBaseline, diagnosis, terminal);
+    return {
+      stage,
+      ...(diagnosis
+        ? {
+            verificationBaseline: diagnosis.verificationBaseline,
+            fixWorkflow: diagnosis.fixWorkflow,
+          }
+        : {}),
+      verification,
+      autonomousAgent: advanceAutonomousCycle(agentState, verification, diagnosis),
+    };
   }
 
   return {
@@ -354,7 +434,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Debug This Crash',
       description:
-        'High-level agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. Automatically selects project frames, traces operand/register/variable evidence through callers, proposes the narrowest evidence-backed fix, and can verify the same scenario against a previous diagnosis baseline.',
+        'High-level debugging-agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. workflow.stage="autonomous" adds a bounded serialized agent loop with crash fingerprints, iteration history, next-action decisions, changed-failure re-baselining, and deterministic fixed/blocked/budget-exhausted stop conditions.',
       inputSchema: z.object({
         mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current'),
 
@@ -411,13 +491,15 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
           );
           const stage = workflow?.stage ?? 'diagnose';
           const baseline = workflow?.baseline as VerificationBaseline | undefined;
+          const agentState = workflow?.agentState as AutonomousAgentState | undefined;
+          const maxIterations = workflow?.maxIterations ?? 3;
 
           if (mode === 'current') {
             const captured = await captureDiagnosticSnapshot(session, snapshotOptions, analysisOptions);
             return {
               mode,
               ...captured,
-              workflow: workflowMetadata(stage, baseline, captured.diagnosis),
+              workflow: workflowMetadata(stage, baseline, captured.diagnosis, undefined, agentState, maxIterations),
               status: session.snapshot(),
             };
           }
@@ -443,7 +525,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               mode,
               dump: opened,
               diagnosis,
-              workflow: workflowMetadata(stage, baseline, diagnosis),
+              workflow: workflowMetadata(stage, baseline, diagnosis, undefined, agentState, maxIterations),
               status: session.snapshot(),
             };
           }
@@ -491,7 +573,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
               run,
               diagnosis: diagnosis
                 ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
-              workflow: workflowMetadata(stage, baseline, diagnosis, terminal),
+              workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
               status: session.snapshot(),
             };
           }
@@ -520,7 +602,7 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
             run,
             diagnosis: diagnosis
               ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
-            workflow: workflowMetadata(stage, baseline, diagnosis, terminal),
+            workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
             status: session.snapshot(),
           };
         }));
