@@ -5,6 +5,12 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import { resolveExistingDirectory } from '../local-path.js';
 import { logger } from '../logger.js';
 import { DapError, DapRequestError, DapTimeoutError } from './errors.js';
+import {
+  createDapRequestPolicy,
+  resolveDapPolicyMode,
+  type DapPolicyMode,
+  type DapRequestPolicy,
+} from './request-policy.js';
 
 type PendingRequest = {
   command: string;
@@ -18,6 +24,11 @@ export type DapAdapterStartOptions = {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+};
+
+export type DapConnectionOptions = {
+  requestPolicy?: DapRequestPolicy;
+  policyMode?: DapPolicyMode;
 };
 
 export type DapEventRecord = {
@@ -62,6 +73,18 @@ export class DapConnection extends EventEmitter {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly eventHistory: DapEventRecord[] = [];
   private readonly stderrLines: string[] = [];
+  private requestPolicy: DapRequestPolicy;
+
+  constructor(options: DapConnectionOptions = {}) {
+    super();
+    this.requestPolicy = options.requestPolicy
+      ?? createDapRequestPolicy(options.policyMode ?? resolveDapPolicyMode());
+  }
+
+  /** Replace the transport policy used for future outgoing DAP requests. */
+  setRequestPolicy(policy: DapRequestPolicy): void {
+    this.requestPolicy = policy;
+  }
 
   get isRunning(): boolean {
     // ChildProcess.killed only means a signal was accepted by kill(); it says
@@ -206,6 +229,20 @@ export class DapConnection extends EventEmitter {
     args?: unknown,
     timeoutMs = 15_000,
   ): Promise<DebugProtocol.Response> {
+    let decision;
+    try {
+      decision = this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
+    } catch (error) {
+      return Promise.reject(new DapError(`DAP request policy failed closed for '${command}'`, {
+        cause: error instanceof Error ? error : undefined,
+      }));
+    }
+
+    if (!decision.allow) {
+      logger.warn('Blocked outgoing DAP request by policy', { command, reason: decision.reason });
+      return Promise.reject(new DapError(`DAP request '${command}' blocked by policy: ${decision.reason}`));
+    }
+
     const child = this.child;
     if (!child || !this.isRunning) {
       return Promise.reject(new DapError('DAP adapter is not running'));
