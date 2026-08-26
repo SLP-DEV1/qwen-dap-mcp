@@ -50,11 +50,25 @@ async function prepareStoppedSession(
   void stoppedPromise.catch(() => undefined);
   await session.launch(
     buildGdbDapLaunchConfiguration({ program, args: [mode], stopOnEntry: false }),
-    [{ source, lines: [12] }],
+    [{ source, lines: [7] }],
   );
   const stopped = await stoppedPromise;
   const body = stopped.body as { threadId?: number; reason?: string } | undefined;
   assert.equal(body?.reason, 'breakpoint', `${mode} session did not stop at the source breakpoint`);
+
+  const snapshot = await session.runtimeSnapshot({
+    ...(body?.threadId ? { threadId: body.threadId } : {}),
+    stackLevels: 4,
+    maxVariablesPerScope: 50,
+    includeDisassembly: false,
+    includeModules: false,
+    includeExceptionInfo: false,
+  });
+  assert.match(snapshot.frame.name, /inspect_case/i, `${mode} session stopped in unexpected frame '${snapshot.frame.name}'`);
+  assert.ok(
+    snapshot.locals.some((item) => item.name === 'critical_ptr'),
+    `${mode} session did not expose critical_ptr; scopes=${JSON.stringify(snapshot.scopes.map((scope) => scope.name))}, locals=${JSON.stringify(snapshot.locals)}`,
+  );
 }
 
 const snapshot: RuntimeSnapshotOptions = {
@@ -93,12 +107,15 @@ try {
   assert.equal(output.diff.firstMeaningfulDifference?.category, 'local');
   assert.equal(output.diff.firstMeaningfulDifference?.key, critical.key);
   assert.ok(output.diff.summary.meaningfulDifferences >= 1);
+  assert.equal(output.evidenceBudget.stackLevels, 12);
+  assert.equal(output.evidenceBudget.maxVariablesPerScope, 100);
 
   console.log(JSON.stringify({
     ok: true,
     firstMeaningfulDifference: output.diff.firstMeaningfulDifference,
     criticalPointerDiff: critical,
     summary: output.diff.summary,
+    evidenceBudget: output.evidenceBudget,
   }, null, 2));
 } finally {
   await registry.closeAll(true);
