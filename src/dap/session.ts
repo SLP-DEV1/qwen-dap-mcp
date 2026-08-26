@@ -2,6 +2,7 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapConnection, type DapAdapterStartOptions } from './connection.js';
 import { DapError } from './errors.js';
+import { assessSymbolHealth, type SymbolHealth } from './symbol-health.js';
 
 const MAX_READ_MEMORY_BYTES = 1024 * 1024;
 const MAX_DISASSEMBLY_INSTRUCTIONS = 10_000;
@@ -62,6 +63,7 @@ export type RuntimeSnapshot = {
   scopes: DebugProtocol.Scope[];
   locals: DebugProtocol.Variable[];
   registers: DebugProtocol.Variable[];
+  symbolHealth: SymbolHealth;
   disassembly?: DebugProtocol.DisassembledInstruction[];
   modules?: DebugProtocol.Module[];
   exception?: DebugProtocol.ExceptionInfoResponse['body'];
@@ -423,6 +425,7 @@ export class DapSession {
       scopes: frameScopes,
       locals,
       registers,
+      symbolHealth: assessSymbolHealth(stack, loadedModules),
       ...(disassembly === undefined ? {} : { disassembly }),
       ...(loadedModules === undefined ? {} : { modules: loadedModules }),
       ...(exception === undefined ? {} : { exception }),

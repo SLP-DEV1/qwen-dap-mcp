@@ -7,6 +7,7 @@ import { DapError } from '../dap/errors.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import type { RuntimeSnapshotOptions } from '../dap/session.js';
 import { DEBUG_SESSION_CONTROL_ANNOTATIONS } from './tool-annotations.js';
+import { debugFindWriterOutputSchema, structuredResult } from './agent-output.js';
 
 export type FindWriterOptions = {
   name: string;
@@ -277,7 +278,7 @@ export async function findWriter(session: GuardedDapSession, options: FindWriter
 }
 
 function result(value: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+  return structuredResult(value);
 }
 
 function errorResult(error: unknown) {
@@ -291,6 +292,7 @@ export function registerFindWriterTool(server: McpServer, session: GuardedDapSes
       title: 'Find Runtime Writer',
       description: 'Temporarily watch a variable or debugger expression, resume an authorized live target, and capture the first resulting stop to identify the immediate writer candidate. Use this after a stopped-state diagnosis suggests a value was corrupted and runtime provenance is needed; do not use it for crash dumps or when resuming is unsafe. Adapters with DAP data-breakpoint support use that protocol directly; GDB 14/15 uses a bounded watch/rwatch/awatch command through DAP REPL because those releases do not advertise native data breakpoints. The tool removes only the temporary watch it created and never automatically continues through an unrelated stop.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
+      outputSchema: debugFindWriterOutputSchema,
       inputSchema: z.object({
         name: z.string().min(1).max(512).describe('Variable child name or debugger expression to watch. Without variablesReference, the expression is resolved in frameId/current frame when supported. GDB fallback expressions must not contain control characters or line breaks.'),
         variablesReference: z.number().int().positive().optional().describe('Optional DAP variable-container reference when the adapter advertises native data breakpoints. Omit for the GDB watch-command fallback and pass a debugger-visible expression in name instead.'),

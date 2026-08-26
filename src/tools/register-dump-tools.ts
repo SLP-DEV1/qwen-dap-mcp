@@ -9,6 +9,7 @@ import { DapError } from '../dap/errors.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import { logger } from '../logger.js';
 import { READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
+import { debugOpenDumpOutputSchema, structuredResult } from './agent-output.js';
 
 export type DumpAdapterKind = 'codelldb' | 'lldb-dap' | 'gdb';
 
@@ -124,7 +125,7 @@ export async function openDump(session: GuardedDapSession, options: OpenDumpOpti
 }
 
 function result(value: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+  return structuredResult(value);
 }
 
 function errorResult(error: unknown) {
@@ -150,6 +151,7 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
       description:
         'Open a local native core/minidump with CodeLLDB, upstream LLVM lldb-dap, or GNU GDB DAP and capture bounded postmortem evidence. Use this when the failure is already recorded and no target process should execute; use debug_run_to_stop or debug_this_crash for a live reproduction instead. The tool starts only the selected local debugger adapter, never launches or resumes the crashed program, treats the dump as read-only, and returns the initial stack/locals/registers plus optional modules and disassembly.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+      outputSchema: debugOpenDumpOutputSchema,
       inputSchema: z.object({
         dumpPath: z.string().min(1).describe('Absolute or local path to the native core/minidump file to inspect.'),
         program: z.string().min(1).optional().describe('Path to the matching executable image. Optional for CodeLLDB/GDB, but required when adapter=lldb-dap because LLVM coreFile loading binds the dump to its program image.'),

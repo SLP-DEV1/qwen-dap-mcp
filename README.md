@@ -133,6 +133,10 @@ The roadmap is intentionally ordered around capabilities that make the bridge mo
 
 Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
 
+### Structured agent results
+
+The ten default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
+
 ## Autonomous crash debugging
 
 The high-level `debug_this_crash` workflow can drive a bounded autonomous debugging cycle:
