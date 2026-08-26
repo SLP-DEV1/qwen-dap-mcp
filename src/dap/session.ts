@@ -80,6 +80,7 @@ export class DapSession {
   private configured = false;
   private activeRequest?: 'launch' | 'attach';
   private capabilities?: DebugProtocol.Capabilities;
+  private dataBreakpoints: DebugProtocol.DataBreakpoint[] = [];
   private requestTimeoutMs = 15_000;
 
   async start(options: StartSessionOptions): Promise<DebugProtocol.Capabilities> {
@@ -186,7 +187,12 @@ export class DapSession {
       { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,
       this.requestTimeoutMs,
     );
+    this.dataBreakpoints = breakpoints.map((breakpoint) => ({ ...breakpoint }));
     return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);
+  }
+
+  dataBreakpointConfiguration(): DebugProtocol.DataBreakpoint[] {
+    return this.dataBreakpoints.map((breakpoint) => ({ ...breakpoint }));
   }
 
   async setExceptionBreakpoints(filters: string[], filterOptions?: DebugProtocol.ExceptionFilterOptions[]): Promise<DebugProtocol.Breakpoint[]> {
@@ -436,6 +442,7 @@ export class DapSession {
     this.configured = false;
     this.activeRequest = undefined;
     this.capabilities = undefined;
+    this.dataBreakpoints = [];
   }
 
   private async beginDebugRequest(request: 'launch' | 'attach', configuration: Record<string, unknown>, breakpoints: SourceBreakpointGroup[]): Promise<unknown> {

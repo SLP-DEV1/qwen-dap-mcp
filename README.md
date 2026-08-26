@@ -26,6 +26,8 @@ Coding agents are good at reading and editing source, but native crashes often n
 - **Real native debugger evidence** — stack, registers, locals, exception state, modules, disassembly, memory, and source correlation.
 - **CodeLLDB integration** — launch or attach to authorized local native targets through DAP.
 - **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.
+- **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, remote-target, and core-file support through `--interpreter=dap`.
+- **Runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value.
 - **Windows minidumps / postmortem debugging** — open existing `.dmp` files and recover structured evidence.
 - **Runtime root-cause backtracking** — follow suspicious values through bounded caller frames toward likely project-controlled producer candidates.
 - **Verification fingerprints** — distinguish fixed, same-crash, changed-failure, and inconclusive reproductions.
@@ -115,9 +117,21 @@ Qwen Code is the primary integration and the path covered by the project's exten
 
 ## Debugger adapters
 
-CodeLLDB and upstream LLVM `lldb-dap` are both first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` when you want the debugger adapter shipped by LLVM itself. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `dumpAdapter="lldb-dap"`.
+CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` for LLVM's adapter or `debug_this_crash(mode="gdb")` for GDB 14+. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `dumpAdapter="lldb-dap"`.
 
-Discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical or versioned PATH binaries, common LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. See [docs/lldb-dap.md](docs/lldb-dap.md) for examples, postmortem behavior, and the manual full-toolset helpers.
+LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md) and [docs/gdb-dap.md](docs/gdb-dap.md).
+
+## Roadmap
+
+The roadmap is intentionally ordered around capabilities that make the bridge more useful to coding agents, not around exposing every debugger command. Planned scope may change as real adapter behavior and benchmark evidence improve.
+
+| Release | Focus | Planned capabilities |
+| --- | --- | --- |
+| **v0.14** | GNU debugger + runtime provenance | First-class GDB DAP, `debug_find_writer`, structured MCP results/output schemas, symbol-health reporting, real GDB Linux smoke coverage |
+| **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, pointer provenance v2, expanded Crash Lab |
+| **v0.16** | Remote/multi-session + evidence | hardened gdbserver/lldb-server workflows, multi-session architecture, existing LLDB-session interoperability where practical, cross-adapter benchmark matrix |
+
+Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
 
 ## Autonomous crash debugging
 
@@ -252,7 +266,7 @@ The MCP server has no HTTP listener. The adapter is spawned locally without a sh
 
 ## MCP toolsets
 
-The default `agent` toolset deliberately exposes only the nine high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
+The default `agent` toolset deliberately exposes only the ten high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
 
 ### Default `agent` tools
 
@@ -261,6 +275,7 @@ The default `agent` toolset deliberately exposes only the nine high-level tools 
 | `debug_this_crash` | High-level live/CodeLLDB/lldb-dap/dump diagnosis, verification, and autonomous orchestration |
 | `debug_diagnose_stop` | Intelligent diagnosis of the current stopped state |
 | `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |
+| `debug_find_writer` | Temporarily watch a suspicious value and stop at its immediate runtime writer |
 | `debug_run_to_stop` | Launch/attach and race-safely wait for stop/exit/termination |
 | `debug_open_dump` | Open a native core/minidump for read-only postmortem inspection |
 | `debug_snapshot` | Capture a bounded raw runtime snapshot |
@@ -268,7 +283,7 @@ The default `agent` toolset deliberately exposes only the nine high-level tools 
 | `debug_continue` | Resume an authorized live target to the next stop |
 | `debug_disconnect` | Disconnect and tear down the debugger session |
 
-The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap lifecycle primitives.
+The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap / GDB lifecycle primitives.
 
 ## Verification model
 

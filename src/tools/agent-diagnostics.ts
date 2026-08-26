@@ -3,6 +3,7 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import * as z from 'zod/v4';
 
 import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';
+import { buildGdbDapLaunchConfiguration, discoverGdbDap } from '../adapters/gdb-dap.js';
 import { buildLldbDapLaunchConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';
 import { analyzeRuntimeSnapshot, correlateSourceDisassembly } from '../diagnostics/analyze-snapshot.js';
 import {
@@ -504,22 +505,22 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Debug This Crash',
       description:
-        'Preferred high-level native crash workflow. Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB and launch a local binary, lldb-dap to discover upstream LLVM lldb-dap and launch a local binary, or live with an already initialized generic DAP adapter. Do not use codelldb/lldb-dap/live when executing or attaching to the target is not authorized: those modes can run application code and cause its normal side effects, while current/dump only inspect stopped evidence. workflow.stage selects initial diagnosis, verification against a prior baseline, or the bounded autonomous cycle. Returns runtime evidence, diagnosis, verification/autonomous metadata, and debugger status with deterministic fixed/blocked/budget-exhausted outcomes where applicable.',
+        'Preferred high-level native crash workflow. Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB, lldb-dap to discover upstream LLVM lldb-dap, gdb to discover GNU GDB built-in DAP interpreter, or live with an already initialized generic DAP adapter. Do not use codelldb/lldb-dap/gdb/live when executing or attaching to the target is not authorized: those modes can run application code and cause its normal side effects, while current/dump only inspect stopped evidence. workflow.stage selects initial diagnosis, verification against a prior baseline, or the bounded autonomous cycle. Returns runtime evidence, diagnosis, verification/autonomous metadata, and debugger status with deterministic fixed/blocked/budget-exhausted outcomes where applicable.',
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       inputSchema: z.object({
-        mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'dump']).default('current').describe('current inspects an existing stop; live runs launch/attach through an initialized DAP session; codelldb starts CodeLLDB; lldb-dap starts upstream LLVM lldb-dap; dump opens a frozen core/minidump.'),
+        mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'gdb', 'dump']).default('current').describe('current inspects an existing stop; live uses an initialized generic DAP session; codelldb starts CodeLLDB; lldb-dap starts upstream LLVM lldb-dap; gdb starts GNU GDB with --interpreter=dap; dump opens a frozen core/minidump.'),
         request: z.enum(['launch', 'attach']).default('launch').describe('For mode=live, choose whether the initialized DAP adapter launches a target or attaches to an existing authorized target.'),
         configuration: jsonRecord.optional().describe('Required for mode=live: adapter-specific DAP launch/attach configuration.'),
         breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured before a live/codelldb reproduction completes setup.'),
         timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Maximum milliseconds to wait for the reproduction to stop, exit, or terminate.'),
-        program: z.string().min(1).optional().describe('Required for mode=codelldb and mode=lldb-dap; optional for CodeLLDB dumps but required when dumpAdapter=lldb-dap. Local path to the native executable.'),
-        args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in mode=codelldb or mode=lldb-dap.'),
+        program: z.string().min(1).optional().describe('Required for codelldb/lldb-dap/gdb launch modes; optional for CodeLLDB/GDB dumps but required when dumpAdapter=lldb-dap. Local path to the native executable.'),
+        args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in codelldb/lldb-dap/gdb modes.'),
         cwd: z.string().optional().describe('Working directory for the selected debugger/target launch and a project-root hint for diagnosis.'),
-        env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in mode=codelldb or mode=lldb-dap.'),
-        stopOnEntry: z.boolean().default(false).describe('When true in mode=codelldb or mode=lldb-dap, request an initial debugger stop at program entry before normal execution.'),
-        adapterPath: z.string().min(1).optional().describe('Optional explicit debugger-adapter executable path for codelldb/lldb-dap/dump modes; omit to auto-discover the selected adapter.'),
-        dumpAdapter: z.enum(['codelldb', 'lldb-dap']).default('codelldb').describe('For mode=dump, choose CodeLLDB compatibility behavior or upstream LLVM lldb-dap coreFile loading.'),
-        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds for CodeLLDB operations.'),
+        env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in codelldb/lldb-dap/gdb modes.'),
+        stopOnEntry: z.boolean().default(false).describe('When true in codelldb/lldb-dap/gdb modes, request an initial debugger stop at program entry before normal execution.'),
+        adapterPath: z.string().min(1).optional().describe('Optional explicit debugger executable/adapter path for codelldb/lldb-dap/gdb/dump modes; omit to auto-discover the selected adapter.'),
+        dumpAdapter: z.enum(['codelldb', 'lldb-dap', 'gdb']).default('codelldb').describe('For mode=dump, choose CodeLLDB, upstream LLVM lldb-dap coreFile loading, or GNU GDB coreFile attach semantics.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds for the selected debugger adapter.'),
         dumpPath: z.string().min(1).optional().describe('Required for mode=dump: local path to the native core/minidump file.'),
         sourceMap: z.record(z.string(), z.string()).optional().describe('For mode=dump, map source paths stored in debug symbols to local source paths.'),
         snapshot: snapshotSchema.optional(),
@@ -597,6 +598,63 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
             };
           }
 
+          if (mode === 'gdb') {
+            if (!program) throw new DapError("debug_this_crash mode='gdb' requires program.");
+
+            const launchConfiguration = buildGdbDapLaunchConfiguration({
+              program,
+              ...(args ? { args } : {}),
+              ...(cwd ? { cwd } : {}),
+              ...(env ? { env } : {}),
+              stopOnEntry,
+            });
+            const adapter = discoverGdbDap({
+              ...(adapterPath ? { explicitPath: adapterPath } : {}),
+            });
+
+            let adapterStarted = false;
+            try {
+              const capabilities = await session.start({
+                command: adapter.command,
+                args: adapter.args,
+                adapterId: 'gdb',
+                ...(cwd ? { cwd } : {}),
+                requestTimeoutMs,
+              });
+              adapterStarted = true;
+              const run = await runToStop(session, {
+                request: 'launch',
+                configuration: launchConfiguration,
+                ...(breakpoints ? { breakpoints: breakpoints as SourceBreakpointGroup[] } : {}),
+                timeoutMs,
+                snapshot: {
+                  ...snapshotOptions,
+                  includeDisassembly: true,
+                  includeModules: true,
+                  includeExceptionInfo: true,
+                },
+              });
+              const diagnosis = run.snapshot
+                ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
+                : undefined;
+              const terminal = run.snapshot
+                ? undefined
+                : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
+              return {
+                mode,
+                adapter,
+                capabilities,
+                run,
+                diagnosis: diagnosis
+                  ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+                workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
+                status: session.snapshot(),
+              };
+            } catch (error) {
+              if (adapterStarted) return await resetOwnedSessionAfterFailure(session, error);
+              throw error;
+            }
+          }
           if (mode === 'lldb-dap') {
             if (!program) throw new DapError("debug_this_crash mode='lldb-dap' requires program.");
 
