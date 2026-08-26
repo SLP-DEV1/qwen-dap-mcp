@@ -259,26 +259,29 @@ export function classifyThreadWait(
     }
   }
 
-  const project = assessProjectFrames(evidence.stack, analysisOptions)
-    .find((item) => item.projectControlled);
-  if (project) {
+  const projectAssessments = assessProjectFrames(evidence.stack, analysisOptions);
+  const topProject = projectAssessments.find((item) => item.index === 0 && item.projectControlled);
+  if (topProject) {
     return {
       kind: 'running-user-code',
       blocked: false,
-      confidence: project.confidence,
-      matchedFrameIndex: project.index,
-      matchedFunction: project.frame.name,
-      rationale: ['no recognized blocking primitive was found and a project-controlled frame is active'],
+      confidence: topProject.confidence,
+      matchedFrameIndex: topProject.index,
+      matchedFunction: topProject.frame.name,
+      rationale: ['the top frame is project-controlled and no recognized blocking primitive was found'],
     };
   }
 
+  const deeperProject = projectAssessments.find((item) => item.projectControlled);
   return {
     kind: 'unknown',
     blocked: false,
     confidence: 'low',
     rationale: evidence.stack.length === 0
       ? ['the adapter returned no stack frames for this thread']
-      : ['no recognized wait primitive or project-controlled active frame was found'],
+      : deeperProject
+        ? ['a deeper project frame exists, but the top frame is not project-controlled and no recognized wait primitive was found']
+        : ['no recognized wait primitive or active top-level project frame was found'],
   };
 }
 
@@ -369,7 +372,8 @@ function buildDeadlockHeuristic(
   const blocked = triage.filter((item) => item.wait.blocked);
   const strongLockBlocked = blocked.filter((item) => STRONG_LOCK_WAITS.has(item.wait.kind));
   const ioBlocked = blocked.filter((item) => item.wait.kind === 'io');
-  const runnableProject = triage.filter((item) => item.projectControlled && !item.wait.blocked);
+  const runnableProject = triage.filter((item) => item.wait.kind === 'running-user-code');
+  const unknown = triage.filter((item) => item.wait.kind === 'unknown');
   const sharedSynchronization = pointerProvenance.groups
     .filter((group) => group.sharedAcrossThreads && group.synchronizationRelevant);
   const evidence: string[] = [];
@@ -381,7 +385,10 @@ function buildDeadlockHeuristic(
     evidence.push(`${strongLockBlocked.length} thread(s) are blocked in strong lock/join waits.`);
   }
   if (runnableProject.length > 0) {
-    evidence.push(`${runnableProject.length} project-controlled thread(s) do not match a known wait primitive.`);
+    evidence.push(`${runnableProject.length} thread(s) have an active project-controlled top frame.`);
+  }
+  if (unknown.length > 0) {
+    evidence.push(`${unknown.length} thread(s) remain unclassified, so they cannot be treated as evidence of quiescence.`);
   }
   if (sharedSynchronization.length > 0) {
     evidence.push(`${sharedSynchronization.length} synchronization-related pointer value(s) are visible across multiple threads.`);
@@ -392,10 +399,10 @@ function buildDeadlockHeuristic(
 
   if (triage.length === 0) {
     classification = 'unknown';
-  } else if (strongLockBlocked.length >= 2 && runnableProject.length === 0) {
+  } else if (strongLockBlocked.length >= 2 && runnableProject.length === 0 && unknown.length === 0) {
     classification = 'deadlock-candidate';
     likelihood = 'medium';
-    evidence.push('multiple threads are simultaneously blocked in strong lock/join waits and no project-controlled runnable thread was identified');
+    evidence.push('multiple threads are simultaneously blocked in strong lock/join waits, no active project-controlled top frame was identified, and no captured thread remains unclassified');
   } else if (sharedSynchronization.length > 0 && strongLockBlocked.length >= 1) {
     classification = 'lock-contention';
     likelihood = 'medium';
@@ -408,6 +415,9 @@ function buildDeadlockHeuristic(
   } else if (blocked.length > 0) {
     classification = 'mixed-wait';
     likelihood = 'medium';
+  } else if (unknown.length > 0) {
+    classification = 'unknown';
+    likelihood = 'low';
   } else {
     classification = 'no-deadlock-signal';
     likelihood = 'low';
@@ -425,6 +435,7 @@ function buildDeadlockHeuristic(
     limitations: [
       'Generic DAP does not expose a portable lock-owner graph, so qwen-dap-mcp never labels a cycle as proven from stack waits alone.',
       'Condition-variable, semaphore, event, scheduler, and timer waits alone are not promoted to a deadlock candidate because they are common in healthy idle worker pools.',
+      'Unclassified threads prevent promotion to deadlock-candidate because their execution state is not strong enough evidence of quiescence.',
       'A deadlock-candidate means the captured state is consistent with deadlock; confirm ownership/wait edges with adapter-specific lock metadata or repeated evidence when available.',
     ],
   };
@@ -443,7 +454,7 @@ export function analyzeHang(
       threadName: item.thread.name,
       ...(item.stack[0] ? { topFunction: item.stack[0].name } : {}),
       ...(project ? { projectFunction: project.frame.name, projectFrameIndex: project.index } : {}),
-      projectControlled: Boolean(project),
+      projectControlled: wait.kind === 'running-user-code',
       wait,
       ...(item.collectionErrors?.length ? { collectionErrors: item.collectionErrors } : {}),
     };
@@ -466,6 +477,8 @@ export function analyzeHang(
     nextActions.push('Check whether the process is legitimately waiting for external I/O and identify the project frame that issued the blocking operation.');
   } else if (deadlock.classification === 'no-deadlock-signal') {
     nextActions.push('Look for busy-loop/livelock behavior in runnable project-controlled threads; a hang can occur without a blocking primitive.');
+  } else if (deadlock.classification === 'unknown') {
+    nextActions.push('Collect stronger top-frame or wait-state evidence for unclassified threads before making a deadlock claim.');
   } else {
     nextActions.push('Compare blocked and runnable project-controlled threads to identify the thread responsible for forward progress.');
   }
