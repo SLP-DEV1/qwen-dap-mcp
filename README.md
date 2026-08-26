@@ -25,6 +25,7 @@ Coding agents are good at reading and editing source, but native crashes often n
 - **Autonomous crash debugging** — diagnose → inspect source → propose fix → apply fix → build → reproduce → verify.
 - **Real native debugger evidence** — stack, registers, locals, exception state, modules, disassembly, memory, and source correlation.
 - **CodeLLDB integration** — launch or attach to authorized local native targets through DAP.
+- **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.
 - **Windows minidumps / postmortem debugging** — open existing `.dmp` files and recover structured evidence.
 - **Runtime root-cause backtracking** — follow suspicious values through bounded caller frames toward likely project-controlled producer candidates.
 - **Verification fingerprints** — distinguish fixed, same-crash, changed-failure, and inconclusive reproductions.
@@ -37,7 +38,7 @@ You: Debug why app.exe crashes with --repro
 
 Qwen Code
   ↓
-starts CodeLLDB through qwen-dap-mcp
+starts CodeLLDB or upstream lldb-dap through qwen-dap-mcp
   ↓
 finds the native failure and first project-controlled frame
   ↓
@@ -111,6 +112,12 @@ Qwen Code is the primary integration and the path covered by the project's exten
 | npm | `@slp-dev1/qwen-dap-mcp` |
 | Official MCP Registry | `io.github.SLP-DEV1/qwen-dap-mcp` |
 | GitHub Releases | Self-contained extension archive |
+
+## Debugger adapters
+
+CodeLLDB and upstream LLVM `lldb-dap` are both first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` when you want the debugger adapter shipped by LLVM itself. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `dumpAdapter="lldb-dap"`.
+
+Discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical or versioned PATH binaries, common LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. See [docs/lldb-dap.md](docs/lldb-dap.md) for examples, postmortem behavior, and the manual full-toolset helpers.
 
 ## Autonomous crash debugging
 
@@ -235,7 +242,7 @@ Qwen Code / MCP client
         │
         │ DAP over stdio
         ▼
- CodeLLDB / DAP adapter
+ CodeLLDB / lldb-dap / DAP adapter
         │
         ├── authorized live target
         └── crash dump / core file
@@ -251,7 +258,7 @@ The default `agent` toolset deliberately exposes only the nine high-level tools 
 
 | Tool | Purpose |
 | --- | --- |
-| `debug_this_crash` | High-level live/CodeLLDB/dump diagnosis, verification, and autonomous orchestration |
+| `debug_this_crash` | High-level live/CodeLLDB/lldb-dap/dump diagnosis, verification, and autonomous orchestration |
 | `debug_diagnose_stop` | Intelligent diagnosis of the current stopped state |
 | `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |
 | `debug_run_to_stop` | Launch/attach and race-safely wait for stop/exit/termination |
@@ -261,7 +268,7 @@ The default `agent` toolset deliberately exposes only the nine high-level tools 
 | `debug_continue` | Resume an authorized live target to the next stop |
 | `debug_disconnect` | Disconnect and tear down the debugger session |
 
-The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB lifecycle primitives.
+The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap lifecycle primitives.
 
 ## Verification model
 
