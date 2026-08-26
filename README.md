@@ -2,7 +2,7 @@
 
 **Give Qwen Code a real native debugger.**
 
-A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash/hang analysis, multi-session debugging, remote native targets, and bounded autonomous fix/verify loops.
+A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash/hang analysis, differential/causal debugging, multi-session debugging, remote native targets, and bounded autonomous fix/verify loops.
 
 [![CI](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SLP-DEV1/qwen-dap-mcp)](https://github.com/SLP-DEV1/qwen-dap-mcp/releases/latest)
@@ -24,6 +24,8 @@ Coding agents are good at reading and editing source, but native crashes and han
 
 - **Autonomous crash debugging** — diagnose → inspect source → propose fix → apply fix → build → reproduce → verify.
 - **Native hang/deadlock triage** — `debug_this_hang` captures bounded all-thread stacks, classifies waits, identifies deadlock candidates, and correlates Pointer-Provenance v2 across threads.
+- **Differential runtime debugging** — `debug_compare_runs` compares a known-good and failing stopped session semantically across stacks, locals, registers, exception state, symbols, and modules while suppressing raw address noise.
+- **Temporal value tracing** — `debug_trace_value` builds a bounded sequence of real writer stops after a suspicious value has been identified.
 - **Multi-session debugging** — create isolated DAP sessions and route every debugger call with an optional request-local `sessionId` without a process-global selector race.
 - **Hardened remote native debugging** — connect GDB DAP to `gdbserver` and upstream `lldb-dap` to `lldb-server gdbserver` through validated TCP endpoints with loopback-first policy and explicit non-loopback allowlisting.
 - **Real native debugger evidence** — stacks, registers, locals, exception state, modules, disassembly, memory, wait states, and source correlation.
@@ -31,7 +33,7 @@ Coding agents are good at reading and editing source, but native crashes and han
 - **Upstream LLVM lldb-dap integration** — first-class live debugging, remote gdb-server attach, and core-file inspection without treating lldb-dap as a CodeLLDB alias.
 - **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, hardened remote-target, and core-file support through `--interpreter=dap`.
 - **HOL Guard policy enforcement** — optional fail-closed policy gating for adapter startup and mutating/executable DAP actions, with approval/reapproval flows, secret hashing, and exact adapter identity binding.
-- **Runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value.
+- **Immediate runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value once.
 - **Windows minidumps / postmortem debugging** — open existing `.dmp` files and recover structured evidence.
 - **Runtime root-cause backtracking** — follow suspicious values through bounded caller frames toward likely project-controlled producer candidates.
 - **Verification fingerprints** — distinguish fixed, same-crash, changed-failure, and inconclusive reproductions.
@@ -159,13 +161,14 @@ The roadmap is intentionally ordered around capabilities that make the bridge mo
 | --- | --- | --- |
 | **v0.14** | GNU debugger + runtime provenance | First-class GDB DAP, `debug_find_writer`, structured MCP results/output schemas, symbol-health reporting, real GDB Linux smoke coverage |
 | **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, Pointer-Provenance v2, deterministic native Hang Lab |
-| **v0.16** | Remote + multi-session | In development: request-local isolated sessions, `debug_sessions`, hardened gdbserver/lldb-server attach, exact remote-host allowlisting, real remote Linux smoke coverage, cross-adapter session isolation |
+| **v0.16** | Remote + multi-session | Request-local isolated sessions, `debug_sessions`, hardened gdbserver/lldb-server attach, exact remote-host allowlisting, real remote Linux smoke coverage, cross-adapter session isolation |
+| **v0.17** | Differential + causal debugging | `debug_compare_runs`, ASLR-aware semantic runtime diffs, bounded `debug_trace_value`, operation-scoped cancellation, generation isolation, real two-session GDB differential smoke |
 
 Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
 
 ### Structured agent results
 
-The twelve default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
+The fourteen default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
 
 ## Autonomous crash debugging
 
@@ -301,6 +304,45 @@ Loopback is permitted by default. Exact non-loopback hosts must be listed in `QW
 
 Both paths are covered by real Linux CI against an actual `gdbserver` / `lldb-server gdbserver`, including breakpoint, continue, stack, and variable evidence. See [docs/remote-debugging.md](docs/remote-debugging.md) for the full workflow and threat model.
 
+## Differential and causal debugging (v0.17)
+
+Use two isolated stopped sessions when the same logical execution phase can be reproduced in a known-good and failing case:
+
+```text
+debug_sessions(action="create", sessionId="baseline")
+debug_sessions(action="create", sessionId="candidate")
+
+# prepare comparable stopped states with the normal lifecycle tools
+
+debug_compare_runs(
+  baselineSessionId="baseline",
+  candidateSessionId="candidate",
+  timeoutMs=30000,
+  snapshot={stackLevels:20, maxVariablesPerScope:100, includeModules:true}
+)
+```
+
+`debug_compare_runs` is inspection-only. It compares semantic stack identities, locals/arguments, registers, exception state, symbol health, and loaded modules. Non-null pointer-address changes are classified as `unstable` so ASLR, allocator, and stack-layout noise are not promoted as causal evidence; null/non-null transitions remain meaningful state changes. The result exposes `firstMeaningfulDifference`, all categorized differences, limitations, and the exact `evidenceBudget` used for the bounded capture.
+
+If a suspicious debugger-visible value needs temporal evidence and the candidate target is safe to resume:
+
+```text
+debug_trace_value(
+  sessionId="candidate",
+  name="critical_ptr",
+  accessType="write",
+  maxStops=8,
+  timeoutMs=60000,
+  perStopTimeoutMs=15000
+)
+```
+
+`debug_trace_value` installs one temporary data breakpoint/watchpoint at a time, resumes to the next confirmed writer, captures the actual stopped thread/frame and visible before/after values when available, removes only its own temporary watch, and repeats within an aggregate deadline. It stops on unrelated debugger events instead of silently continuing through them. A writer stop is temporal evidence, not root-cause proof; source and ownership semantics still have to confirm the causal link.
+
+v0.17 also adds request-local operation deadlines/cancellation and transport-generation isolation. Cancelled pending requests lose authority immediately, and late responses/output from a retired debugger adapter cannot contaminate later workflows.
+
+See [docs/differential-debugging.md](docs/differential-debugging.md) for the evidence model, safety semantics, and real two-session GDB regression coverage.
+
 ## Intelligent diagnosis
 
 The diagnosis layer separates raw debugger facts from inference and reports:
@@ -345,8 +387,12 @@ Qwen Code / MCP client
    qwen-dap-mcp
         │
         ├── request-local session registry/router
+        ├── request-local operation deadlines / cancellation
+        ├── transport-generation late-response isolation
         ├── isolated lifecycle/concurrency guards per session
         ├── bounded DAP snapshot + all-thread capture layer
+        ├── semantic cross-session runtime diff
+        ├── bounded temporal writer tracing
         ├── crash classification
         ├── wait/deadlock heuristics
         ├── Pointer-Provenance v2 cross-thread correlation
@@ -372,7 +418,7 @@ The MCP server has no HTTP listener. Debugger adapters are spawned locally witho
 
 ## MCP toolsets
 
-The default `agent` toolset deliberately exposes only the twelve high-level/session-management tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface or explicit remote attach helpers. See [docs/toolsets.md](docs/toolsets.md).
+The default `agent` toolset deliberately exposes only the fourteen high-level/session-management tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface or explicit remote attach helpers. See [docs/toolsets.md](docs/toolsets.md).
 
 ### Default `agent` tools
 
@@ -380,6 +426,8 @@ The default `agent` toolset deliberately exposes only the twelve high-level/sess
 | --- | --- |
 | `debug_this_crash` | High-level live/CodeLLDB/lldb-dap/dump diagnosis, verification, and autonomous orchestration |
 | `debug_this_hang` | High-level hang/deadlock workflow with bounded all-thread triage, wait heuristics, and Pointer-Provenance v2 |
+| `debug_compare_runs` | Read-only semantic comparison of two existing stopped sessions with ASLR-aware value classification and explicit evidence budget |
+| `debug_trace_value` | Build a bounded temporal timeline of real data-breakpoint/watchpoint writer stops for a suspicious live value |
 | `debug_diagnose_stop` | Intelligent diagnosis of the current stopped state |
 | `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |
 | `debug_find_writer` | Temporarily watch a suspicious value and stop at its immediate runtime writer |
@@ -433,7 +481,7 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`npm run check` performs TypeScript build, tests, and extension-package staging. CI runs Node 20 and 22.
+`npm run check` performs TypeScript build, tests, and extension-package staging. CI runs Node 20 and 22. Dedicated real-adapter workflows additionally exercise GDB DAP, upstream lldb-dap, multi-session remote attach, and the two-session differential GDB path.
 
 The deterministic native Hang Lab can also be built and reproduced directly:
 
@@ -449,6 +497,11 @@ The hang repro succeeds only when the process remains blocked until its bounded 
 - local stdio MCP transport only,
 - no built-in remote HTTP debugger service,
 - request-local multi-session routing; no process-global selected-session race,
+- request-local operation deadlines and AbortSignal propagation bound nested DAP requests/event waits,
+- cancelled pending requests lose completion authority immediately and late adapter responses are orphaned,
+- adapter transport generations isolate late output/errors/responses from retired debugger processes,
+- `debug_compare_runs` remains read-only and operates only on already stopped sessions,
+- `debug_trace_value` is live execution control and must not be used for frozen dumps or unsafe-to-resume targets,
 - bounded session registry with close protection while routed requests are active,
 - remote debugger endpoints restricted to validated TCP host/port values,
 - loopback remote debug hosts allowed by default; non-loopback hosts require exact `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS` allowlisting,
@@ -463,6 +516,7 @@ The hang repro succeeds only when the process remains blocked until its bounded 
 - `debug_this_hang` launch/attach/pause operations use the same guarded DAP boundaries,
 - deadlock/wait classifications are bounded heuristics and never fabricate a lock-owner cycle,
 - Pointer-Provenance v2 treats cross-thread address equality as correlation evidence, not ownership proof,
+- semantic differential debugging treats non-null raw address-only changes as unstable evidence rather than causal proof,
 - no automatic source rollback without external evidence,
 - live/remote attach intended only for authorized targets,
 - postmortem dumps frozen against execution-control operations,
