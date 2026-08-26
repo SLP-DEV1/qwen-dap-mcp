@@ -31,7 +31,7 @@ const snapshotSchema = z.object({
   threadId: z.number().int().positive().optional().describe('Stopped DAP thread to inspect; omit to use each session-selected stopped thread.'),
   stackLevels: z.number().int().positive().max(100).default(defaultSnapshotOptions.stackLevels).describe('Maximum stack frames captured from each session.'),
   maxVariablesPerScope: z.number().int().positive().max(500).default(defaultSnapshotOptions.maxVariablesPerScope).describe('Maximum variables captured per relevant scope in each session.'),
-  includeDisassembly: z.boolean().default(defaultSnapshotOptions.includeDisassembly).describe('Include bounded disassembly in the raw snapshots. The semantic phase-1 diff does not compare raw instruction addresses.'),
+  includeDisassembly: z.boolean().default(defaultSnapshotOptions.includeDisassembly).describe('Include bounded disassembly in the raw snapshots. The semantic v0.17 diff does not compare raw instruction addresses.'),
   disassembleBefore: z.number().int().nonnegative().max(100).default(defaultSnapshotOptions.disassembleBefore),
   disassembleAfter: z.number().int().nonnegative().max(100).default(defaultSnapshotOptions.disassembleAfter),
   includeModules: z.boolean().default(defaultSnapshotOptions.includeModules).describe('Collect loaded modules so added/removed images can be compared.'),
@@ -111,10 +111,10 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
             return structuredResult({
               baselineSessionId,
               candidateSessionId,
-              budget: {
+              evidenceBudget: {
                 timeoutMs,
                 sessions: 2,
-                stackLevelsPerSession: snapshot.stackLevels,
+                stackLevels: snapshot.stackLevels,
                 maxVariablesPerScope: snapshot.maxVariablesPerScope,
                 includeDisassembly: snapshot.includeDisassembly,
                 disassemblyInstructionsPerSession: snapshot.includeDisassembly
