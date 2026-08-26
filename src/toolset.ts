@@ -1,6 +1,6 @@
 export type ToolsetMode = 'agent' | 'full';
 
-export const AGENT_TOOL_NAMES = new Set([
+export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
   'debug_diagnose_stop',
   'debug_source_disassembly',
@@ -10,7 +10,7 @@ export const AGENT_TOOL_NAMES = new Set([
   'debug_status',
   'debug_continue',
   'debug_disconnect',
-] as const);
+]);
 
 type ToolRegistrar = {
   // McpServer.registerTool is overloaded/generic; this preserves its call
@@ -28,7 +28,7 @@ export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): To
 }
 
 export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
-  return mode === 'full' || AGENT_TOOL_NAMES.has(toolName as never);
+  return mode === 'full' || AGENT_TOOL_NAMES.has(toolName);
 }
 
 export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode: ToolsetMode): T {
