@@ -28,6 +28,16 @@ The bridge searches in this order:
 
 The executable is version-probed and GDB < 14 is rejected before a session is started.
 
+## DAP lifecycle compatibility
+
+Modern GDB DAP differs from CodeLLDB and `lldb-dap` in an important ordering detail. GDB can emit `initialized` immediately after the DAP `initialize` request, and its corrected launch flow expects configuration requests before `launch`:
+
+```text
+initialize -> initialized -> setBreakpoints -> configurationDone -> launch
+```
+
+Source breakpoints can therefore be reported as pending before GDB knows the executable and become resolved when `launch` loads and starts the program. The bridge handles this ordering only for the GDB adapter path while preserving the existing CodeLLDB/`lldb-dap` lifecycle.
+
 ## High-level crash workflow
 
 ```text
