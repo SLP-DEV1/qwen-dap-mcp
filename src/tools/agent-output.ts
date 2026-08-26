@@ -176,6 +176,20 @@ export const debugContinueOutputSchema = z.object({
 }).catchall(z.unknown());
 export const debugDisconnectOutputSchema = z.object({ disconnected: z.literal(true) });
 
+export const debugSessionsOutputSchema = z.object({
+  action: z.enum(['list', 'create', 'close']),
+  defaultSessionId: z.string(),
+  maxSessions: z.number().int().positive(),
+  sessionId: z.string().optional(),
+  removed: z.boolean().optional(),
+  sessions: z.array(z.object({
+    sessionId: z.string(),
+    isDefault: z.boolean(),
+    activeRequests: z.number().int().nonnegative(),
+    snapshot: z.object({}).catchall(z.unknown()),
+  })),
+}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
@@ -188,4 +202,5 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_status: debugStatusOutputSchema,
   debug_continue: debugContinueOutputSchema,
   debug_disconnect: debugDisconnectOutputSchema,
+  debug_sessions: debugSessionsOutputSchema,
 } as const;

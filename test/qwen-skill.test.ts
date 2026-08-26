@@ -10,6 +10,12 @@ const projectSkillPath = fileURLToPath(
 const extensionSkillPath = fileURLToPath(
   new URL('../skills/native-runtime-debug/SKILL.md', import.meta.url),
 );
+const projectRemoteSkillPath = fileURLToPath(
+  new URL('../.qwen/skills/native-runtime-debug/REMOTE.md', import.meta.url),
+);
+const extensionRemoteSkillPath = fileURLToPath(
+  new URL('../skills/native-runtime-debug/REMOTE.md', import.meta.url),
+);
 const extensionManifestPath = fileURLToPath(
   new URL('../qwen-extension.json', import.meta.url),
 );
@@ -88,6 +94,27 @@ function validateSkill(content: string): void {
   assert.match(content, /external-unverified/i);
 }
 
+function validateRemoteSkill(content: string): void {
+  for (const required of [
+    'debug_sessions',
+    'sessionId',
+    'debug_attach_gdb_remote',
+    'debug_attach_lldb_dap_remote',
+    'QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS',
+    'gdbserver',
+    'lldb-server',
+    'gdb-remote',
+    'SSH/VPN',
+    'HOL Guard',
+  ]) {
+    assert.ok(content.includes(required), `Remote Skill must reference ${required}`);
+  }
+  assert.match(content, /request-local/i);
+  assert.match(content, /same session/i);
+  assert.match(content, /matching binary|correspond to the remote executable/i);
+  assert.match(content, /do not.*arbitrary/i);
+}
+
 test('project and extension native-runtime-debug skills stay identical and valid', async () => {
   const [projectSkill, extensionSkill] = await Promise.all([
     readFile(projectSkillPath, 'utf8'),
@@ -97,6 +124,17 @@ test('project and extension native-runtime-debug skills stay identical and valid
   validateSkill(projectSkill);
   validateSkill(extensionSkill);
   assert.equal(extensionSkill, projectSkill, 'Bundled extension Skill must match the project Skill');
+});
+
+test('project and extension remote-debugging companion docs stay identical and valid', async () => {
+  const [projectRemote, extensionRemote] = await Promise.all([
+    readFile(projectRemoteSkillPath, 'utf8'),
+    readFile(extensionRemoteSkillPath, 'utf8'),
+  ]);
+
+  validateRemoteSkill(projectRemote);
+  validateRemoteSkill(extensionRemote);
+  assert.equal(extensionRemote, projectRemote, 'Bundled extension remote Skill doc must match the project copy');
 });
 
 test('Qwen extension manifest starts the built local MCP server and matches package version', async () => {

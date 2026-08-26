@@ -4,7 +4,7 @@ qwen-dap-mcp exposes two MCP tool surfaces. The debugger implementation undernea
 
 ## `agent` — default
 
-`agent` is optimized for coding agents. It keeps the MCP schema/context surface small and exposes the high-level workflows that normally contain enough evidence for crash diagnosis, hang triage, runtime provenance, and verification:
+`agent` is optimized for coding agents. It keeps the MCP schema/context surface small and exposes the high-level workflows that normally contain enough evidence for crash diagnosis, hang triage, runtime provenance, verification, and multi-session management:
 
 - `debug_this_crash` — high-level crash diagnosis / verification / bounded autonomous workflow
 - `debug_this_hang` — bounded all-thread hang/deadlock triage with wait heuristics and Pointer-Provenance v2
@@ -16,7 +16,12 @@ qwen-dap-mcp exposes two MCP tool surfaces. The debugger implementation undernea
 - `debug_snapshot` — bounded raw stopped-state evidence
 - `debug_status` — current debugger/session status
 - `debug_continue` — resume an authorized live target
-- `debug_disconnect` — tear down the active debugger session
+- `debug_disconnect` — tear down the routed debugger session
+- `debug_sessions` — list, create, or close isolated DAP sessions
+
+Every `debug_*` tool except `debug_sessions` accepts an optional `sessionId`. Omitting it routes the request to the backwards-compatible `default` session. Non-default sessions must be created first with `debug_sessions(action="create", sessionId=...)`.
+
+Session selection is request-local. qwen-dap-mcp uses an async request context rather than a process-global "selected session", so concurrent MCP calls can safely target different sessions. Each real session has its own DAP connection, lifecycle guard, postmortem state, event history, breakpoint/watchpoint state, timeout state, and HOL Guard context. A session with an active routed request cannot be closed out from under that request.
 
 No environment variable is required:
 
@@ -39,7 +44,7 @@ npx -y @slp-dev1/qwen-dap-mcp
 
 ## `full` — manual debugger surface
 
-Use `full` when the client or user intentionally needs low-level DAP operations such as manual breakpoint/watchpoint management, stepping, expression evaluation, direct memory reads, module inspection, or raw thread/stack/scope traversal.
+Use `full` when the client or user intentionally needs low-level DAP operations such as manual breakpoint/watchpoint management, stepping, expression evaluation, direct memory reads, module inspection, raw thread/stack/scope traversal, or explicit remote-debug attach helpers.
 
 ```bash
 QWEN_DAP_MCP_TOOLSET=full npx -y @slp-dev1/qwen-dap-mcp
@@ -52,7 +57,21 @@ $env:QWEN_DAP_MCP_TOOLSET = 'full'
 npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-The full toolset remains backwards compatible with the pre-v0.12 public tool surface.
+The full toolset remains backwards compatible with the pre-v0.12 public tool surface. v0.16 adds hardened remote attach helpers such as `debug_attach_gdb_remote` and `debug_attach_lldb_dap_remote`; these remain hidden from the compact `agent` schema surface.
+
+## Remote debugging safety
+
+Remote debug servers are powerful process-control endpoints and generally should not be exposed directly to untrusted networks. qwen-dap-mcp therefore treats remote targets as structured TCP endpoints rather than arbitrary debugger command strings.
+
+Loopback hosts are allowed by default. Non-loopback hosts are denied unless the exact hostname or IP is present in `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS`, for example:
+
+```bash
+export QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS=debugbox.internal,10.20.30.40
+```
+
+Prefer SSH/VPN tunneling so the MCP still connects to `127.0.0.1` or `localhost`. The GDB path does not accept arbitrary `target` syntax, and the lldb-dap compatibility path generates exactly one `gdb-remote host:port` command from the already validated endpoint instead of exposing free-form LLDB commands.
+
+See [remote-debugging.md](remote-debugging.md) for the supported gdbserver/lldb-server workflow and threat model.
 
 ## Hang workflow safety
 

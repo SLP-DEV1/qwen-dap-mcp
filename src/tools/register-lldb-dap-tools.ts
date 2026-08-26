@@ -4,10 +4,17 @@ import * as z from 'zod/v4';
 import {
   buildLldbDapAttachConfiguration,
   buildLldbDapLaunchConfiguration,
+  buildLldbDapRemoteAttachConfiguration,
   discoverLldbDap,
+  resolveLldbDapRemoteEndpoint,
 } from '../adapters/lldb-dap.js';
 import { DapSession } from '../dap/session.js';
-import { DEBUG_SESSION_CONTROL_ANNOTATIONS, READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
+import { REMOTE_DEBUG_HOSTS_ENV } from '../remote-endpoint.js';
+import {
+  DEBUG_SESSION_CONTROL_ANNOTATIONS,
+  LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+  READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+} from './tool-annotations.js';
 
 const breakpointGroupSchema = z.object({
   source: z.string().min(1),
@@ -123,5 +130,33 @@ export function registerLldbDapTools(server: McpServer, session: DapSession): vo
       }),
       (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
     )),
+  );
+
+  server.registerTool(
+    'debug_attach_lldb_dap_remote',
+    {
+      title: 'Attach lldb-dap to lldb-server',
+      description: `Use this to connect an initialized upstream lldb-dap session to an authorized lldb-server gdbserver TCP endpoint. qwen-dap-mcp validates the structured host/port first, then generates exactly one gdb-remote host:port attach command for compatibility with older lldb-dap releases such as version 18; user-supplied LLDB commands are never accepted. Loopback is allowed by default; a non-loopback host must be listed exactly in ${REMOTE_DEBUG_HOSTS_ENV}. Do not use this for lldb-server platform mode.`,
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      inputSchema: z.object({
+        host: z.string().min(1).describe(`Authorized lldb-server hostname/IP. Loopback is allowed automatically; other exact hosts require ${REMOTE_DEBUG_HOSTS_ENV}.`),
+        port: z.number().int().min(1).max(65535).describe('lldb-server gdbserver TCP port from 1 through 65535.'),
+        program: z.string().min(1).optional().describe('Optional local matching executable image for symbols and pre-attach breakpoint resolution.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured around remote attach setup.'),
+      }),
+    },
+    wrap(async ({ host, port, program, breakpoints }) => {
+      const options = {
+        host: host as string,
+        port: port as number,
+        ...(program ? { program: program as string } : {}),
+      };
+      const endpoint = resolveLldbDapRemoteEndpoint(options);
+      const attach = await session.attach(
+        buildLldbDapRemoteAttachConfiguration(options),
+        (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+      );
+      return { endpoint, attach, status: session.snapshot() };
+    }),
   );
 }

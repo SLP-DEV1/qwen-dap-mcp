@@ -8,7 +8,9 @@ import {
   buildLldbDapAttachConfiguration,
   buildLldbDapCoreConfiguration,
   buildLldbDapLaunchConfiguration,
+  buildLldbDapRemoteAttachConfiguration,
   discoverLldbDap,
+  resolveLldbDapRemoteEndpoint,
 } from '../src/adapters/lldb-dap.js';
 
 function adapterName(): string {
@@ -90,6 +92,49 @@ test('lldb-dap attach profile validates PID and optional program', () => {
     for (const pid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
       assert.throws(() => buildLldbDapAttachConfiguration({ pid }), /positive safe integer/i);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lldb-dap remote profile generates one validated gdb-remote command for old adapters', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qwen-dap-mcp-lldb-dap-remote-'));
+  try {
+    const program = join(root, 'native-smoke');
+    writeFileSync(program, 'fixture');
+
+    assert.deepEqual(
+      buildLldbDapRemoteAttachConfiguration({ host: 'localhost', port: 1234, program }),
+      {
+        type: 'lldb-dap',
+        request: 'attach',
+        name: 'qwen-dap-mcp lldb-dap remote attach',
+        program,
+        attachCommands: ['gdb-remote localhost:1234'],
+      },
+    );
+    assert.deepEqual(
+      buildLldbDapRemoteAttachConfiguration({ host: '::1', port: 1234 }),
+      {
+        type: 'lldb-dap',
+        request: 'attach',
+        name: 'qwen-dap-mcp lldb-dap remote attach',
+        attachCommands: ['gdb-remote [::1]:1234'],
+      },
+    );
+
+    assert.throws(
+      () => buildLldbDapRemoteAttachConfiguration({ host: 'debug.example.test', port: 2345 }),
+      /is not allowed/,
+    );
+    assert.deepEqual(
+      resolveLldbDapRemoteEndpoint({
+        host: 'debug.example.test',
+        port: 2345,
+        policyEnv: { QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS: 'debug.example.test' },
+      }),
+      { host: 'debug.example.test', port: 2345, target: 'debug.example.test:2345', loopback: false },
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

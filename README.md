@@ -2,7 +2,7 @@
 
 **Give Qwen Code a real native debugger.**
 
-A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash/hang analysis, and bounded autonomous fix/verify loops.
+A debugger-agnostic **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native runtime debugging, crash/hang analysis, multi-session debugging, remote native targets, and bounded autonomous fix/verify loops.
 
 [![CI](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SLP-DEV1/qwen-dap-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SLP-DEV1/qwen-dap-mcp)](https://github.com/SLP-DEV1/qwen-dap-mcp/releases/latest)
@@ -24,10 +24,12 @@ Coding agents are good at reading and editing source, but native crashes and han
 
 - **Autonomous crash debugging** — diagnose → inspect source → propose fix → apply fix → build → reproduce → verify.
 - **Native hang/deadlock triage** — `debug_this_hang` captures bounded all-thread stacks, classifies waits, identifies deadlock candidates, and correlates Pointer-Provenance v2 across threads.
+- **Multi-session debugging** — create isolated DAP sessions and route every debugger call with an optional request-local `sessionId` without a process-global selector race.
+- **Hardened remote native debugging** — connect GDB DAP to `gdbserver` and upstream `lldb-dap` to `lldb-server gdbserver` through validated TCP endpoints with loopback-first policy and explicit non-loopback allowlisting.
 - **Real native debugger evidence** — stacks, registers, locals, exception state, modules, disassembly, memory, wait states, and source correlation.
 - **CodeLLDB integration** — launch or attach to authorized local native targets through DAP.
-- **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.
-- **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, remote-target, and core-file support through `--interpreter=dap`.
+- **Upstream LLVM lldb-dap integration** — first-class live debugging, remote gdb-server attach, and core-file inspection without treating lldb-dap as a CodeLLDB alias.
+- **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, hardened remote-target, and core-file support through `--interpreter=dap`.
 - **HOL Guard policy enforcement** — optional fail-closed policy gating for adapter startup and mutating/executable DAP actions, with approval/reapproval flows, secret hashing, and exact adapter identity binding.
 - **Runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value.
 - **Windows minidumps / postmortem debugging** — open existing `.dmp` files and recover structured evidence.
@@ -119,9 +121,9 @@ Qwen Code is the primary integration and the path covered by the project's exten
 
 ## Debugger adapters
 
-CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` / `debug_this_hang(mode="lldb-dap")` for LLVM's adapter or the corresponding `mode="gdb"` for GDB 14+. The `lldb-dap` path supports live launch/attach plus read-only core-file analysis through `debug_this_crash(..., dumpAdapter="lldb-dap")`.
+CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode="lldb-dap")` / `debug_this_hang(mode="lldb-dap")` for LLVM's adapter or the corresponding `mode="gdb"` for GDB 14+. The `lldb-dap` path supports live launch/attach, hardened `lldb-server gdbserver` attach, plus read-only core-file analysis through `debug_this_crash(..., dumpAdapter="lldb-dap")`. GDB supports the equivalent hardened `gdbserver` workflow through `debug_attach_gdb_remote`.
 
-LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md) and [docs/gdb-dap.md](docs/gdb-dap.md).
+LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md), [docs/gdb-dap.md](docs/gdb-dap.md), and [docs/remote-debugging.md](docs/remote-debugging.md).
 
 ## HOL Guard integration
 
@@ -153,17 +155,17 @@ For the full threat model, approval flow, exact identity binding, secret handlin
 
 The roadmap is intentionally ordered around capabilities that make the bridge more useful to coding agents, not around exposing every debugger command. Planned scope may change as real adapter behavior and benchmark evidence improve.
 
-| Release | Focus | Planned capabilities |
+| Release | Focus | Capabilities / status |
 | --- | --- | --- |
 | **v0.14** | GNU debugger + runtime provenance | First-class GDB DAP, `debug_find_writer`, structured MCP results/output schemas, symbol-health reporting, real GDB Linux smoke coverage |
 | **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, Pointer-Provenance v2, deterministic native Hang Lab |
-| **v0.16** | Remote/multi-session + evidence | hardened gdbserver/lldb-server workflows, multi-session architecture, existing LLDB-session interoperability where practical, cross-adapter benchmark matrix |
+| **v0.16** | Remote + multi-session | In development: request-local isolated sessions, `debug_sessions`, hardened gdbserver/lldb-server attach, exact remote-host allowlisting, real remote Linux smoke coverage, cross-adapter session isolation |
 
 Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
 
 ### Structured agent results
 
-The eleven default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
+The twelve default agent tools expose MCP v2 `outputSchema` contracts and return the same JSON evidence in both `structuredContent` and the legacy text content block. This keeps older clients readable while allowing MCP v2 hosts to validate and consume results without reparsing prose. Runtime snapshots also include `symbolHealth`, a deterministic `good | partial | poor | unknown` classification derived from resolved stack-frame names, source/line mappings, and explicit module symbol evidence when the adapter provides it. No synthetic numeric symbol score is used.
 
 ## Autonomous crash debugging
 
@@ -263,6 +265,42 @@ If an existing stop is only thread-local, `debug_this_hang` does not silently tr
 
 See [docs/hang-debugging.md](docs/hang-debugging.md) for the full evidence model, modes, safety semantics, and deterministic Hang Lab.
 
+## Multi-session and remote debugging (v0.16)
+
+`debug_sessions` manages isolated debugger sessions while preserving `default` for callers that do not pass `sessionId`:
+
+```text
+debug_sessions(action="create", sessionId="remote-gdb")
+debug_sessions(action="create", sessionId="remote-lldb")
+
+debug_start_gdb(sessionId="remote-gdb")
+debug_start_lldb_dap(sessionId="remote-lldb")
+```
+
+Every other `debug_*` tool receives an optional `sessionId`. Selection is bound to the lifetime of that async MCP request using `AsyncLocalStorage`; there is no process-global selected-session variable that concurrent calls can overwrite. Each session owns its own DAP transport, lifecycle gate, debugger state, event history, watchpoints, timeout state, postmortem flag, and HOL Guard context. Active sessions cannot be closed while a routed request is executing.
+
+Remote attach helpers are available in the `full` toolset:
+
+```text
+debug_attach_gdb_remote(
+  sessionId="remote-gdb",
+  host="127.0.0.1",
+  port=1234,
+  program="/local/symbols/app"
+)
+
+debug_attach_lldb_dap_remote(
+  sessionId="remote-lldb",
+  host="127.0.0.1",
+  port=1235,
+  program="/local/symbols/app"
+)
+```
+
+Loopback is permitted by default. Exact non-loopback hosts must be listed in `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS`. Prefer SSH/VPN tunneling rather than exposing a native debug server directly. GDB accepts only a validated TCP endpoint, not arbitrary target syntax. For lldb-dap 18 compatibility, the MCP generates exactly one `gdb-remote host:port` attach command from the validated endpoint; user-provided LLDB commands are not accepted.
+
+Both paths are covered by real Linux CI against an actual `gdbserver` / `lldb-server gdbserver`, including breakpoint, continue, stack, and variable evidence. See [docs/remote-debugging.md](docs/remote-debugging.md) for the full workflow and threat model.
+
 ## Intelligent diagnosis
 
 The diagnosis layer separates raw debugger facts from inference and reports:
@@ -306,7 +344,8 @@ Qwen Code / MCP client
         ▼
    qwen-dap-mcp
         │
-        ├── lifecycle/concurrency guard
+        ├── request-local session registry/router
+        ├── isolated lifecycle/concurrency guards per session
         ├── bounded DAP snapshot + all-thread capture layer
         ├── crash classification
         ├── wait/deadlock heuristics
@@ -318,19 +357,22 @@ Qwen Code / MCP client
         ├── verification fingerprints + quality scoring
         └── autonomous action state machine
         │
-        │ DAP over stdio
+        │ DAP over local stdio
         ▼
  CodeLLDB / lldb-dap / GDB DAP adapter
         │
-        ├── authorized live target
-        └── crash dump / core file
+        ├── authorized local live target
+        ├── crash dump / core file
+        └── validated TCP remote endpoint
+                    │
+                    └── gdbserver / lldb-server gdbserver
 ```
 
-The MCP server has no HTTP listener. The adapter is spawned locally without a shell and communicates over stdio.
+The MCP server has no HTTP listener. Debugger adapters are spawned locally without a shell and communicate with the MCP over stdio. Remote debug-server connections originate from the local debugger adapter only after endpoint validation and authorization.
 
 ## MCP toolsets
 
-The default `agent` toolset deliberately exposes only the eleven high-level tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface. See [docs/toolsets.md](docs/toolsets.md).
+The default `agent` toolset deliberately exposes only the twelve high-level/session-management tools below so coding agents do not spend context on every low-level debugger primitive. Set `QWEN_DAP_MCP_TOOLSET=full` when you intentionally need the complete manual DAP surface or explicit remote attach helpers. See [docs/toolsets.md](docs/toolsets.md).
 
 ### Default `agent` tools
 
@@ -344,11 +386,12 @@ The default `agent` toolset deliberately exposes only the eleven high-level tool
 | `debug_run_to_stop` | Launch/attach and race-safely wait for stop/exit/termination |
 | `debug_open_dump` | Open a native core/minidump for read-only postmortem inspection |
 | `debug_snapshot` | Capture a bounded raw runtime snapshot |
-| `debug_status` | Read current session status |
+| `debug_status` | Read current routed session status |
 | `debug_continue` | Resume an authorized live target to the next stop |
-| `debug_disconnect` | Disconnect and tear down the debugger session |
+| `debug_disconnect` | Disconnect and tear down the routed debugger session |
+| `debug_sessions` | Create, list, or close isolated debugger sessions |
 
-The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap / GDB lifecycle primitives.
+The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, CodeLLDB / lldb-dap / GDB lifecycle primitives, and the hardened `debug_attach_gdb_remote` / `debug_attach_lldb_dap_remote` helpers.
 
 ## Verification model
 
@@ -405,6 +448,12 @@ The hang repro succeeds only when the process remains blocked until its bounded 
 
 - local stdio MCP transport only,
 - no built-in remote HTTP debugger service,
+- request-local multi-session routing; no process-global selected-session race,
+- bounded session registry with close protection while routed requests are active,
+- remote debugger endpoints restricted to validated TCP host/port values,
+- loopback remote debug hosts allowed by default; non-loopback hosts require exact `QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS` allowlisting,
+- arbitrary GDB target syntax and user-supplied LLDB attach commands are not exposed,
+- SSH/VPN tunneling recommended instead of direct native debug-server exposure,
 - no arbitrary shell/source-writing MCP primitive,
 - no arbitrary memory-write MCP primitive,
 - optional HOL Guard 2.2+ policy gate for adapter spawn and mutating/executable DAP actions,
@@ -415,7 +464,7 @@ The hang repro succeeds only when the process remains blocked until its bounded 
 - deadlock/wait classifications are bounded heuristics and never fabricate a lock-owner cycle,
 - Pointer-Provenance v2 treats cross-thread address equality as correlation evidence, not ownership proof,
 - no automatic source rollback without external evidence,
-- live attach intended only for authorized local targets,
+- live/remote attach intended only for authorized targets,
 - postmortem dumps frozen against execution-control operations,
 - bounded autonomous fix budget with deterministic stop conditions,
 - weak/inconclusive evidence does not trigger another source edit,

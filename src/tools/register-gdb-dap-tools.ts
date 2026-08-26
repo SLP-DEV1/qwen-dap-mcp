@@ -6,8 +6,10 @@ import {
   buildGdbDapPidAttachConfiguration,
   buildGdbDapRemoteAttachConfiguration,
   discoverGdbDap,
+  resolveGdbDapRemoteEndpoint,
 } from '../adapters/gdb-dap.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
+import { REMOTE_DEBUG_HOSTS_ENV } from '../remote-endpoint.js';
 import { LOCAL_TARGET_EXECUTION_ANNOTATIONS, READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
 
 const breakpointGroupSchema = z.object({
@@ -122,18 +124,30 @@ export function registerGdbDapTools(server: McpServer, session: GuardedDapSessio
   server.registerTool(
     'debug_attach_gdb_remote',
     {
-      title: 'Attach GDB Remote Target',
-      description: 'Connect an initialized GDB DAP session to an explicitly authorized target-remote endpoint such as localhost:1234. This opens a debugger connection to the supplied endpoint and can control the remote target; it never starts gdbserver itself.',
+      title: 'Attach GDB to gdbserver',
+      description: `Use this to connect an initialized GDB DAP session to an explicitly authorized gdbserver TCP endpoint. Loopback hosts are allowed by default; non-loopback hosts must be listed exactly in ${REMOTE_DEBUG_HOSTS_ENV}. Do not use this as a generic GDB target-string escape hatch: serial devices, arbitrary target syntax, and unapproved network hosts are rejected, and this tool never starts gdbserver itself.`,
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       inputSchema: z.object({
-        target: z.string().min(1).describe('GDB target remote argument, for example localhost:1234 or a local debug socket.'),
-        program: z.string().min(1).optional().describe('Optional local unstripped executable used for matching symbols.'),
-        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured after connecting.'),
+        host: z.string().min(1).optional().describe(`Preferred structured TCP host. localhost/127.0.0.0/8/::1 are allowed by default; other exact hosts require ${REMOTE_DEBUG_HOSTS_ENV}.`),
+        port: z.number().int().min(1).max(65535).optional().describe('Preferred structured gdbserver TCP port from 1 through 65535.'),
+        target: z.string().min(1).optional().describe('Backward-compatible TCP host:port form only, for example localhost:1234 or [::1]:1234. Arbitrary GDB target syntax is rejected.'),
+        program: z.string().min(1).optional().describe('Optional local unstripped executable used for matching symbols; it must match the remote target binary.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured after connecting to the authorized endpoint.'),
       }),
     },
-    wrap(async ({ target, program, breakpoints }) => session.attach(
-      buildGdbDapRemoteAttachConfiguration({ target: target as string, ...(program ? { program: program as string } : {}) }),
-      (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
-    )),
+    wrap(async ({ host, port, target, program, breakpoints }) => {
+      const remoteOptions = {
+        ...(host ? { host: host as string } : {}),
+        ...(port === undefined ? {} : { port: port as number }),
+        ...(target ? { target: target as string } : {}),
+        ...(program ? { program: program as string } : {}),
+      };
+      const endpoint = resolveGdbDapRemoteEndpoint(remoteOptions);
+      const attach = await session.attach(
+        buildGdbDapRemoteAttachConfiguration(remoteOptions),
+        (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+      );
+      return { endpoint, attach, status: session.snapshot() };
+    }),
   );
 }

@@ -64,6 +64,7 @@ test('manual lldb-dap helpers are hidden by the compact agent toolset', () => {
     'debug_start_lldb_dap',
     'debug_launch_lldb_dap',
     'debug_attach_lldb_dap',
+    'debug_attach_lldb_dap_remote',
   ]);
 
   const compact = collector();

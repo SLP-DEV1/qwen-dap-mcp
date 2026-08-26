@@ -4,6 +4,11 @@ import { spawnSync } from 'node:child_process';
 
 import { DapError } from '../dap/errors.js';
 import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
+import {
+  buildRemoteTcpEndpoint,
+  parseRemoteTcpTarget,
+  type RemoteTcpEndpoint,
+} from '../remote-endpoint.js';
 
 export const MIN_GDB_DAP_MAJOR = 14;
 
@@ -44,8 +49,12 @@ export type GdbDapPidAttachOptions = {
 };
 
 export type GdbDapRemoteAttachOptions = {
-  target: string;
+  /** Backward-compatible TCP host:port form. Non-TCP GDB target strings are rejected. */
+  target?: string;
+  host?: string;
+  port?: number;
   program?: string;
+  policyEnv?: NodeJS.ProcessEnv;
 };
 
 export type GdbDapCoreOptions = {
@@ -185,11 +194,25 @@ export function buildGdbDapPidAttachConfiguration(options: GdbDapPidAttachOption
   };
 }
 
+export function resolveGdbDapRemoteEndpoint(options: GdbDapRemoteAttachOptions): RemoteTcpEndpoint {
+  const hasTarget = typeof options.target === 'string' && options.target.trim().length > 0;
+  const hasHost = typeof options.host === 'string' && options.host.trim().length > 0;
+  const hasPort = options.port !== undefined;
+
+  if (hasTarget && (hasHost || hasPort)) {
+    throw new DapError('Specify either target or host+port for GDB remote attach, not both forms.');
+  }
+  if (hasTarget) return parseRemoteTcpTarget(options.target as string, options.policyEnv);
+  if (!hasHost || !hasPort) {
+    throw new DapError('GDB remote attach requires host and port (or the backward-compatible TCP target form).');
+  }
+  return buildRemoteTcpEndpoint(options.host as string, options.port as number, options.policyEnv);
+}
+
 export function buildGdbDapRemoteAttachConfiguration(options: GdbDapRemoteAttachOptions): Record<string, unknown> {
-  const target = options.target.trim();
-  if (!target) throw new DapError('GDB remote target must not be empty.');
+  const endpoint = resolveGdbDapRemoteEndpoint(options);
   return {
-    target,
+    target: endpoint.target,
     ...(options.program ? { program: resolveExistingFile(options.program, 'Program image') } : {}),
   };
 }

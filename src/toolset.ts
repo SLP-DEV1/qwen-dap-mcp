@@ -20,6 +20,7 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_status',
   'debug_continue',
   'debug_disconnect',
+  'debug_sessions',
 ]);
 
 const LOCAL_EXECUTION_TOOLS = new Set([
@@ -72,7 +73,7 @@ const FILTERED_TOOL_HANDLE = Object.freeze({
 });
 
 function defaultAnnotationsForTool(name: string) {
-  if (name === 'debug_disconnect') return SESSION_TEARDOWN_ANNOTATIONS;
+  if (name === 'debug_disconnect' || name === 'debug_sessions') return SESSION_TEARDOWN_ANNOTATIONS;
   if (LOCAL_EXECUTION_TOOLS.has(name)) return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
   if (SESSION_CONTROL_TOOLS.has(name)) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
   if (READ_ONLY_FULL_TOOLS.has(name)) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
