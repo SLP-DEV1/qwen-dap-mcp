@@ -13,7 +13,9 @@ export const AGENT_TOOL_NAMES = new Set([
 ] as const);
 
 type ToolRegistrar = {
-  registerTool: (name: string, ...args: unknown[]) => unknown;
+  // McpServer.registerTool is overloaded/generic; this preserves its call
+  // surface while filtering only by the first tool-name argument.
+  registerTool: (...args: any[]) => any;
 };
 
 export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): ToolsetMode {
@@ -35,7 +37,7 @@ export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode:
   return new Proxy(registrar, {
     get(target, property, receiver) {
       if (property === 'registerTool') {
-        return (name: string, ...args: unknown[]) => {
+        return (name: string, ...args: any[]) => {
           if (!toolsetAllows(mode, name)) return undefined;
           return target.registerTool.call(target, name, ...args);
         };
