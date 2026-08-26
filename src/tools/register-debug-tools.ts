@@ -8,6 +8,11 @@ import {
 } from '../adapters/codelldb.js';
 import { DapError } from '../dap/errors.js';
 import { DapSession } from '../dap/session.js';
+import {
+  DEBUG_SESSION_CONTROL_ANNOTATIONS,
+  READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+  SESSION_TEARDOWN_ANNOTATIONS,
+} from './tool-annotations.js';
 
 const jsonRecord = z.record(z.string(), z.unknown());
 const breakpointGroupSchema = z.object({
@@ -331,11 +336,12 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     'debug_continue',
     {
       title: 'Continue Execution',
-      description: 'Continue a paused thread and optionally wait for the next stopped event.',
+      description: 'Resume one paused thread in a live debug session. Use this after inspecting a stopped state when execution should proceed to the next stop or termination; do not use it for crash dumps because postmortem targets cannot resume. This changes debuggee execution state and may allow the target to perform normal application side effects before the next stop.',
+      annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
       inputSchema: z.object({
-        threadId: z.number().int().positive(),
-        waitForStop: z.boolean().default(true),
-        timeoutMs: z.number().int().min(1000).max(120000).default(15000),
+        threadId: z.number().int().positive().describe('DAP thread identifier to resume; obtain it from debug_snapshot, debug_status, or a stopped event.'),
+        waitForStop: z.boolean().default(true).describe('When true, wait for the next stopped event before returning; when false, return after the continue request is accepted.'),
+        timeoutMs: z.number().int().min(1000).max(120000).default(15000).describe('Maximum time in milliseconds to wait for the next stopped event when waitForStop is true.'),
       }),
     },
     wrap(async ({ threadId, waitForStop, timeoutMs }) => session.continueExecution(
@@ -484,17 +490,18 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     'debug_snapshot',
     {
       title: 'Capture Runtime Debug Snapshot',
-      description: 'Capture one bounded agent-friendly runtime snapshot: stop reason, thread, stack, top frame, scopes, locals/arguments, registers, and optional best-effort disassembly/modules/exception info.',
+      description: 'Capture bounded evidence from the current stopped debug state without resuming execution. Use this when an agent needs raw stack, locals, registers, exception details, modules, or nearby instructions; prefer debug_diagnose_stop when you also want ranked crash hypotheses and project-frame selection. This is read-only with respect to the debuggee and returns best-effort evidence plus collection errors for optional data that an adapter cannot provide.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       inputSchema: z.object({
-        threadId: z.number().int().positive().optional(),
-        stackLevels: z.number().int().positive().max(100).default(12),
-        maxVariablesPerScope: z.number().int().positive().max(500).default(100),
-        includeDisassembly: z.boolean().default(true),
-        disassembleBefore: z.number().int().nonnegative().max(100).default(8),
-        disassembleAfter: z.number().int().nonnegative().max(100).default(12),
-        includeModules: z.boolean().default(false),
-        moduleCount: z.number().int().positive().max(500).default(50),
-        includeExceptionInfo: z.boolean().default(true),
+        threadId: z.number().int().positive().optional().describe('Stopped DAP thread to inspect; omit to use the session-selected stopped thread.'),
+        stackLevels: z.number().int().positive().max(100).default(12).describe('Maximum number of stack frames to include, from the selected thread top downward.'),
+        maxVariablesPerScope: z.number().int().positive().max(500).default(100).describe('Maximum variables returned per inspected scope, bounding output size.'),
+        includeDisassembly: z.boolean().default(true).describe('Include best-effort instructions around the selected frame instruction pointer when supported.'),
+        disassembleBefore: z.number().int().nonnegative().max(100).default(8).describe('Number of instructions before the current instruction to request when disassembly is enabled.'),
+        disassembleAfter: z.number().int().nonnegative().max(100).default(12).describe('Number of instructions after the current instruction to request when disassembly is enabled.'),
+        includeModules: z.boolean().default(false).describe('Include a bounded list of loaded executable images and libraries.'),
+        moduleCount: z.number().int().positive().max(500).default(50).describe('Maximum loaded modules to return when includeModules is true.'),
+        includeExceptionInfo: z.boolean().default(true).describe('Include structured exception information for the stopped thread when the adapter supports it.'),
       }),
     },
     wrap(async ({ threadId, stackLevels, maxVariablesPerScope, includeDisassembly, disassembleBefore, disassembleAfter, includeModules, moduleCount, includeExceptionInfo }) =>
@@ -511,7 +518,11 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
       })),
   );
 
-  server.registerTool('debug_status', { title: 'Debug Session Status', description: 'Return current adapter/session state plus recent DAP events and adapter stderr.' }, async () => result(session.snapshot()));
+  server.registerTool('debug_status', {
+    title: 'Debug Session Status',
+    description: 'Inspect debugger lifecycle state, the selected stop, recent DAP events, and bounded adapter stderr without changing target execution. Use this to determine whether a session is initialized, running, stopped, postmortem, exited, or failed before choosing another debug tool; it is diagnostic only and does not resume, launch, attach, or terminate the debuggee.',
+    annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+  }, async () => result(session.snapshot()));
 
   server.registerTool(
     'debug_events',
@@ -521,7 +532,14 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
 
   server.registerTool(
     'debug_disconnect',
-    { title: 'Disconnect Debugger', description: 'Disconnect the active DAP session and stop the adapter process.', inputSchema: z.object({ terminateDebuggee: z.boolean().default(true) }) },
+    {
+      title: 'Disconnect Debugger',
+      description: 'End the active DAP session and stop its local adapter process. Use this when debugging is finished or the session must be reset; do not call it when more runtime evidence is still needed. With terminateDebuggee=true it may also terminate a live target process, so this operation can destroy the current runtime state and cannot be treated as read-only.',
+      annotations: SESSION_TEARDOWN_ANNOTATIONS,
+      inputSchema: z.object({
+        terminateDebuggee: z.boolean().default(true).describe('Whether the debugger should terminate the live debuggee while disconnecting; set false to request detach/preserve behavior when the adapter supports it.'),
+      }),
+    },
     wrap(async ({ terminateDebuggee }) => {
       await session.disconnect(terminateDebuggee as boolean);
       return { disconnected: true };

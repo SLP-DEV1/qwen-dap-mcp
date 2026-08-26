@@ -26,28 +26,29 @@ import { GuardedDapSession } from '../dap/guarded-session.js';
 import { logger } from '../logger.js';
 import { openDump, type OpenDumpOptions } from './register-dump-tools.js';
 import { runToStop } from './run-to-stop.js';
+import { LOCAL_TARGET_EXECUTION_ANNOTATIONS, READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
 
-const jsonRecord = z.record(z.string(), z.unknown());
+const jsonRecord = z.record(z.string(), z.unknown()).describe('Adapter-specific DAP launch or attach configuration object.');
 const breakpointGroupSchema = z.object({
-  source: z.string().min(1).describe('Absolute or adapter-resolvable source file path'),
-  lines: z.array(z.number().int().positive()).min(1),
-});
+  source: z.string().min(1).describe('Absolute or adapter-resolvable source file path.'),
+  lines: z.array(z.number().int().positive()).min(1).describe('One or more 1-based source line numbers to replace as breakpoints for this source file.'),
+}).describe('Source file and line breakpoints configured before a live reproduction runs.');
 const snapshotSchema = z.object({
-  threadId: z.number().int().positive().optional(),
-  stackLevels: z.number().int().positive().max(100).default(20),
-  maxVariablesPerScope: z.number().int().positive().max(500).default(100),
-  includeDisassembly: z.boolean().default(true),
-  disassembleBefore: z.number().int().nonnegative().max(100).default(8),
-  disassembleAfter: z.number().int().nonnegative().max(100).default(12),
-  includeModules: z.boolean().default(true),
-  moduleCount: z.number().int().positive().max(500).default(100),
-  includeExceptionInfo: z.boolean().default(true),
-});
+  threadId: z.number().int().positive().optional().describe('Stopped DAP thread to inspect; omit to use the session-selected stopped thread.'),
+  stackLevels: z.number().int().positive().max(100).default(20).describe('Maximum number of stack frames to inspect when collecting crash evidence.'),
+  maxVariablesPerScope: z.number().int().positive().max(500).default(100).describe('Maximum variables returned per inspected scope, bounding evidence size.'),
+  includeDisassembly: z.boolean().default(true).describe('Include best-effort disassembly around the selected instruction pointer when supported.'),
+  disassembleBefore: z.number().int().nonnegative().max(100).default(8).describe('Number of instructions before the selected instruction to request.'),
+  disassembleAfter: z.number().int().nonnegative().max(100).default(12).describe('Number of instructions after the selected instruction to request.'),
+  includeModules: z.boolean().default(true).describe('Include a bounded list of loaded executable images and libraries.'),
+  moduleCount: z.number().int().positive().max(500).default(100).describe('Maximum loaded modules to include when module collection is enabled.'),
+  includeExceptionInfo: z.boolean().default(true).describe('Request structured exception information for the stopped thread when supported.'),
+}).describe('Bounds and optional evidence categories for a runtime crash snapshot.');
 const analysisSchema = z.object({
-  projectRoots: z.array(z.string().min(1)).max(20).optional(),
-  projectModules: z.array(z.string().min(1)).max(50).optional(),
-  callerDepth: z.number().int().nonnegative().max(8).default(3),
-});
+  projectRoots: z.array(z.string().min(1)).max(20).optional().describe('Optional local source-root paths used to recognize project-controlled stack frames.'),
+  projectModules: z.array(z.string().min(1)).max(50).optional().describe('Optional executable or library names treated as project-controlled modules during frame selection.'),
+  callerDepth: z.number().int().nonnegative().max(8).default(3).describe('How many project-controlled caller frames beyond the selected frame to inspect for provenance and root cause.'),
+}).describe('Hints used to distinguish project code from runtime, system, or third-party frames.');
 const diagnosisCategorySchema = z.enum([
   'access-violation',
   'segmentation-fault',
@@ -109,11 +110,11 @@ const autonomousAgentStateSchema = z.object({
   history: z.array(autonomousHistorySchema).max(24),
 });
 const workflowSchema = z.object({
-  stage: z.enum(['diagnose', 'verify', 'autonomous']).default('diagnose'),
-  baseline: verificationBaselineSchema.optional(),
-  agentState: autonomousAgentStateSchema.optional(),
-  maxIterations: z.number().int().positive().max(10).default(3),
-});
+  stage: z.enum(['diagnose', 'verify', 'autonomous']).default('diagnose').describe('diagnose creates initial evidence; verify compares against a prior verification baseline; autonomous advances the bounded agent state machine.'),
+  baseline: verificationBaselineSchema.optional().describe('Verification baseline returned by an earlier diagnosis; required when stage=verify.'),
+  agentState: autonomousAgentStateSchema.optional().describe('Opaque autonomous state returned by the previous autonomous call; pass it back unchanged to continue the bounded cycle.'),
+  maxIterations: z.number().int().positive().max(10).default(3).describe('Maximum autonomous fix/reproduce iterations allowed when starting stage=autonomous.'),
+}).describe('Controls one-shot diagnosis, explicit verification, or the bounded autonomous crash workflow.');
 
 function result(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
@@ -418,7 +419,8 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Diagnose Current Debug Stop',
       description:
-        'Capture the current stopped state and produce an agent-friendly diagnosis with crash classification, automatic project-frame selection, operand/register/variable bindings, call-chain provenance, ranked hypotheses, and a fix/rebuild/reproduce/verify plan.',
+        'Diagnose an already stopped live or postmortem debug session without changing execution state. Use this when a debugger has captured the failure and you want project-frame selection, crash classification, operand/register/variable bindings, call-chain provenance, ranked hypotheses, and a fix/rebuild/reproduce/verify plan; use debug_snapshot instead when only raw evidence is needed. The tool is read-only and returns both the bounded snapshot and the derived diagnosis, including collection limitations when optional debugger evidence is unavailable.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       inputSchema: snapshotSchema.extend({ analysis: analysisSchema.optional() }),
     },
     async ({ analysis, ...options }) => {
@@ -439,12 +441,13 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Correlate Source and Disassembly',
       description:
-        'Select the first likely project-controlled frame, return both raw fault-frame and selected project-frame source/disassembly correlations, and bind project-frame instruction operands back to registers and pointer-like locals when possible.',
+        'Correlate source locations, disassembly, registers, and pointer-like locals for the raw fault frame and the first likely project-controlled frame. Use this for low-level root-cause evidence when a crash is already stopped and instruction/operand provenance matters; prefer debug_diagnose_stop for a broader ranked diagnosis. This is read-only, does not resume the target, and returns frame-selection reasoning, both correlations, operand bindings, and any best-effort collection errors.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       inputSchema: z.object({
-        threadId: z.number().int().positive().optional(),
-        stackLevels: z.number().int().positive().max(100).default(12),
-        disassembleBefore: z.number().int().nonnegative().max(100).default(8),
-        disassembleAfter: z.number().int().nonnegative().max(100).default(12),
+        threadId: z.number().int().positive().optional().describe('Stopped DAP thread to inspect; omit to use the session-selected stopped thread.'),
+        stackLevels: z.number().int().positive().max(100).default(12).describe('Maximum stack frames considered while selecting the project-controlled frame.'),
+        disassembleBefore: z.number().int().nonnegative().max(100).default(8).describe('Instructions before the selected instruction included in each disassembly window.'),
+        disassembleAfter: z.number().int().nonnegative().max(100).default(12).describe('Instructions after the selected instruction included in each disassembly window.'),
         analysis: analysisSchema.optional(),
       }),
     },
@@ -500,22 +503,23 @@ export function registerAgentDiagnosticTools(server: McpServer, session: Guarded
     {
       title: 'Debug This Crash',
       description:
-        'High-level debugging-agent workflow. Diagnose the current stop, run an initialized DAP session, auto-start CodeLLDB for a local native program, or open a crash dump. workflow.stage="autonomous" adds a bounded serialized agent loop with formal action dependencies, runtime root-cause backtracking, verification quality scoring, crash fingerprints, changed-failure re-baselining, and deterministic fixed/blocked/budget-exhausted stop conditions.',
+        'Preferred high-level native crash workflow. Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB and launch a local binary, or live with an already initialized generic DAP adapter. Do not use codelldb/live when executing or attaching to the target is not authorized: those modes can run application code and cause its normal side effects, while current/dump only inspect stopped evidence. workflow.stage selects initial diagnosis, verification against a prior baseline, or the bounded autonomous cycle. Returns runtime evidence, diagnosis, verification/autonomous metadata, and debugger status with deterministic fixed/blocked/budget-exhausted outcomes where applicable.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       inputSchema: z.object({
-        mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current'),
-        request: z.enum(['launch', 'attach']).default('launch'),
-        configuration: jsonRecord.optional(),
-        breakpoints: z.array(breakpointGroupSchema).optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).default(30000),
-        program: z.string().min(1).optional(),
-        args: z.array(z.string()).optional(),
-        cwd: z.string().optional(),
-        env: z.record(z.string(), z.string()).optional(),
-        stopOnEntry: z.boolean().default(false),
-        adapterPath: z.string().min(1).optional(),
-        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000),
-        dumpPath: z.string().min(1).optional(),
-        sourceMap: z.record(z.string(), z.string()).optional(),
+        mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current').describe('current inspects an existing stop; live runs launch/attach through an initialized DAP session; codelldb starts CodeLLDB and launches program; dump opens a frozen core/minidump.'),
+        request: z.enum(['launch', 'attach']).default('launch').describe('For mode=live, choose whether the initialized DAP adapter launches a target or attaches to an existing authorized target.'),
+        configuration: jsonRecord.optional().describe('Required for mode=live: adapter-specific DAP launch/attach configuration.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured before a live/codelldb reproduction completes setup.'),
+        timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Maximum milliseconds to wait for the reproduction to stop, exit, or terminate.'),
+        program: z.string().min(1).optional().describe('Required for mode=codelldb; optional for dump symbol resolution. Local path to the native executable.'),
+        args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in mode=codelldb.'),
+        cwd: z.string().optional().describe('Working directory for CodeLLDB/target launch and a project-root hint for diagnosis.'),
+        env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in mode=codelldb.'),
+        stopOnEntry: z.boolean().default(false).describe('When true in mode=codelldb, request an initial debugger stop at program entry before normal execution.'),
+        adapterPath: z.string().min(1).optional().describe('Optional explicit CodeLLDB executable path for codelldb/dump modes; omit to auto-discover it.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds for CodeLLDB operations.'),
+        dumpPath: z.string().min(1).optional().describe('Required for mode=dump: local path to the native core/minidump file.'),
+        sourceMap: z.record(z.string(), z.string()).optional().describe('For mode=dump, map source paths stored in debug symbols to local source paths.'),
         snapshot: snapshotSchema.optional(),
         analysis: analysisSchema.optional(),
         workflow: workflowSchema.optional(),
