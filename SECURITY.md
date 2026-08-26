@@ -31,3 +31,19 @@ Useful non-sensitive context includes:
 - autonomous fix attempts are bounded and evidence-gated.
 
 These boundaries are security properties. Changes that weaken them should receive explicit review and regression coverage.
+
+## DAP request policy boundary
+
+Outgoing DAP requests pass through an enforceable transport policy in `DapConnection.sendRequest()` before sequence allocation, pending-request state, or the adapter transport write occurs. A denied request therefore cannot reach the debug adapter through the normal request path.
+
+The default `standard` policy preserves normal live-debugging behavior. For inspection-only agents, start the server with:
+
+```text
+QWEN_DAP_MCP_DAP_POLICY=inspect-only
+```
+
+`read-only` and `readonly` are accepted aliases. This mode only permits an explicit allowlist of inspection requests such as `threads`, `stackTrace`, `scopes`, `variables`, `modules`, `readMemory`, `disassemble`, and `exceptionInfo`. Requests such as `evaluate`, `launch`, execution control, writes, breakpoint mutation, and unknown DAP commands are denied by default.
+
+Hosts that need a richer policy engine can install a custom `DapRequestPolicy` on `DapConnection`. Policy exceptions fail closed: if the policy throws, the DAP request is rejected before any transport side effect.
+
+This policy controls outgoing DAP requests. Starting the debugger adapter process itself is a separate local process boundary handled by `DapConnection.start()` and should be governed independently by the host when adapter executable selection is security-sensitive.
