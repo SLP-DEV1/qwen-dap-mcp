@@ -14,7 +14,8 @@
     "NOTICE",
     "qwen-extension.json",
     "server.json",
-    "skills"
+    "skills",
+    "scripts/hol-guard-dap-policy.py"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -49,7 +50,9 @@
     "qwen-code",
     "qwen-extension",
     "coding-agent",
-    "agentic-debugging"
+    "agentic-debugging",
+    "hol-guard",
+    "agent-security"
   ],
   "license": "Apache-2.0",
   "mcpName": "io.github.SLP-DEV1/qwen-dap-mcp",
