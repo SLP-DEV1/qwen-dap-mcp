@@ -1,0 +1,78 @@
+name: lldb-dap Linux Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/adapters/lldb-dap.ts'
+      - 'src/dap/**'
+      - 'src/tools/agent-diagnostics.ts'
+      - 'src/tools/register-dump-tools.ts'
+      - 'src/tools/register-lldb-dap-tools.ts'
+      - 'test/lldb-dap-*.ts'
+      - 'test/fixtures/native-smoke.cpp'
+      - '.github/workflows/lldb-dap-linux.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - 'src/adapters/lldb-dap.ts'
+      - 'src/dap/**'
+      - 'src/tools/agent-diagnostics.ts'
+      - 'src/tools/register-dump-tools.ts'
+      - 'src/tools/register-lldb-dap-tools.ts'
+      - 'test/lldb-dap-*.ts'
+      - 'test/fixtures/native-smoke.cpp'
+      - '.github/workflows/lldb-dap-linux.yml'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install distribution LLDB
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends lldb
+
+      - name: Resolve lldb-dap
+        shell: bash
+        run: |
+          adapter="$(command -v lldb-dap || true)"
+          if [ -z "$adapter" ]; then
+            adapter="$(find /usr/bin -maxdepth 1 -type f -name 'lldb-dap-*' -print | sort -V | tail -n 1)"
+          fi
+          test -n "$adapter"
+          test -x "$adapter"
+          echo "LLDB_DAP_PATH=$adapter" >> "$GITHUB_ENV"
+          echo "Using $adapter"
+
+      - name: Install project dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build project and native fixture
+        run: |
+          npm run build
+          mkdir -p build/lldb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/lldb-dap-smoke/native-smoke
+
+      - name: Run real lldb-dap launch smoke
+        run: |
+          npx tsx test/lldb-dap-real-smoke.ts \
+            --adapter "$LLDB_DAP_PATH" \
+            --program build/lldb-dap-smoke/native-smoke \
+            --source test/fixtures/native-smoke.cpp
