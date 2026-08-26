@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { GuardedDapSession } from '../src/dap/guarded-session.js';
-import type { HolGuardAction, HolGuardEvaluator } from '../src/dap/hol-guard-policy.js';
+import type { HolGuardAction, HolGuardDecision, HolGuardEvaluator } from '../src/dap/hol-guard-policy.js';
 import type { DapConnection } from '../src/dap/connection.js';
 
 type TestableConnection = DapConnection & {
@@ -41,9 +41,9 @@ function installLoopbackTransport(connection: DapConnection): DebugProtocol.Requ
 }
 
 function evaluator(
-  decide: (action: HolGuardAction) => { allow: boolean; action: string; reason: string },
+  decide: (action: HolGuardAction) => HolGuardDecision | Promise<HolGuardDecision>,
 ): HolGuardEvaluator {
-  return { enabled: true, evaluate: decide };
+  return { enabled: true, evaluate: async (action) => decide(action) };
 }
 
 test('HOL Guard blocks evaluate/launch before writeMessage while variables stays read-only', async () => {
@@ -100,6 +100,71 @@ test('HOL Guard blocks adapter start before DapConnection.start can spawn a proc
     /HOL Guard blocked DAP adapter start/i,
   );
   assert.equal(transportStarts, 0, 'denied adapter start must not reach the spawn-capable connection path');
+});
+
+test('active adapter workspace and hashed environment are bound into later protected requests', async () => {
+  const evaluated: HolGuardAction[] = [];
+  const session = new GuardedDapSession({
+    holGuardEvaluator: evaluator(async (action) => {
+      evaluated.push(action);
+      if (action.kind === 'dap-request' && action.command === 'evaluate') {
+        return { allow: false, action: 'review', reason: 'approval required', reviewCommand: 'hol-guard approvals approve fixture' };
+      }
+      return { allow: true, action: 'allow', reason: 'fixture allowed' };
+    }),
+  });
+  const requests = installLoopbackTransport(session.connection);
+  (session.connection as unknown as { start: (options: unknown) => Promise<void> }).start = async () => {
+    makeRequestable(session.connection);
+  };
+
+  await session.start({
+    command: 'fixture-adapter',
+    args: ['--stdio'],
+    cwd: '/workspace/project-a',
+    env: { QWEN_DAP_TEST_SECRET: 'never-forward-this-value' },
+    adapterId: 'fixture',
+  });
+  assert.equal(requests[0]?.command, 'initialize');
+
+  await assert.rejects(
+    session.connection.sendRequest('evaluate', { expression: 'dangerous_call()' }),
+    /hol-guard approvals approve fixture/i,
+  );
+
+  const protectedAction = evaluated.find(
+    (action): action is Extract<HolGuardAction, { kind: 'dap-request' }> =>
+      action.kind === 'dap-request' && action.command === 'evaluate',
+  );
+  assert.ok(protectedAction);
+  assert.equal(protectedAction.cwd, '/workspace/project-a');
+  assert.equal(protectedAction.adapterCommand, 'fixture-adapter');
+  assert.deepEqual(protectedAction.adapterArgs, ['--stdio']);
+  assert.match(protectedAction.envHash ?? '', /^sha256:[a-f0-9]{64}$/);
+  assert.ok(protectedAction.envKeys?.includes('QWEN_DAP_TEST_SECRET'));
+  assert.doesNotMatch(JSON.stringify(protectedAction), /never-forward-this-value/);
+});
+
+test('async HOL Guard failure is fail-closed before request state or transport allocation', async () => {
+  const session = new GuardedDapSession({
+    holGuardEvaluator: evaluator(async () => {
+      await Promise.resolve();
+      throw new Error('Guard process unavailable');
+    }),
+  });
+  makeRequestable(session.connection);
+  const requests = installLoopbackTransport(session.connection);
+
+  await assert.rejects(
+    session.connection.sendRequest('evaluate', { expression: 'f()' }),
+    /policy failed closed/i,
+  );
+  assert.equal(requests.length, 0);
+
+  // Swap to an allowed read request; denied/failed policy calls must not have
+  // consumed a DAP sequence number.
+  await session.connection.sendRequest('variables', { variablesReference: 1 });
+  assert.equal(requests[0]?.seq, 1);
 });
 
 test('built-in inspect-only policy remains authoritative before HOL Guard', async () => {

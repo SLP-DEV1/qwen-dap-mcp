@@ -38,7 +38,15 @@ jobs:
             throw new Error(`unexpected npm package name: ${report.name}`);
           }
           const files = new Set(report.files.map((entry) => entry.path));
-          for (const required of ['dist/index.js', 'qwen-extension.json', 'server.json', 'README.md', 'LICENSE', 'NOTICE']) {
+          for (const required of [
+            'dist/index.js',
+            'qwen-extension.json',
+            'server.json',
+            'README.md',
+            'LICENSE',
+            'NOTICE',
+            'scripts/hol-guard-dap-policy.py',
+          ]) {
             if (!files.has(required)) {
               throw new Error(`npm package is missing ${required}`);
             }
