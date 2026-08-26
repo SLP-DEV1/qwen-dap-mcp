@@ -107,7 +107,13 @@ function resolvePythonCommand(explicit?: string): string {
 }
 
 function defaultBridgePath(): string {
-  return fileURLToPath(new URL('../../scripts/hol-guard-dap-policy.py', import.meta.url));
+  // Normal npm/source layout: dist/dap/hol-guard-policy.js -> ../../scripts.
+  // Bundled Qwen extension layout: dist/index.js -> ../scripts.
+  const candidates = [
+    fileURLToPath(new URL('../../scripts/hol-guard-dap-policy.py', import.meta.url)),
+    fileURLToPath(new URL('../scripts/hol-guard-dap-policy.py', import.meta.url)),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
 function truncate(value: string, max = 500): string {
