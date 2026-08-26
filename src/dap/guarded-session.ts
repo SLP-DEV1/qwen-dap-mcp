@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
 import { DapError } from './errors.js';
+import { normalizeEnvironmentOverrides } from './environment.js';
 import {
   createGuardedDapRequestPolicy,
   createHolGuardEvaluator,
@@ -73,12 +74,17 @@ export class GuardedDapSession extends DapSession {
       this.holGuardExecutionContext = undefined;
       this.postmortem = false;
       try {
-        // When HOL Guard is enabled, spawn the canonical executable path that was
-        // hashed and approved rather than resolving the original PATH command a
-        // second time after the policy decision.
-        const guardedOptions = executionContext.adapterResolvedCommand
-          ? { ...options, command: executionContext.adapterResolvedCommand }
-          : options;
+        // Normalize environment override key casing before spawn so Windows
+        // `Path`/`PATH` semantics exactly match the identity evaluated above.
+        // When Guard is enabled, also spawn the canonical executable path that
+        // was hashed and approved instead of resolving PATH a second time.
+        const guardedOptions: StartSessionOptions = {
+          ...options,
+          ...(options.env ? { env: normalizeEnvironmentOverrides(options.env) } : {}),
+          ...(executionContext.adapterResolvedCommand
+            ? { command: executionContext.adapterResolvedCommand }
+            : {}),
+        };
         const capabilities = await super.start(guardedOptions);
         // Bind every later protected DAP request to the exact adapter/cwd/env
         // that successfully initialized. Sanitized per-request arguments are
