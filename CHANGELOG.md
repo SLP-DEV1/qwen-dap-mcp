@@ -2,6 +2,45 @@
 
 All notable prototype milestones are documented here.
 
+## 0.11.2 - 2026-08-26
+
+### Fixed / hardened
+
+- Isolated retired DAP adapter process events so late stdout, stderr, process errors, or exits from an old adapter cannot contaminate a newer debugging generation.
+- Treat signal-terminated child processes as exited even when `exitCode` remains null.
+- Reject pending DAP requests promptly on malformed framing, duplicate `Content-Length` headers, invalid JSON, and message-handler protocol failures.
+- Bound CodeLLDB PATH discovery and validate direct attach PIDs before contacting the adapter.
+- Hardened runtime snapshots so optional locals, registers, modules, disassembly, and exception collection failures are reported as bounded evidence gaps instead of collapsing the whole snapshot.
+- Merge locals/arguments/parameters conservatively and validate variable references before requesting variables.
+- Clean up CodeLLDB instances owned by failed dump-open transactions and harden owned-session cleanup paths.
+- Prevent extension packaging from recursively deleting checked-in project directories outside the dedicated generated release subtree.
+- Added path-normalization, output-bounding, diagnosis, lifecycle, package-safety, dump-profile, and DAP-generation regression coverage.
+
+### Distribution / project
+
+- Added scoped npm publication validation and manual npm + official MCP Registry publication automation.
+- Published package metadata uses `@slp-dev1/qwen-dap-mcp` and MCP Registry name `io.github.SLP-DEV1/qwen-dap-mcp`.
+- Added npm/MCP Registry badges, generic stdio MCP installation guidance, `llms.txt`, and directory-submission documentation.
+- Added publishing documentation for npm bootstrap, GitHub OIDC trusted publishing, and MCP Registry publication.
+
+### Verified
+
+- Refreshed pull-request CI passes on Node.js 20 and 22 with `npm run check` and scoped npm package validation.
+- Qwen extension package smoke passes on merged `main` after the full v0.11 hardening audit.
+
+## 0.11.1 - 2026-08-26
+
+### Added / changed
+
+- Launch-ready README, contribution/security guidance, issue templates, pull-request template, and canonical Apache-2.0 license text.
+- Scoped npm package identity `@slp-dev1/qwen-dap-mcp`, public publish metadata, and official MCP Registry metadata via `server.json`.
+- Self-contained GitHub Release distribution remains the primary validated Qwen Code installation path.
+- Added launch/community copy and distribution checklist for project discovery.
+
+### Verified
+
+- GitHub Release `v0.11.1` builds, installs, and verifies the exact extension version through Qwen Code release smoke testing.
+
 ## 0.11.0 - 2026-08-26
 
 ### Added
