@@ -74,14 +74,31 @@ test('isRunning remains true after a signal is sent until the adapter actually e
   const connection = new DapConnection();
   const fakeChild = new EventEmitter() as EventEmitter & {
     exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
   };
   fakeChild.exitCode = null;
+  fakeChild.signalCode = null;
   fakeChild.killed = true;
   (connection as unknown as { child: unknown }).child = fakeChild;
 
   assert.equal(connection.isRunning, true);
   fakeChild.exitCode = 143;
+  assert.equal(connection.isRunning, false);
+});
+
+test('isRunning becomes false when a child has terminated by signal even if exitCode remains null', () => {
+  const connection = new DapConnection();
+  const fakeChild = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    killed: boolean;
+  };
+  fakeChild.exitCode = null;
+  fakeChild.signalCode = 'SIGTERM';
+  fakeChild.killed = true;
+  (connection as unknown as { child: unknown }).child = fakeChild;
+
   assert.equal(connection.isRunning, false);
 });
 
@@ -91,18 +108,20 @@ test('stop escalates to SIGKILL and waits for the final process exit', async () 
 
   const fakeChild = new EventEmitter() as EventEmitter & {
     exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
     kill: (signal?: NodeJS.Signals) => boolean;
   };
   fakeChild.exitCode = null;
+  fakeChild.signalCode = null;
   fakeChild.killed = false;
   fakeChild.kill = (signal?: NodeJS.Signals) => {
     signals.push(signal);
     fakeChild.killed = true;
     if (signal === 'SIGKILL') {
       setTimeout(() => {
-        fakeChild.exitCode = 137;
-        fakeChild.emit('exit', 137, 'SIGKILL');
+        fakeChild.signalCode = 'SIGKILL';
+        fakeChild.emit('exit', null, 'SIGKILL');
       }, 5);
     }
     return true;
@@ -113,7 +132,7 @@ test('stop escalates to SIGKILL and waits for the final process exit', async () 
   await connection.stop();
 
   assert.deepEqual(signals, [undefined, 'SIGKILL']);
-  assert.equal(fakeChild.exitCode, 137);
+  assert.equal(fakeChild.signalCode, 'SIGKILL');
   assert.equal(connection.pid, undefined);
 });
 
