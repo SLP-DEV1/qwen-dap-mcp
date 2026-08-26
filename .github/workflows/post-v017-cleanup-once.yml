@@ -1,0 +1,61 @@
+name: One-time post-v0.17 metadata cleanup
+
+on:
+  push:
+    branches:
+      - 'chore/post-v0.17-doc-sync'
+    paths:
+      - '.github/workflows/post-v017-cleanup-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: chore/post-v0.17-doc-sync
+          fetch-depth: 0
+
+      - name: Apply deterministic metadata fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          old = 'Every other `debug_*` tool receives an optional `sessionId`. Selection is bound to the lifetime of that async MCP request using `AsyncLocalStorage`; there is no process-global selected-session variable that concurrent calls can overwrite.'
+          new = 'Most single-session `debug_*` tools receive an optional `sessionId`; omitting it routes to `default`. `debug_sessions` manages the registry itself, while `debug_compare_runs` intentionally reads two sessions through `baselineSessionId` and `candidateSessionId`. Selection for normal routed calls is bound to the lifetime of that async MCP request using `AsyncLocalStorage`; there is no process-global selected-session variable that concurrent calls can overwrite.'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one README routing sentence, found {text.count(old)}')
+          readme.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          text = changelog.read_text(encoding='utf-8')
+          old = '## Unreleased\n\n### Added'
+          new = '## Unreleased\n\n## 0.17.0 - 2026-08-26\n\n### Added'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one unreleased v0.17 block, found {text.count(old)}')
+          changelog.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          lock_path = Path('package-lock.json')
+          lock = json.loads(lock_path.read_text(encoding='utf-8'))
+          lock['version'] = '0.17.0'
+          if '' not in lock.get('packages', {}):
+              raise SystemExit('package-lock root package entry is missing')
+          lock['packages']['']['version'] = '0.17.0'
+          lock_path.write_text(json.dumps(lock, indent=2) + '\n', encoding='utf-8')
+
+      - name: Commit cleanup and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/post-v017-cleanup-once.yml
+          git add README.md CHANGELOG.md package-lock.json
+          git commit -m 'chore: sync v0.17 release metadata'
+          git push origin HEAD:chore/post-v0.17-doc-sync
