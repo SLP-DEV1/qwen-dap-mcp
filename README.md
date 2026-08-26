@@ -280,7 +280,7 @@ debug_start_gdb(sessionId="remote-gdb")
 debug_start_lldb_dap(sessionId="remote-lldb")
 ```
 
-Every other `debug_*` tool receives an optional `sessionId`. Selection is bound to the lifetime of that async MCP request using `AsyncLocalStorage`; there is no process-global selected-session variable that concurrent calls can overwrite. Each session owns its own DAP transport, lifecycle gate, debugger state, event history, watchpoints, timeout state, postmortem flag, and HOL Guard context. Active sessions cannot be closed while a routed request is executing.
+Most single-session `debug_*` tools receive an optional `sessionId`; omitting it routes to `default`. `debug_sessions` manages the registry itself, while `debug_compare_runs` intentionally reads two sessions through `baselineSessionId` and `candidateSessionId`. Selection for normal routed calls is bound to the lifetime of that async MCP request using `AsyncLocalStorage`; there is no process-global selected-session variable that concurrent calls can overwrite. Each session owns its own DAP transport, lifecycle gate, debugger state, event history, watchpoints, timeout state, postmortem flag, and HOL Guard context. Active sessions cannot be closed while a routed request is executing.
 
 Remote attach helpers are available in the `full` toolset:
 
