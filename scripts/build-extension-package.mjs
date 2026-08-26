@@ -15,16 +15,33 @@ function comparablePath(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function isPathInside(candidate, parent) {
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
+
 function assertSafeOutputRoot(candidate) {
   const resolved = path.resolve(candidate);
   const filesystemRoot = comparablePath(path.parse(resolved).root);
   const comparableOutput = comparablePath(resolved);
   const comparableProject = comparablePath(projectRoot);
+  const comparableRelease = comparablePath(path.join(projectRoot, 'release'));
+
   if (comparableOutput === filesystemRoot) {
     throw new Error(`Refusing to use filesystem root as extension output: ${resolved}`);
   }
   if (comparableOutput === comparableProject || comparableProject.startsWith(`${comparableOutput}${path.sep}`)) {
     throw new Error(`Refusing to use the project root or one of its ancestors as extension output: ${resolved}`);
+  }
+
+  // The script recursively deletes outputRoot before rebuilding it. If a
+  // caller chooses a directory inside the repository, only the dedicated
+  // generated release subtree is safe to remove. This prevents accidental
+  // invocations such as `... build-extension-package.mjs src` from deleting
+  // source, tests, .git metadata, skills, or other checked-in content.
+  if (isPathInside(comparableOutput, comparableProject) && !isPathInside(comparableOutput, comparableRelease)) {
+    throw new Error(
+      `Refusing to use a project directory outside the generated release subtree as extension output: ${resolved}`,
+    );
   }
 }
 

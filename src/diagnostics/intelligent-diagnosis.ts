@@ -9,6 +9,7 @@ import type {
   DiagnosisConfidence,
   DiagnosisHypothesis,
 } from './analyze-snapshot.js';
+import { diagnosticPathWithinRoot, normalizeDiagnosticPath } from './path-normalization.js';
 
 export type IntelligentDiagnosisOptions = {
   projectRoots?: string[];
@@ -41,13 +42,17 @@ export type FrameEvidence = {
   locals: DebugProtocol.Variable[];
   registers: DebugProtocol.Variable[];
   disassembly?: DebugProtocol.DisassembledInstruction[];
+  collectionErrors?: string[];
 };
+
+export type MemoryRegisterRole = 'base' | 'index' | 'offset' | 'unknown';
 
 export type RegisterBinding = {
   register: string;
   canonicalRegister: string;
   value?: string;
   referencedByMemoryOperand: boolean;
+  memoryRole?: MemoryRegisterRole;
   suspicious?: 'null-like' | 'poison-pattern';
 };
 
@@ -109,7 +114,7 @@ export type CallChainAnalysis = {
 };
 
 export type FixWorkflow = {
-  status: 'proposal-only';
+  status: 'proposal-only' | 'evidence-required';
   candidateLocation: {
     function: string;
     sourcePath?: string;
@@ -119,7 +124,7 @@ export type FixWorkflow = {
   suggestedChanges: string[];
   phases: Array<{
     phase: 'diagnose' | 'fix' | 'rebuild' | 'reproduce' | 'verify';
-    state: 'complete' | 'agent-action-required' | 'ready-after-rebuild';
+    state: 'complete' | 'agent-action-required' | 'ready-after-rebuild' | 'not-applicable';
     instruction: string;
   }>;
 };
@@ -174,11 +179,6 @@ const POISON_PATTERNS = [
   '0xbaadf00d',
 ];
 
-function normalizedPath(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
 function portableBasename(value: string): string {
   return value.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? value;
 }
@@ -205,7 +205,7 @@ function confidenceFromScore(score: number): DiagnosisConfidence {
 function projectHints(options: IntelligentDiagnosisOptions) {
   const roots = new Set<string>();
   const addRoot = (value: string | undefined) => {
-    const normalized = normalizedPath(value);
+    const normalized = normalizeDiagnosticPath(value);
     if (normalized) roots.add(normalized);
   };
   for (const root of options.projectRoots ?? []) addRoot(root);
@@ -217,10 +217,6 @@ function projectHints(options: IntelligentDiagnosisOptions) {
   return { roots, modules };
 }
 
-function pathWithinRoot(candidate: string, root: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}/`);
-}
-
 export function assessProjectFrames(
   stack: DebugProtocol.StackFrame[],
   options: IntelligentDiagnosisOptions = {},
@@ -229,7 +225,7 @@ export function assessProjectFrames(
   return stack.map((frame, index) => {
     const reasons: string[] = [];
     let score = 0;
-    const source = normalizedPath(sourcePath(frame));
+    const source = normalizeDiagnosticPath(sourcePath(frame));
     const moduleName = moduleBasename(frame);
     const runtimeModule = Boolean(moduleName && RUNTIME_MODULE_RE.test(moduleName));
     const runtimePath = Boolean(source && RUNTIME_PATH_RE.test(source));
@@ -239,7 +235,7 @@ export function assessProjectFrames(
     if (source) {
       score += 25;
       reasons.push('frame has source information');
-      if ([...hints.roots].some((root) => pathWithinRoot(source, root))) {
+      if ([...hints.roots].some((root) => diagnosticPathWithinRoot(source, root))) {
         score += 120;
         reasons.push('source is inside an explicit/inferred project root');
       }
@@ -371,6 +367,52 @@ function currentInstruction(evidence: FrameEvidence): DebugProtocol.Disassembled
   return nearest;
 }
 
+function memoryRegisterRoles(
+  rawInstruction: string,
+  memoryText: string,
+  armLike: boolean,
+  attMemorySyntax: boolean,
+  canonicalize: (value: string) => string,
+): Map<string, MemoryRegisterRole> {
+  const regex = armLike ? ARM_REGISTER_RE : X86_REGISTER_RE;
+  const matches = [...memoryText.matchAll(regex)];
+  const roles = new Map<string, MemoryRegisterRole>();
+  if (matches.length === 0) return roles;
+
+  if (armLike) {
+    matches.forEach((match, index) => {
+      roles.set(canonicalize(match[0]), index === 0 ? 'base' : 'index');
+    });
+    return roles;
+  }
+
+  if (attMemorySyntax) {
+    matches.forEach((match, index) => {
+      roles.set(canonicalize(match[0]), index === 0 ? 'base' : index === 1 ? 'index' : 'unknown');
+    });
+    return roles;
+  }
+
+  let baseAssigned = false;
+  for (const match of matches) {
+    const canonical = canonicalize(match[0]);
+    const start = match.index ?? rawInstruction.indexOf(match[0]);
+    const relativeStart = Math.max(0, start - rawInstruction.indexOf(memoryText));
+    const after = memoryText.slice(relativeStart + match[0].length);
+    if (/^\s*\*/.test(after)) {
+      roles.set(canonical, 'index');
+      continue;
+    }
+    if (!baseAssigned) {
+      roles.set(canonical, 'base');
+      baseAssigned = true;
+    } else if (!roles.has(canonical)) {
+      roles.set(canonical, 'unknown');
+    }
+  }
+  return roles;
+}
+
 export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnalysis {
   const instruction = currentInstruction(evidence);
   const rawInstruction = instruction?.instruction;
@@ -385,21 +427,21 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
   const referenced = [...new Set(
     [...rawInstruction.matchAll(registerRegex)].map((match) => canonicalize(match[0])),
   )];
-  const memoryRegisters = new Set(
-    [...memoryText.matchAll(armLike ? ARM_REGISTER_RE : X86_REGISTER_RE)]
-      .map((match) => canonicalize(match[0])),
-  );
+  const roles = memoryRegisterRoles(rawInstruction, memoryText, armLike, memoryMatch?.[2] !== undefined, canonicalize);
+  const memoryRegisters = new Set(roles.keys());
 
   const values = new Map<string, DebugProtocol.Variable>();
   for (const register of evidence.registers) values.set(canonicalize(register.name), register);
   const bindings: RegisterBinding[] = referenced.map((register) => {
     const value = values.get(register)?.value;
     const suspicious = suspiciousKind(value);
+    const memoryRole = roles.get(register);
     return {
       register,
       canonicalRegister: register,
       ...(value === undefined ? {} : { value }),
       referencedByMemoryOperand: memoryRegisters.has(register),
+      ...(memoryRole ? { memoryRole } : {}),
       ...(suspicious ? { suspicious } : {}),
     };
   });
@@ -420,7 +462,7 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
         registerValue: binding.value,
         confidence: binding.referencedByMemoryOperand && looksPointerLike(local) ? 'high' : 'medium',
         reason: binding.referencedByMemoryOperand
-          ? 'local value matches a register used by this frame\'s memory operand'
+          ? `local value matches the ${binding.memoryRole ?? 'unknown'} register used by this frame's memory operand`
           : 'local value matches a register referenced by this frame\'s instruction',
       });
       if (variableBindings.length >= 12) break;
@@ -428,7 +470,14 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
     if (variableBindings.length >= 12) break;
   }
 
-  const suspiciousMemory = bindings.find((binding) => binding.referencedByMemoryOperand && binding.suspicious);
+  // A zero index/offset is ordinary address arithmetic, not a null-pointer
+  // dereference. Null-like values are only promoted when they are the base
+  // address. Poison values remain suspicious in any effective-address role.
+  const suspiciousMemory = bindings.find((binding) =>
+    binding.referencedByMemoryOperand
+      && (binding.suspicious === 'poison-pattern'
+        || (binding.suspicious === 'null-like' && binding.memoryRole === 'base')),
+  );
   const mnemonic = rawInstruction.trim().split(/\s+/, 1)[0]?.toLowerCase();
   return {
     frameIndex: evidence.index,
@@ -443,7 +492,7 @@ export function analyzeInstructionOperands(evidence: FrameEvidence): OperandAnal
           likelyFaultOperand: {
             register: suspiciousMemory.register,
             ...(suspiciousMemory.value === undefined ? {} : { value: suspiciousMemory.value }),
-            reason: `${suspiciousMemory.register} is used by this frame's memory operand and contains a ${suspiciousMemory.suspicious === 'null-like' ? 'null-like' : 'poison-pattern'} value`,
+            reason: `${suspiciousMemory.register} is the ${suspiciousMemory.memoryRole ?? 'unknown'} register used by this frame's memory operand and contains a ${suspiciousMemory.suspicious === 'null-like' ? 'null-like' : 'poison-pattern'} value`,
             confidence: evidence.index === 0 ? 'high' : 'medium',
             faultingFrame: evidence.index === 0,
           },
@@ -536,13 +585,15 @@ export function analyzeCallChain(
   if (!firstProjectFrame) throw new Error('Unable to build call-chain analysis without a frame.');
   const projectCallerFrames = frames.filter((frame) => frame.index > selectedIndex && frame.projectControlled).slice(0, 6);
   const provenance = buildProvenance(evidence);
-  const strongProvenance = provenance.some((item) => item.confidence === 'high');
+  const strongProvenance = provenance.some((item) =>
+    item.confidence === 'high' && item.frames.some((frame) => frame.index === selectedIndex),
+  );
   const rationale = [
     selectedIndex > 0
       ? `Frame ${selectedIndex} is the first likely application-controlled call site after ${selectedIndex} non-project frame(s).`
       : 'The faulting frame itself is likely application-controlled.',
     ...(provenance.length > 0
-      ? ['Matching pointer-like values are visible across bounded project caller evidence; confidence depends on whether the value is distinctive.']
+      ? ['Matching pointer-like values are visible across bounded project caller evidence; confidence depends on whether the value is distinctive and reaches the selected consumer.']
       : []),
     ...(repeatedFunctions.length > 0
       ? ['Repeated stack frames indicate recursion/re-entry that may be causally relevant.']
@@ -552,7 +603,7 @@ export function analyzeCallChain(
   return {
     frames,
     firstProjectFrame,
-    runtimeBoundaryDepth: selectedIndex,
+    runtimeBoundaryDepth: selection.skippedRuntimeFrames,
     projectCallerFrames,
     repeatedFunctions,
     provenance,
@@ -625,6 +676,47 @@ function buildFixWorkflow(
   const frame = selection.selected.frame;
   const source = sourcePath(frame);
   const hypothesis = primaryHypothesis(base);
+
+  if (!base.classification.crashLikely) {
+    return {
+      status: 'evidence-required',
+      candidateLocation: {
+        function: frame.name,
+        ...(source ? { sourcePath: source } : {}),
+        line: frame.line,
+      },
+      ...(hypothesis ? { hypothesis } : {}),
+      suggestedChanges: base.nextActions.slice(0, 6),
+      phases: [
+        {
+          phase: 'diagnose',
+          state: 'complete',
+          instruction: 'Preserve the stop/exception evidence, but do not treat a configured or first-chance stop as a fatal crash.',
+        },
+        {
+          phase: 'fix',
+          state: 'not-applicable',
+          instruction: 'Do not edit source solely from this non-fatal/inconclusive stop.',
+        },
+        {
+          phase: 'rebuild',
+          state: 'not-applicable',
+          instruction: 'No rebuild is warranted until a source fix is supported by conclusive crash evidence.',
+        },
+        {
+          phase: 'reproduce',
+          state: 'agent-action-required',
+          instruction: 'Continue or repeat the same scenario until it reaches an unhandled crash or a clean terminal outcome.',
+        },
+        {
+          phase: 'verify',
+          state: 'agent-action-required',
+          instruction: 'Reclassify only after the complete reproduction establishes whether the exception is handled or fatal.',
+        },
+      ],
+    };
+  }
+
   return {
     status: 'proposal-only',
     candidateLocation: {
@@ -717,7 +809,7 @@ export function compareVerificationBaseline(
   const sameCategory = current.classification.category === baseline.classification;
   const sameFunction = current.projectFrame.function === baseline.projectFunction;
   const samePath = !baseline.projectSourcePath
-    || normalizedPath(current.projectFrame.sourcePath) === normalizedPath(baseline.projectSourcePath);
+    || normalizeDiagnosticPath(current.projectFrame.sourcePath) === normalizeDiagnosticPath(baseline.projectSourcePath);
   const sameLine = current.projectFrame.line === baseline.projectLine;
   const sharedHypothesis = current.hypotheses.some((item) => baseline.hypothesisKinds.includes(item.kind));
 

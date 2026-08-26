@@ -36,6 +36,11 @@ export type RuntimeSnapshotOptions = {
   includeExceptionInfo?: boolean;
 };
 
+export type RuntimeSnapshotCollectionError = {
+  operation: 'locals' | 'registers' | 'disassembly' | 'modules' | 'exceptionInfo';
+  message: string;
+};
+
 export type RuntimeSnapshot = {
   stopped?: unknown;
   thread: DebugProtocol.Thread;
@@ -47,7 +52,24 @@ export type RuntimeSnapshot = {
   disassembly?: DebugProtocol.DisassembledInstruction[];
   modules?: DebugProtocol.Module[];
   exception?: DebugProtocol.ExceptionInfoResponse['body'];
+  collectionErrors?: RuntimeSnapshotCollectionError[];
 };
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function dedupeVariables(variables: DebugProtocol.Variable[]): DebugProtocol.Variable[] {
+  const seen = new Set<string>();
+  const output: DebugProtocol.Variable[] = [];
+  for (const variable of variables) {
+    const key = `${variable.name}\u0000${variable.value}\u0000${variable.type ?? ''}\u0000${variable.variablesReference}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(variable);
+  }
+  return output;
+}
 
 export class DapSession {
   readonly connection = new DapConnection();
@@ -244,6 +266,9 @@ export class DapSession {
 
   async variables(variablesReference: number, start?: number, count?: number): Promise<DebugProtocol.Variable[]> {
     this.assertConfigured();
+    if (!Number.isSafeInteger(variablesReference) || variablesReference <= 0) {
+      throw new DapError(`variablesReference must be a positive safe integer; received ${String(variablesReference)}`);
+    }
     const args: DebugProtocol.VariablesArguments = {
       variablesReference,
       ...(start === undefined ? {} : { start }),
@@ -309,26 +334,59 @@ export class DapSession {
 
     const frameScopes = await this.scopes(frame.id);
     const maxVariables = options.maxVariablesPerScope ?? 100;
-    const localsScope = frameScopes.find((scope) => /locals?|arguments?/i.test(scope.name));
+    const collectionErrors: RuntimeSnapshotCollectionError[] = [];
+    const localScopes = frameScopes
+      .filter((scope) => /locals?|arguments?|parameters?/i.test(scope.name))
+      .slice(0, 3);
     const registersScope = frameScopes.find((scope) => /register/i.test(scope.name));
-    const locals = localsScope && localsScope.variablesReference > 0 ? await this.variables(localsScope.variablesReference, 0, maxVariables) : [];
-    const registers = registersScope && registersScope.variablesReference > 0 ? await this.variables(registersScope.variablesReference, 0, maxVariables) : [];
+
+    const localVariables: DebugProtocol.Variable[] = [];
+    for (const scope of localScopes) {
+      if (scope.variablesReference <= 0) continue;
+      try {
+        localVariables.push(...await this.variables(scope.variablesReference, 0, maxVariables));
+      } catch (error) {
+        collectionErrors.push({ operation: 'locals', message: `${scope.name}: ${errorMessage(error)}` });
+      }
+    }
+    const locals = dedupeVariables(localVariables).slice(0, maxVariables * Math.max(1, localScopes.length));
+
+    let registers: DebugProtocol.Variable[] = [];
+    if (registersScope && registersScope.variablesReference > 0) {
+      try {
+        registers = dedupeVariables(await this.variables(registersScope.variablesReference, 0, maxVariables)).slice(0, maxVariables);
+      } catch (error) {
+        collectionErrors.push({ operation: 'registers', message: errorMessage(error) });
+      }
+    }
 
     let disassembly: DebugProtocol.DisassembledInstruction[] | undefined;
     if ((options.includeDisassembly ?? true) && this.capabilities?.supportsDisassembleRequest && frame.instructionPointerReference) {
       const before = options.disassembleBefore ?? 8;
       const after = options.disassembleAfter ?? 12;
-      disassembly = await this.disassemble(frame.instructionPointerReference, before + after + 1, -before, 0, true);
+      try {
+        disassembly = await this.disassemble(frame.instructionPointerReference, before + after + 1, -before, 0, true);
+      } catch (error) {
+        collectionErrors.push({ operation: 'disassembly', message: errorMessage(error) });
+      }
     }
 
     let loadedModules: DebugProtocol.Module[] | undefined;
     if ((options.includeModules ?? false) && this.capabilities?.supportsModulesRequest) {
-      loadedModules = await this.modules(0, options.moduleCount ?? 50);
+      try {
+        loadedModules = await this.modules(0, options.moduleCount ?? 50);
+      } catch (error) {
+        collectionErrors.push({ operation: 'modules', message: errorMessage(error) });
+      }
     }
 
     let exception: DebugProtocol.ExceptionInfoResponse['body'] | undefined;
     if ((options.includeExceptionInfo ?? true) && stoppedBody?.reason === 'exception' && this.capabilities?.supportsExceptionInfoRequest) {
-      exception = await this.exceptionInfo(thread.id);
+      try {
+        exception = await this.exceptionInfo(thread.id);
+      } catch (error) {
+        collectionErrors.push({ operation: 'exceptionInfo', message: errorMessage(error) });
+      }
     }
 
     return {
@@ -342,6 +400,7 @@ export class DapSession {
       ...(disassembly === undefined ? {} : { disassembly }),
       ...(loadedModules === undefined ? {} : { modules: loadedModules }),
       ...(exception === undefined ? {} : { exception }),
+      ...(collectionErrors.length === 0 ? {} : { collectionErrors }),
     };
   }
 

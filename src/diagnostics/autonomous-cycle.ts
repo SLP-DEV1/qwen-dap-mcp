@@ -5,6 +5,7 @@ import type {
   VerificationBaseline,
   VerificationResult,
 } from './intelligent-diagnosis.js';
+import { normalizeDiagnosticPath } from './path-normalization.js';
 
 export type AutonomousAgentStatus =
   | 'needs-evidence'
@@ -24,7 +25,6 @@ export type AutonomousAgentActionType =
   | 'build'
   | 'reproduce'
   | 'verify'
-  | 'rollback'
   | 'broaden-diagnosis'
   | 'stop-and-report';
 
@@ -119,9 +119,7 @@ export type AutonomousAgentDecision = {
   stopReason?: string;
 };
 
-function normalizedPath(value: string | undefined): string | undefined {
-  return value?.replace(/\\/g, '/').toLowerCase();
-}
+const TERMINAL_STATUSES = new Set<AutonomousAgentStatus>(['fixed', 'budget-exhausted', 'blocked']);
 
 function normalizedValue(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -142,7 +140,7 @@ export function baselineFingerprint(baseline: VerificationBaseline): string {
     crashLikely: baseline.crashLikely,
     faultFunction: baseline.faultFunction,
     projectFunction: baseline.projectFunction,
-    projectSourcePath: normalizedPath(baseline.projectSourcePath),
+    projectSourcePath: normalizeDiagnosticPath(baseline.projectSourcePath),
     projectLine: baseline.projectLine,
     hypothesisKinds: [...baseline.hypothesisKinds].sort(),
     suspiciousNames: [...baseline.suspiciousNames].sort(),
@@ -164,6 +162,9 @@ export function validateAutonomousAgentState(state: AutonomousAgentState): void 
   }
   if (state.history.length > 24) {
     throw new Error(`Invalid autonomous agent history length: ${state.history.length}. Maximum is 24 entries.`);
+  }
+  if (state.history.some((entry) => !Number.isInteger(entry.iteration) || entry.iteration < 0 || entry.iteration > state.iteration)) {
+    throw new Error('Invalid autonomous agent history: an entry references an impossible iteration.');
   }
 
   const expectedRootFingerprint = baselineFingerprint(state.rootBaseline);
@@ -189,9 +190,10 @@ function boundedMaxIterations(value: number | undefined): number {
 function diagnosisHistory(
   diagnosis: IntelligentCrashDiagnosis,
   fingerprint: string,
+  iteration = 0,
 ): AutonomousAgentHistoryEntry {
   return {
-    iteration: 0,
+    iteration,
     phase: 'diagnosis',
     fingerprint,
     projectFunction: diagnosis.projectFrame.function,
@@ -226,7 +228,7 @@ function verificationHistory(
   };
 }
 
-function evidenceReady(diagnosis: IntelligentCrashDiagnosis): boolean {
+export function evidenceReady(diagnosis: IntelligentCrashDiagnosis): boolean {
   if (!diagnosis.classification.crashLikely) return false;
   if (!diagnosis.projectFrame.sourcePath) return false;
   if (diagnosis.projectFrame.confidence === 'low') return false;
@@ -560,6 +562,42 @@ export function startAutonomousCycle(
   };
 }
 
+export function refreshAutonomousEvidence(
+  previous: AutonomousAgentState,
+  diagnosis: IntelligentCrashDiagnosis,
+): AutonomousAgentDecision {
+  validateAutonomousAgentState(previous);
+  if (TERMINAL_STATUSES.has(previous.status)) {
+    throw new Error(`Cannot refresh evidence for terminal autonomous agent state '${previous.status}'.`);
+  }
+  if (previous.status !== 'needs-evidence') {
+    throw new Error(`Autonomous evidence refresh requires status 'needs-evidence'; received '${previous.status}'.`);
+  }
+
+  const activeBaseline = diagnosis.verificationBaseline;
+  const activeFingerprint = baselineFingerprint(activeBaseline);
+  const history = [
+    ...previous.history,
+    diagnosisHistory(diagnosis, activeFingerprint, previous.iteration),
+  ].slice(-24);
+  const ready = evidenceReady(diagnosis);
+  const state: AutonomousAgentState = {
+    ...previous,
+    status: ready ? 'needs-fix' : 'needs-evidence',
+    activeBaseline,
+    activeFingerprint,
+    history,
+  };
+
+  return {
+    protocolVersion: 2,
+    state,
+    shouldContinue: true,
+    nextActions: ready ? fixActions(diagnosis, state) : evidenceActions(diagnosis, state.iteration),
+    rootCauseBacktrack: buildRootCauseBacktrack(diagnosis),
+  };
+}
+
 function sameFailedFingerprintCount(state: AutonomousAgentState): number {
   return state.history.filter((item) =>
     item.phase === 'verification'
@@ -586,6 +624,12 @@ export function advanceAutonomousCycle(
   currentDiagnosis?: IntelligentCrashDiagnosis,
 ): AutonomousAgentDecision {
   validateAutonomousAgentState(previous);
+  if (TERMINAL_STATUSES.has(previous.status)) {
+    throw new Error(`Cannot advance terminal autonomous agent state '${previous.status}'. Start a new cycle instead.`);
+  }
+  if (previous.status === 'needs-evidence') {
+    throw new Error('Cannot treat evidence collection as fix verification. Refresh the evidence state before advancing the fix cycle.');
+  }
 
   const historyEntry = verificationHistory(previous, verification, currentDiagnosis);
   const history = [...previous.history, historyEntry].slice(-24);

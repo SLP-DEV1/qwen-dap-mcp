@@ -33,8 +33,12 @@ const MAX_DAP_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const TERMINATE_GRACE_MS = 1_000;
 const KILL_GRACE_MS = 2_000;
 
+function childHasExited(child: Pick<ChildProcessWithoutNullStreams, 'exitCode' | 'signalCode'>): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null) return Promise.resolve(true);
+  if (childHasExited(child)) return Promise.resolve(true);
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -46,7 +50,7 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
       resolve(exited);
     };
     const onExit = () => finish(true);
-    const timer = setTimeout(() => finish(child.exitCode !== null), timeoutMs);
+    const timer = setTimeout(() => finish(childHasExited(child)), timeoutMs);
     child.once('exit', onExit);
   });
 }
@@ -61,8 +65,9 @@ export class DapConnection extends EventEmitter {
 
   get isRunning(): boolean {
     // ChildProcess.killed only means a signal was accepted by kill(); it says
-    // nothing about whether the process has actually exited.
-    return Boolean(this.child && this.child.exitCode === null);
+    // nothing about whether the process has actually exited. signalCode is
+    // populated for signal-terminated children while exitCode can remain null.
+    return Boolean(this.child && !childHasExited(this.child));
   }
 
   get pid(): number | undefined {
@@ -105,13 +110,21 @@ export class DapConnection extends EventEmitter {
     });
 
     this.child = child;
+    const isCurrentChild = () => this.child === child;
 
-    child.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk));
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (!isCurrentChild()) return;
+      this.onStdout(chunk);
+    });
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => this.captureStderr(chunk));
+    child.stderr.on('data', (chunk: string) => {
+      if (!isCurrentChild()) return;
+      this.captureStderr(chunk);
+    });
     child.stdin.on('error', (error) => {
-      // Broken stdin means no further DAP requests can be delivered. Node
-      // streams emit these errors asynchronously, so they must be observed.
+      // A retired child can emit stream errors after a new adapter has already
+      // started. Never let an old transport reject the new session's requests.
+      if (!isCurrentChild()) return;
       const dapError = new DapError(`DAP adapter stdin error: ${error.message}`, { cause: error });
       logger.warn('DAP adapter stdin error', { pid: child.pid, error: dapError });
       this.rejectAll(dapError);
@@ -119,6 +132,10 @@ export class DapConnection extends EventEmitter {
     });
 
     child.on('error', (error) => {
+      if (!isCurrentChild()) {
+        logger.debug('Ignoring error from retired DAP adapter', { pid: child.pid, error });
+        return;
+      }
       logger.error('DAP adapter process error', { command: options.command, error });
       const dapError = new DapError(`DAP adapter process error: ${error.message}`, { cause: error });
       this.rejectAll(dapError);
@@ -126,10 +143,14 @@ export class DapConnection extends EventEmitter {
     });
 
     child.on('exit', (code, signal) => {
+      if (!isCurrentChild()) {
+        logger.debug('Ignoring exit from retired DAP adapter', { pid: child.pid, code, signal });
+        return;
+      }
       logger.info('DAP adapter exited', { pid: child.pid, code, signal });
       const detail = signal ? `signal ${signal}` : `exit code ${String(code)}`;
       this.rejectAll(new DapError(`DAP adapter exited with ${detail}`));
-      if (this.child === child) this.child = undefined;
+      this.child = undefined;
       this.emit('adapterExit', { code, signal });
     });
 
@@ -161,16 +182,16 @@ export class DapConnection extends EventEmitter {
     const child = this.child;
     if (!child) return;
 
-    if (child.exitCode === null) {
+    if (!childHasExited(child)) {
       logger.debug('Stopping DAP adapter', { pid: child.pid });
       if (!child.killed) child.kill();
 
       const exitedNormally = await waitForChildExit(child, TERMINATE_GRACE_MS);
-      if (!exitedNormally && child.exitCode === null) {
+      if (!exitedNormally && !childHasExited(child)) {
         logger.warn('DAP adapter did not exit after termination signal; escalating', { pid: child.pid });
         child.kill('SIGKILL');
         const exitedAfterKill = await waitForChildExit(child, KILL_GRACE_MS);
-        if (!exitedAfterKill && child.exitCode === null) {
+        if (!exitedAfterKill && !childHasExited(child)) {
           logger.error('DAP adapter still has not reported exit after SIGKILL', { pid: child.pid });
         }
       }
@@ -291,18 +312,24 @@ export class DapConnection extends EventEmitter {
       }
 
       const headerText = this.buffer.subarray(0, headerEnd).toString('ascii');
-      const match = /(?:^|\r\n)Content-Length:\s*(\d+)/i.exec(headerText);
-      if (!match?.[1]) {
+      const lengthMatches = [...headerText.matchAll(/(?:^|\r\n)Content-Length:\s*(\d+)\s*(?=\r\n|$)/gi)];
+      const contentLengthText = lengthMatches[0]?.[1];
+      if (!contentLengthText || lengthMatches.length !== 1) {
         this.buffer = this.buffer.subarray(headerEnd + HEADER_SEPARATOR.length);
-        const error = new DapError(`Invalid DAP header: ${headerText.slice(0, 500)}`);
+        const error = new DapError(
+          lengthMatches.length > 1
+            ? 'Invalid DAP header: multiple Content-Length fields are not allowed'
+            : `Invalid DAP header: ${headerText.slice(0, 500)}`,
+        );
         logger.warn('DAP protocol error', { error });
+        this.rejectAll(error);
         this.emit('protocolError', error);
         continue;
       }
 
-      const contentLength = Number.parseInt(match[1], 10);
+      const contentLength = Number.parseInt(contentLengthText, 10);
       if (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > MAX_DAP_PAYLOAD_BYTES) {
-        const error = new DapError(`DAP Content-Length ${match[1]} exceeds the ${MAX_DAP_PAYLOAD_BYTES}-byte safety limit`);
+        const error = new DapError(`DAP Content-Length ${contentLengthText} exceeds the ${MAX_DAP_PAYLOAD_BYTES}-byte safety limit`);
         this.buffer = Buffer.alloc(0);
         logger.warn('DAP protocol error', { error });
         this.rejectAll(error);
@@ -317,14 +344,29 @@ export class DapConnection extends EventEmitter {
       const payload = this.buffer.subarray(payloadStart, payloadEnd).toString('utf8');
       this.buffer = this.buffer.subarray(payloadEnd);
 
+      let message: DebugProtocol.ProtocolMessage;
       try {
-        const message = JSON.parse(payload) as DebugProtocol.ProtocolMessage;
-        this.handleMessage(message);
+        message = JSON.parse(payload) as DebugProtocol.ProtocolMessage;
       } catch (error) {
         const protocolError = new DapError(`Failed to parse DAP JSON payload: ${payload.slice(0, 500)}`, {
           cause: error instanceof Error ? error : undefined,
         });
         logger.warn('DAP protocol error', { error: protocolError });
+        this.rejectAll(protocolError);
+        this.emit('protocolError', protocolError);
+        continue;
+      }
+
+      try {
+        this.handleMessage(message);
+      } catch (error) {
+        const protocolError = error instanceof DapError
+          ? error
+          : new DapError(`Failed to handle DAP message type '${String(message.type)}'`, {
+              cause: error instanceof Error ? error : undefined,
+            });
+        logger.warn('DAP protocol error', { error: protocolError });
+        this.rejectAll(protocolError);
         this.emit('protocolError', protocolError);
       }
     }

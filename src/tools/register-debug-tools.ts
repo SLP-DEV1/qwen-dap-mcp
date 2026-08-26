@@ -6,6 +6,7 @@ import {
   buildCodeLldbLaunchConfiguration,
   discoverCodeLldb,
 } from '../adapters/codelldb.js';
+import { DapError } from '../dap/errors.js';
 import { DapSession } from '../dap/session.js';
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -61,9 +62,27 @@ function wrap<TArgs extends Record<string, unknown>>(handler: (args: TArgs) => P
   };
 }
 
-function bytesToHex(data: string | undefined): string | undefined {
-  if (!data) return undefined;
-  return Buffer.from(data, 'base64').toString('hex').match(/.{1,2}/g)?.join(' ');
+function decodeBase64Strict(data: string): Buffer {
+  const compact = data.replace(/\s+/g, '');
+  if (compact.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+    throw new DapError('DAP readMemory returned malformed base64 data');
+  }
+  return Buffer.from(compact, 'base64');
+}
+
+export function formatMemoryResult(
+  memory: Record<string, unknown> & { data?: string },
+  requestedCount: number,
+): Record<string, unknown> {
+  if (!memory.data) return memory;
+  const bytes = decodeBase64Strict(memory.data);
+  if (bytes.length > requestedCount) {
+    throw new DapError(
+      `DAP readMemory returned ${bytes.length} bytes, exceeding the requested ${requestedCount}-byte bound`,
+    );
+  }
+  const hex = bytes.toString('hex').match(/.{1,2}/g)?.join(' ');
+  return { ...memory, ...(hex ? { hex } : {}) };
 }
 
 export function registerDebugTools(server: McpServer, session: DapSession): void {
@@ -253,7 +272,7 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
       description: 'Ask the debugger for a stable dataId and supported access modes for a variable/property before creating a watchpoint.',
       inputSchema: z.object({
         name: z.string().min(1),
-        variablesReference: z.number().int().nonnegative().optional(),
+        variablesReference: z.number().int().positive().optional(),
         frameId: z.number().int().optional(),
       }),
     },
@@ -374,9 +393,9 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     'debug_variables',
     {
       title: 'Read Variables',
-      description: 'Expand a DAP variablesReference returned by a scope, variable, or evaluation result.',
+      description: 'Expand a positive DAP variablesReference returned by a scope, variable, or evaluation result.',
       inputSchema: z.object({
-        variablesReference: z.number().int().nonnegative(),
+        variablesReference: z.number().int().positive(),
         start: z.number().int().nonnegative().optional(),
         count: z.number().int().positive().max(1000).optional(),
       }),
@@ -442,7 +461,7 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     'debug_read_memory',
     {
       title: 'Read Debuggee Memory',
-      description: 'Read a bounded memory range through DAP. Returns base64 plus a hexadecimal rendering.',
+      description: 'Read a bounded memory range through DAP. Returns base64 plus a hexadecimal rendering and rejects adapter responses larger than the requested bound.',
       inputSchema: z.object({
         memoryReference: z.string().min(1),
         count: z.number().int().positive().max(65536),
@@ -451,8 +470,7 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     },
     wrap(async ({ memoryReference, count, offset }) => {
       const memory = await session.readMemory(memoryReference as string, count as number, offset as number);
-      const hex = bytesToHex(memory.data);
-      return { ...memory, ...(hex ? { hex } : {}) };
+      return formatMemoryResult(memory as Record<string, unknown> & { data?: string }, count as number);
     }),
   );
 
@@ -466,7 +484,7 @@ export function registerDebugTools(server: McpServer, session: DapSession): void
     'debug_snapshot',
     {
       title: 'Capture Runtime Debug Snapshot',
-      description: 'Capture one bounded agent-friendly runtime snapshot: stop reason, thread, stack, top frame, scopes, locals, registers, and optional disassembly/modules/exception info.',
+      description: 'Capture one bounded agent-friendly runtime snapshot: stop reason, thread, stack, top frame, scopes, locals/arguments, registers, and optional best-effort disassembly/modules/exception info.',
       inputSchema: z.object({
         threadId: z.number().int().positive().optional(),
         stackLevels: z.number().int().positive().max(100).default(12),
