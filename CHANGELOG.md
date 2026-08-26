@@ -2,6 +2,33 @@
 
 All notable prototype milestones are documented here.
 
+## 0.10.0 - 2026-08-26
+
+### Added
+
+- Bounded autonomous crash-fixing loop through `debug_this_crash(..., workflow={stage:"autonomous"})` without adding a general shell or source-writing executor.
+- Serializable `autonomousAgent.state` carrying an immutable original/root crash fingerprint, the currently active failure fingerprint, verification baselines, bounded iteration budget, status and history.
+- Ordered `nextActions` split between `coding-agent` and `debugger` responsibilities so Qwen Code can inspect source, apply an evidence-backed fix, rebuild, reproduce and return to the debugger for verification.
+- Deterministic autonomous states: `needs-evidence`, `needs-fix`, `retry-fix`, `needs-reproduction`, `changed-failure`, `fixed`, `budget-exhausted`, and `blocked`.
+- Automatic strategy broadening after repeated identical failures so the agent investigates earlier caller/provenance/ownership evidence instead of repeatedly masking the final crash site.
+- Changed-failure re-baselining that preserves the original root fingerprint while continuing against the new source-backed active failure signature.
+- State-integrity validation that recomputes root/active fingerprints from embedded baselines and rejects mismatches, impossible iteration counters, invalid budgets, or oversized history.
+- Regression coverage for autonomous start/action queues, clean fix termination, inconclusive reproduction, repeated-failure broadening, changed-failure re-baselining, budget exhaustion, and tampered serialized state.
+
+### Changed
+
+- The bundled `native-runtime-debug` Skill now prefers the autonomous workflow for crash-fixing tasks and instructs Qwen to follow `nextActions` in order while returning the serialized state unchanged between reproductions.
+- Non-crash stops such as breakpoints or entry pauses no longer trigger another autonomous source edit or consume fix budget; they request completion of the original reproduction instead.
+- Autonomous loop state remains explicit in MCP request/response data rather than hidden in server memory, so the workflow can survive MCP/client restarts.
+- README and server instructions now document the autonomous debugging contract, stop conditions, evidence thresholds, and separation between debugger orchestration and normal coding/build tools.
+
+### Verified
+
+- Node.js 20 and 22 build/test/package matrix passes on the final feature head and merged `main`.
+- Generated self-contained Qwen extension archive builds and installs successfully.
+- Real Windows CodeLLDB live DAP smoke passes on the merged autonomous-agent commit.
+- Real Windows minidump smoke builds a native MSVC/PDB crash target, generates and reopens a real `.dmp` through CodeLLDB, and validates autonomous crash fingerprint/state/next-action creation against recovered debugger evidence.
+
 ## 0.9.0 - 2026-08-26
 
 ### Added
