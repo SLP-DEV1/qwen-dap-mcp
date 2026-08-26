@@ -49,17 +49,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends lldb
 
-      - name: Resolve lldb-dap
+      - name: Show installed lldb-dap layout
         shell: bash
         run: |
           adapter="$(command -v lldb-dap || true)"
           if [ -z "$adapter" ]; then
-            adapter="$(find /usr/bin -maxdepth 1 -type f -name 'lldb-dap-*' -print | sort -V | tail -n 1)"
+            adapter="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-dap' -print 2>/dev/null | sort -V | tail -n 1)"
           fi
           test -n "$adapter"
           test -x "$adapter"
-          echo "LLDB_DAP_PATH=$adapter" >> "$GITHUB_ENV"
-          echo "Using $adapter"
+          echo "Installed lldb-dap: $adapter"
 
       - name: Install project dependencies
         run: npm ci --ignore-scripts
@@ -70,9 +69,8 @@ jobs:
           mkdir -p build/lldb-dap-smoke
           g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/lldb-dap-smoke/native-smoke
 
-      - name: Run real lldb-dap launch smoke
+      - name: Run real lldb-dap launch smoke through auto-discovery
         run: |
-          npx tsx test/lldb-dap-real-smoke.ts \
-            --adapter "$LLDB_DAP_PATH" \
+          env -u LLDB_DAP_PATH npx tsx test/lldb-dap-real-smoke.ts \
             --program build/lldb-dap-smoke/native-smoke \
             --source test/fixtures/native-smoke.cpp
