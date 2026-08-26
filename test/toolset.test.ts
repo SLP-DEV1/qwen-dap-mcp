@@ -22,8 +22,10 @@ test('agent is the default toolset and full remains opt-in', () => {
 test('agent toolset exposes the high-level workflow surface and hides manual tools', () => {
   assert.ok(AGENT_TOOL_NAMES.has('debug_this_crash'));
   assert.ok(AGENT_TOOL_NAMES.has('debug_open_dump'));
+  assert.ok(AGENT_TOOL_NAMES.has('debug_find_writer'));
   assert.ok(AGENT_TOOL_NAMES.has('debug_disconnect'));
   assert.equal(toolsetAllows('agent', 'debug_this_crash'), true);
+  assert.equal(toolsetAllows('agent', 'debug_find_writer'), true);
   assert.equal(toolsetAllows('agent', 'debug_set_data_breakpoints'), false);
   assert.equal(toolsetAllows('agent', 'debug_read_memory'), false);
   assert.equal(toolsetAllows('full', 'debug_read_memory'), true);
