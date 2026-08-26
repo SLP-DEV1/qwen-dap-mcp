@@ -591,15 +591,24 @@ export function createGuardedDapRequestPolicy(
   ): DapRequestPolicyResult => {
     if (!localDecision.allow) return localDecision;
     if (!evaluator.enabled || !shouldConsultHolGuard(context.command)) return localDecision;
-    const executionContext = contextProvider?.() ?? {};
+    const executionContext = contextProvider?.();
+    const actionContext = executionContext ?? {};
     return evaluator.evaluate({
       kind: 'dap-request',
       command: context.command,
       ...(context.args === undefined ? {} : { args: sanitizeDapArgumentsForHolGuard(context.args) }),
-      ...executionContext,
-    }).then((decision) => decision.allow
-      ? { allow: true } as const
-      : { allow: false as const, reason: decisionReason(decision) });
+      ...actionContext,
+    }).then((decision) => {
+      if (contextProvider && contextProvider() !== executionContext) {
+        return {
+          allow: false as const,
+          reason: 'HOL Guard decision invalidated because the DAP session changed while policy evaluation was pending',
+        };
+      }
+      return decision.allow
+        ? { allow: true } as const
+        : { allow: false as const, reason: decisionReason(decision) };
+    });
   };
   return (context: DapRequestPolicyContext) => {
     const localResult = builtIn(context);
