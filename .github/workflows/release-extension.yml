@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   QWEN_CODE_SMOKE_VERSION: '0.22.0'
@@ -153,3 +154,13 @@ jobs:
           '
         env:
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Trigger npm and MCP Registry publication
+        shell: bash
+        run: |
+          gh workflow run publish-registries.yml \
+            --ref main \
+            --field publish_npm=true \
+            --field publish_mcp=true
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -162,8 +162,30 @@ jobs:
           echo '::error::The exact package/version is not visible on npm with the expected mcpName. Publish npm first or check the npm scope/credentials.'
           exit 1
 
-      - name: Install verified mcp-publisher
+      - name: Check whether MCP Registry version already exists
+        id: mcp_version
         if: ${{ inputs.publish_mcp }}
+        shell: bash
+        run: |
+          encoded_server="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "${{ steps.metadata.outputs.server }}")"
+          encoded_version="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "${{ steps.metadata.outputs.version }}")"
+          url="https://registry.modelcontextprotocol.io/v0.1/servers/${encoded_server}/versions/${encoded_version}"
+          status="$(curl --silent --show-error --output mcp-registry-version.json --write-out '%{http_code}' "$url")"
+
+          if [ "$status" = '200' ]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo 'MCP Registry version already exists; publication will be skipped.'
+          elif [ "$status" = '404' ]; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'MCP Registry version is not published yet.'
+          else
+            echo "::error::Unexpected MCP Registry HTTP status ${status}."
+            cat mcp-registry-version.json || true
+            exit 1
+          fi
+
+      - name: Install verified mcp-publisher
+        if: ${{ inputs.publish_mcp && steps.mcp_version.outputs.exists != 'true' }}
         shell: bash
         env:
           MCP_PUBLISHER_VERSION: '1.8.1'
@@ -178,11 +200,11 @@ jobs:
           ./mcp-publisher --help >/dev/null
 
       - name: Authenticate to MCP Registry with GitHub OIDC
-        if: ${{ inputs.publish_mcp }}
+        if: ${{ inputs.publish_mcp && steps.mcp_version.outputs.exists != 'true' }}
         run: ./mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
-        if: ${{ inputs.publish_mcp }}
+        if: ${{ inputs.publish_mcp && steps.mcp_version.outputs.exists != 'true' }}
         run: ./mcp-publisher publish server.json
 
       - name: Summary
@@ -197,4 +219,6 @@ jobs:
             echo "- MCP name: ${{ steps.metadata.outputs.server }}"
             echo "- npm publish requested: ${{ inputs.publish_npm }}"
             echo "- MCP publish requested: ${{ inputs.publish_mcp }}"
+            echo "- npm version already existed: ${{ steps.npm_version.outputs.exists }}"
+            echo "- MCP Registry version already existed: ${{ steps.mcp_version.outputs.exists }}"
           } >> "$GITHUB_STEP_SUMMARY"

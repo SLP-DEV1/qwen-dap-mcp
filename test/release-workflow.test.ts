@@ -15,17 +15,24 @@ test('published release verification is serialized inside the release workflow',
   assert.doesNotMatch(extensionSmoke, /^\s{2}published-release-install:/m);
   assert.match(releaseWorkflow, /- '\.github\/workflows\/release-extension\.yml'/);
   assert.match(releaseWorkflow, /- 'test\/release-workflow\.test\.ts'/);
+  assert.match(releaseWorkflow, /^\s{2}actions: write\s*$/m);
   assert.match(releaseWorkflow, /- name: Publish GitHub release/);
   assert.match(releaseWorkflow, /- name: Verify published release metadata/);
   assert.match(releaseWorkflow, /- name: Verify published GitHub release installs exact version/);
+  assert.match(releaseWorkflow, /- name: Trigger npm and MCP Registry publication/);
+  assert.match(releaseWorkflow, /gh workflow run publish-registries\.yml/);
+  assert.match(releaseWorkflow, /--field publish_npm=true/);
+  assert.match(releaseWorkflow, /--field publish_mcp=true/);
 
   const publishIndex = releaseWorkflow.indexOf('- name: Publish GitHub release');
   const metadataIndex = releaseWorkflow.indexOf('- name: Verify published release metadata');
   const installIndex = releaseWorkflow.indexOf('- name: Verify published GitHub release installs exact version');
+  const registryIndex = releaseWorkflow.indexOf('- name: Trigger npm and MCP Registry publication');
 
   assert.ok(publishIndex >= 0);
   assert.ok(metadataIndex > publishIndex, 'release metadata must be checked only after publish');
   assert.ok(installIndex > metadataIndex, 'published release install must happen after metadata validation');
+  assert.ok(registryIndex > installIndex, 'registry publication must be triggered only after release install verification');
 
   assert.match(releaseWorkflow, /if \[ "\$\{\{ steps\.version\.outputs\.exists \}\}" = 'false' \]; then/);
   assert.match(releaseWorkflow, /test "\$TARGET_COMMIT" = "\$GITHUB_SHA"/);
@@ -35,7 +42,7 @@ test('published release verification is serialized inside the release workflow',
   assert.match(releaseWorkflow, /manifest\.version !== expected/);
 });
 
-test('registry publication is manual, release-bound, and verifies npm before MCP', async () => {
+test('registry publication is release-bound, idempotent, and verifies npm before MCP', async () => {
   const workflow = await readFile(registryWorkflowUrl, 'utf8');
 
   assert.match(workflow, /^\s{2}workflow_dispatch:/m);
@@ -56,12 +63,20 @@ test('registry publication is manual, release-bound, and verifies npm before MCP
   assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /secrets\.NPM_TOKEN/);
 
+  assert.match(workflow, /- name: Check whether MCP Registry version already exists/);
+  assert.match(workflow, /registry\.modelcontextprotocol\.io\/v0\.1\/servers/);
+  assert.match(workflow, /if \[ "\$status" = '200' \]; then/);
+  assert.match(workflow, /elif \[ "\$status" = '404' \]; then/);
+  assert.match(workflow, /steps\.mcp_version\.outputs\.exists != 'true'/);
+
   const npmVisibilityIndex = workflow.indexOf('- name: Verify package is visible on npm');
+  const mcpExistsIndex = workflow.indexOf('- name: Check whether MCP Registry version already exists');
   const mcpLoginIndex = workflow.indexOf('- name: Authenticate to MCP Registry with GitHub OIDC');
   const mcpPublishIndex = workflow.indexOf('- name: Publish to MCP Registry');
 
   assert.ok(npmVisibilityIndex >= 0);
-  assert.ok(mcpLoginIndex > npmVisibilityIndex, 'MCP auth must happen only after npm ownership metadata is visible');
+  assert.ok(mcpExistsIndex > npmVisibilityIndex, 'MCP existence check must happen only after npm ownership metadata is visible');
+  assert.ok(mcpLoginIndex > mcpExistsIndex, 'MCP auth must happen only when the exact version is absent');
   assert.ok(mcpPublishIndex > mcpLoginIndex, 'MCP publish must happen only after OIDC authentication');
   assert.match(workflow, /\.\/mcp-publisher login github-oidc/);
   assert.match(workflow, /\.\/mcp-publisher publish server\.json/);
