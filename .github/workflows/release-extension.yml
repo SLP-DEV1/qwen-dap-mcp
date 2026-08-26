@@ -112,9 +112,14 @@ jobs:
           IS_PRERELEASE="$(jq -r '.prerelease' <<<"$RELEASE_JSON")"
 
           test "$ACTUAL_TAG" = "$TAG"
-          test "$TARGET_COMMIT" = "$GITHUB_SHA"
           test "$IS_DRAFT" = 'false'
           test "$IS_PRERELEASE" = 'false'
+
+          if [ "${{ steps.version.outputs.exists }}" = 'false' ]; then
+            test "$TARGET_COMMIT" = "$GITHUB_SHA"
+          else
+            echo "Existing ${TAG} targets ${TARGET_COMMIT}; preserving historical release target."
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
