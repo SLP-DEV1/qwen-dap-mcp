@@ -190,9 +190,43 @@ export const debugSessionsOutputSchema = z.object({
   })),
 }).catchall(z.unknown());
 
+const runtimeComparisonSideSchema = z.object({
+  sessionId: z.string(),
+  snapshot: runtimeSnapshotOutputSchema,
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
+export const debugCompareRunsOutputSchema = z.object({
+  baselineSessionId: z.string(),
+  candidateSessionId: z.string(),
+  baseline: runtimeComparisonSideSchema,
+  candidate: runtimeComparisonSideSchema,
+  diff: z.object({
+    summary: z.object({
+      meaningfulDifferences: z.number().int().nonnegative(),
+      changedLocals: z.number().int().nonnegative(),
+      changedRegisters: z.number().int().nonnegative(),
+      unstableValues: z.number().int().nonnegative(),
+      stackChanges: z.number().int().nonnegative(),
+      addedModules: z.number().int().nonnegative(),
+      removedModules: z.number().int().nonnegative(),
+    }),
+    stack: z.unknown(),
+    locals: z.array(z.unknown()),
+    registers: z.array(z.unknown()),
+    exception: z.unknown(),
+    symbolHealth: z.unknown(),
+    modules: z.unknown(),
+    firstMeaningfulDifference: z.unknown().optional(),
+    limitations: z.array(z.string()),
+  }).catchall(z.unknown()),
+  guidance: z.array(z.string()),
+}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
+  debug_compare_runs: debugCompareRunsOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,
