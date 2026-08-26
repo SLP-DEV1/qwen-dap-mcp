@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
 import type { DebugProtocol } from '@vscode/debugprotocol';
@@ -19,20 +20,23 @@ function snapshot(frameName: string): any {
 }
 
 function stoppedConnection() {
-  return {
-    waitForEvent: async (event: string) => {
-      if (event === 'stopped') {
-        return { body: { reason: 'data breakpoint', threadId: 7, description: 'watchpoint trigger' } };
-      }
-      return new Promise(() => undefined);
-    },
-  };
+  return new EventEmitter();
+}
+
+function emitWatchpointStop(connection: EventEmitter) {
+  queueMicrotask(() => connection.emit('event', {
+    seq: 1,
+    type: 'event',
+    event: 'stopped',
+    body: { reason: 'data breakpoint', threadId: 7, description: 'watchpoint trigger' },
+  } satisfies DebugProtocol.Event));
 }
 
 test('findWriter preserves prior native DAP watchpoints and reports the immediate writer stop', async () => {
   const calls: DebugProtocol.DataBreakpoint[][] = [];
   const previous: DebugProtocol.DataBreakpoint[] = [{ dataId: 'existing', accessType: 'write' }];
   let snapshotCount = 0;
+  const connection = stoppedConnection();
   const session = {
     isPostmortem: () => false,
     runExclusiveLifecycle: async (_name: string, action: () => Promise<unknown>) => action(),
@@ -43,8 +47,11 @@ test('findWriter preserves prior native DAP watchpoints and reports the immediat
       calls.push(breakpoints.map((item) => ({ ...item })));
       return breakpoints.map((_item, index) => ({ verified: true, id: index + 1 }));
     },
-    connection: stoppedConnection(),
-    continueExecution: async () => ({}),
+    connection,
+    continueExecution: async () => {
+      emitWatchpointStop(connection);
+      return {};
+    },
     pause: async () => ({}),
     snapshot: () => ({
       configured: true,
@@ -60,11 +67,13 @@ test('findWriter preserves prior native DAP watchpoints and reports the immediat
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0], [previous[0], { dataId: 'watch-counter', accessType: 'write' }]);
   assert.deepEqual(calls[1], previous);
+  assert.equal(connection.listenerCount('event'), 0);
 });
 
 test('findWriter uses a bounded GDB watch command and deletes only its own temporary watchpoint', async () => {
   const evaluateCalls: Array<{ expression: string; frameId?: number; context?: string }> = [];
   let snapshotCount = 0;
+  const connection = stoppedConnection();
   const session = {
     isPostmortem: () => false,
     runExclusiveLifecycle: async (_name: string, action: () => Promise<unknown>) => action(),
@@ -80,8 +89,11 @@ test('findWriter uses a bounded GDB watch command and deletes only its own tempo
       }
       throw new Error(`Unexpected GDB evaluate expression: ${expression}`);
     },
-    connection: stoppedConnection(),
-    continueExecution: async () => ({}),
+    connection,
+    continueExecution: async () => {
+      emitWatchpointStop(connection);
+      return {};
+    },
     pause: async () => ({}),
     snapshot: () => ({ configured: true, adapterId: 'gdb', capabilities: {} }),
   } as unknown as GuardedDapSession;
@@ -100,6 +112,7 @@ test('findWriter uses a bounded GDB watch command and deletes only its own tempo
     { expression: 'watch watched_value', frameId: 101, context: 'repl' },
     { expression: 'delete 3', frameId: 101, context: 'repl' },
   ]);
+  assert.equal(connection.listenerCount('event'), 0);
 });
 
 test('findWriter rejects control characters before issuing a bounded GDB watch command', async () => {

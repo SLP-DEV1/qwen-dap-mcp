@@ -1,4 +1,10 @@
 import { logger } from './logger.js';
+import {
+  DEBUG_SESSION_CONTROL_ANNOTATIONS,
+  LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+  READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+  SESSION_TEARDOWN_ANNOTATIONS,
+} from './tools/tool-annotations.js';
 
 export type ToolsetMode = 'agent' | 'full';
 
@@ -16,6 +22,42 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_disconnect',
 ]);
 
+const LOCAL_EXECUTION_TOOLS = new Set([
+  'debug_start',
+  'debug_start_codelldb',
+  'debug_launch',
+  'debug_launch_codelldb',
+  'debug_attach',
+  'debug_attach_codelldb',
+]);
+
+const SESSION_CONTROL_TOOLS = new Set([
+  'debug_set_breakpoints',
+  'debug_set_source_breakpoints',
+  'debug_set_function_breakpoints',
+  'debug_set_instruction_breakpoints',
+  'debug_set_data_breakpoints',
+  'debug_set_exception_breakpoints',
+  'debug_pause',
+  'debug_continue',
+  'debug_step',
+  'debug_evaluate',
+]);
+
+const READ_ONLY_FULL_TOOLS = new Set([
+  'debug_codelldb_info',
+  'debug_data_breakpoint_info',
+  'debug_threads',
+  'debug_stack',
+  'debug_scopes',
+  'debug_variables',
+  'debug_modules',
+  'debug_disassemble',
+  'debug_read_memory',
+  'debug_exception_info',
+  'debug_events',
+]);
+
 type ToolRegistrar = {
   // McpServer.registerTool is overloaded/generic; this preserves its call
   // surface while filtering only by the first tool-name argument.
@@ -29,6 +71,22 @@ const FILTERED_TOOL_HANDLE = Object.freeze({
   remove: () => undefined,
 });
 
+function defaultAnnotationsForTool(name: string) {
+  if (name === 'debug_disconnect') return SESSION_TEARDOWN_ANNOTATIONS;
+  if (LOCAL_EXECUTION_TOOLS.has(name)) return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
+  if (SESSION_CONTROL_TOOLS.has(name)) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
+  if (READ_ONLY_FULL_TOOLS.has(name)) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
+  return undefined;
+}
+
+function withBehaviorAnnotations(name: string, args: any[]): any[] {
+  const config = args[0];
+  if (!config || typeof config !== 'object' || Array.isArray(config) || config.annotations) return args;
+  const annotations = defaultAnnotationsForTool(name);
+  if (!annotations) return args;
+  return [{ ...config, annotations }, ...args.slice(1)];
+}
+
 export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): ToolsetMode {
   if (value === undefined || value.trim() === '') return 'agent';
   const normalized = value.trim().toLowerCase();
@@ -39,6 +97,24 @@ export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): To
 
 export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
   return mode === 'full' || AGENT_TOOL_NAMES.has(toolName);
+}
+
+/**
+ * Add explicit MCP behavior metadata to legacy/manual tool registrations.
+ * This is intentionally separate from toolset filtering so callers that use
+ * filterToolRegistrar(..., 'full') retain the historical identity/no-op path.
+ */
+export function annotateToolRegistrar<T extends ToolRegistrar>(registrar: T): T {
+  return new Proxy(registrar, {
+    get(target, property, receiver) {
+      if (property === 'registerTool') {
+        return (name: string, ...args: any[]) =>
+          target.registerTool.call(target, name, ...withBehaviorAnnotations(name, args));
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode: ToolsetMode): T {

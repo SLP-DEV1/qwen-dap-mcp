@@ -9,7 +9,7 @@ import { registerFindWriterTool } from './tools/find-writer.js';
 import { registerGdbDapTools } from './tools/register-gdb-dap-tools.js';
 import { registerLldbDapTools } from './tools/register-lldb-dap-tools.js';
 import { registerRunToStopTool } from './tools/run-to-stop.js';
-import { filterToolRegistrar, resolveToolsetMode } from './toolset.js';
+import { annotateToolRegistrar, filterToolRegistrar, resolveToolsetMode } from './toolset.js';
 import { packageVersion } from './version.js';
 
 export function createServer(): McpServer {
@@ -26,7 +26,7 @@ export function createServer(): McpServer {
     },
   );
 
-  const registrationServer = filterToolRegistrar(server, toolsetMode);
+  const registrationServer = filterToolRegistrar(annotateToolRegistrar(server), toolsetMode);
   registerDebugTools(registrationServer, session);
   registerLldbDapTools(registrationServer, session);
   registerGdbDapTools(registrationServer, session);

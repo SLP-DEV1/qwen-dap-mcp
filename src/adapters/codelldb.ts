@@ -37,6 +37,8 @@ export type CodeLldbAttachOptions = {
   stopOnEntry?: boolean;
 };
 
+const MIN_CODELLDB_EXTENSION_VERSION = [1, 11, 0] as const;
+
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
@@ -62,6 +64,23 @@ function defaultExtensionRoots(env: NodeJS.ProcessEnv, homeDirectory: string): s
   return [...new Set(roots.map((root) => resolve(root)))];
 }
 
+function extensionVersion(entry: string): [number, number, number] | undefined {
+  const match = /^vadimcn\.vscode-lldb-(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/i.exec(entry);
+  if (!match) return undefined;
+  const version: [number, number, number] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  return version.every((value) => Number.isSafeInteger(value) && value >= 0) ? version : undefined;
+}
+
+function versionAtLeast(version: readonly number[], minimum: readonly number[]): boolean {
+  for (let index = 0; index < Math.max(version.length, minimum.length); index += 1) {
+    const current = version[index] ?? 0;
+    const required = minimum[index] ?? 0;
+    if (current > required) return true;
+    if (current < required) return false;
+  }
+  return true;
+}
+
 function findExtensionAdapter(root: string, searched: string[]): CodeLldbDiscoveryResult | undefined {
   if (!existsSync(root)) {
     searched.push(root);
@@ -82,6 +101,8 @@ function findExtensionAdapter(root: string, searched: string[]): CodeLldbDiscove
     const extensionDirectory = join(root, entry);
     const candidate = join(extensionDirectory, 'adapter', executableName());
     searched.push(candidate);
+    const version = extensionVersion(entry);
+    if (!version || !versionAtLeast(version, MIN_CODELLDB_EXTENSION_VERSION)) continue;
     if (isFile(candidate)) {
       return {
         command: candidate,
@@ -153,7 +174,7 @@ export function discoverCodeLldb(options: DiscoverCodeLldbOptions = {}): CodeLld
   }
 
   throw new Error(
-    `CodeLLDB was not found. Install vadimcn.vscode-lldb >= 1.11.0, set CODELLDB_PATH, or pass adapterPath. Searched: ${searched.join(', ')}`,
+    `CodeLLDB was not found. Install vadimcn.vscode-lldb >= 1.11.0, set CODELLDB_PATH, or pass adapterPath. Extension discovery rejects versions older than 1.11.0. Searched: ${searched.join(', ')}`,
   );
 }
 

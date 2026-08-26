@@ -58,6 +58,7 @@ type ExecutionState = 'stopped' | 'running' | 'exited' | 'terminated' | 'unknown
 type GuardedSnapshot = SessionSnapshot & { postmortem?: boolean };
 
 const CAPTURE_DEADLINE_PREFIX = 'Hang evidence capture deadline exceeded';
+const PAUSE_DEADLINE_PREFIX = 'Hang pause budget exceeded';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -67,21 +68,34 @@ function errorResult(error: unknown) {
   return { content: [{ type: 'text' as const, text: errorMessage(error) }], isError: true };
 }
 
+function deadlineError(prefix: string, operation: string): DapError {
+  return new DapError(`${prefix} before ${operation}.`);
+}
+
 function captureDeadlineError(operation: string): DapError {
-  return new DapError(`${CAPTURE_DEADLINE_PREFIX} before ${operation}.`);
+  return deadlineError(CAPTURE_DEADLINE_PREFIX, operation);
+}
+
+function pauseDeadlineError(operation: string): DapError {
+  return deadlineError(PAUSE_DEADLINE_PREFIX, operation);
 }
 
 function isCaptureDeadlineError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(CAPTURE_DEADLINE_PREFIX);
 }
 
-async function withCaptureDeadline<T>(
+function isPauseDeadlineError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(PAUSE_DEADLINE_PREFIX);
+}
+
+async function withDeadline<T>(
   deadline: number,
   operation: string,
+  makeError: (operation: string) => DapError,
   action: () => Promise<T>,
 ): Promise<T> {
   const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) throw captureDeadlineError(operation);
+  if (remainingMs <= 0) throw makeError(operation);
 
   let timer: NodeJS.Timeout | undefined;
   const request = action();
@@ -90,12 +104,28 @@ async function withCaptureDeadline<T>(
     return await Promise.race([
       request,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(captureDeadlineError(operation)), remainingMs);
+        timer = setTimeout(() => reject(makeError(operation)), remainingMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function withCaptureDeadline<T>(
+  deadline: number,
+  operation: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  return withDeadline(deadline, operation, captureDeadlineError, action);
+}
+
+async function withPauseDeadline<T>(
+  deadline: number,
+  operation: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  return withDeadline(deadline, operation, pauseDeadlineError, action);
 }
 
 function recentExecutionState(snapshot: GuardedSnapshot): ExecutionState {
@@ -178,16 +208,29 @@ async function pauseThreadsBestEffort(
   threads: DebugProtocol.Thread[],
   excludedThreadId: number | undefined,
   pauseTimeoutMs: number,
+  deadline: number,
 ) {
   const pauseErrors: string[] = [];
   let allThreadsStopped = false;
+  let budgetExpired = false;
   const requestedThreadIds: number[] = [];
 
   for (const thread of threads) {
     if (thread.id === excludedThreadId) continue;
+    if (Date.now() >= deadline) {
+      budgetExpired = true;
+      pauseErrors.push(`${PAUSE_DEADLINE_PREFIX} before thread ${thread.id}.`);
+      break;
+    }
     try {
       requestedThreadIds.push(thread.id);
-      const paused = await session.pause(thread.id, true, pauseTimeoutMs) as {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      const perThreadTimeout = Math.max(1, Math.min(pauseTimeoutMs, remainingMs));
+      const paused = await withPauseDeadline(
+        deadline,
+        `pause for thread ${thread.id}`,
+        () => session.pause(thread.id, true, perThreadTimeout),
+      ) as {
         stopped?: DebugProtocol.StoppedEvent['body'];
       };
       if (paused.stopped?.allThreadsStopped === true) {
@@ -196,30 +239,45 @@ async function pauseThreadsBestEffort(
       }
     } catch (error) {
       pauseErrors.push(`thread ${thread.id}: ${errorMessage(error)}`);
+      if (isPauseDeadlineError(error)) {
+        budgetExpired = true;
+        break;
+      }
     }
   }
 
-  return { allThreadsStopped, pauseErrors, requestedThreadIds };
+  return { allThreadsStopped, pauseErrors, requestedThreadIds, budgetExpired };
 }
 
-async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: number) {
+async function pauseForHangCapture(
+  session: GuardedDapSession,
+  pauseTimeoutMs: number,
+  pauseBudgetMs = 30_000,
+) {
   if (session.isPostmortem()) {
     return {
       requested: false,
       allThreadsStopped: true,
       pauseErrors: [] as string[],
       requestedThreadIds: [] as number[],
+      pauseBudgetMs,
+      pauseBudgetExpired: false,
       reason: 'postmortem sessions are already frozen',
     };
   }
 
+  const deadline = Date.now() + pauseBudgetMs;
   const before = session.snapshot();
   const state = recentExecutionState(before);
   if (state === 'exited' || state === 'terminated') {
     throw new DapError(`Cannot capture hang evidence because the debuggee has already ${state}.`);
   }
 
-  const threads = await session.threads();
+  const threads = await withPauseDeadline(
+    deadline,
+    'thread enumeration before hang pause',
+    () => session.threads(),
+  );
   if (threads.length === 0) {
     throw new DapError('The debugger returned no threads to pause for hang capture.');
   }
@@ -232,6 +290,8 @@ async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: n
         allThreadsStopped: true,
         pauseErrors: [] as string[],
         requestedThreadIds: [] as number[],
+        pauseBudgetMs,
+        pauseBudgetExpired: false,
         reason: 'the latest stopped event explicitly reports allThreadsStopped=true',
       };
     }
@@ -241,31 +301,61 @@ async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: n
       threads,
       stopped?.threadId,
       pauseTimeoutMs,
+      deadline,
     );
     return {
       requested: remaining.requestedThreadIds.length > 0,
       allThreadsStopped: remaining.allThreadsStopped,
       pauseErrors: remaining.pauseErrors,
       requestedThreadIds: remaining.requestedThreadIds,
+      pauseBudgetMs,
+      pauseBudgetExpired: remaining.budgetExpired,
       ...(stopped?.threadId === undefined ? {} : { alreadyStoppedThreadId: stopped.threadId }),
       reason: remaining.allThreadsStopped
         ? 'an additional pause reported allThreadsStopped=true'
-        : 'the session was stopped but not globally stopped; remaining threads received bounded best-effort pause requests',
+        : remaining.budgetExpired
+          ? 'the aggregate hang pause budget expired before the adapter confirmed every thread stopped; evidence collection continues conservatively'
+          : 'the session was stopped but not globally stopped; remaining threads received bounded best-effort pause requests',
     };
   }
 
   const anchor = threads[0];
   if (!anchor) throw new DapError('The debugger returned no anchor thread to pause.');
-  const firstPause = await session.pause(anchor.id, true, pauseTimeoutMs) as {
-    stopped?: DebugProtocol.StoppedEvent['body'];
-  };
-  if (firstPause.stopped?.allThreadsStopped === true) {
+  let firstPause: { stopped?: DebugProtocol.StoppedEvent['body'] } | undefined;
+  const firstPauseErrors: string[] = [];
+  try {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const perThreadTimeout = Math.max(1, Math.min(pauseTimeoutMs, remainingMs));
+    firstPause = await withPauseDeadline(
+      deadline,
+      `anchor pause for thread ${anchor.id}`,
+      () => session.pause(anchor.id, true, perThreadTimeout),
+    ) as { stopped?: DebugProtocol.StoppedEvent['body'] };
+  } catch (error) {
+    firstPauseErrors.push(`thread ${anchor.id}: ${errorMessage(error)}`);
+    if (isPauseDeadlineError(error) || Date.now() >= deadline) {
+      return {
+        requested: true,
+        anchorThreadId: anchor.id,
+        allThreadsStopped: false,
+        pauseErrors: firstPauseErrors,
+        requestedThreadIds: [anchor.id],
+        pauseBudgetMs,
+        pauseBudgetExpired: true,
+        reason: 'the aggregate hang pause budget expired during the anchor pause; evidence collection continues conservatively',
+      };
+    }
+  }
+
+  if (firstPause?.stopped?.allThreadsStopped === true) {
     return {
       requested: true,
       anchorThreadId: anchor.id,
       allThreadsStopped: true,
-      pauseErrors: [] as string[],
+      pauseErrors: firstPauseErrors,
       requestedThreadIds: [anchor.id],
+      pauseBudgetMs,
+      pauseBudgetExpired: false,
       reason: 'the anchor pause reported allThreadsStopped=true',
     };
   }
@@ -273,18 +363,23 @@ async function pauseForHangCapture(session: GuardedDapSession, pauseTimeoutMs: n
   const remaining = await pauseThreadsBestEffort(
     session,
     threads,
-    firstPause.stopped?.threadId ?? anchor.id,
+    firstPause?.stopped?.threadId ?? anchor.id,
     pauseTimeoutMs,
+    deadline,
   );
   return {
     requested: true,
     anchorThreadId: anchor.id,
     allThreadsStopped: remaining.allThreadsStopped,
-    pauseErrors: remaining.pauseErrors,
+    pauseErrors: [...firstPauseErrors, ...remaining.pauseErrors],
     requestedThreadIds: [anchor.id, ...remaining.requestedThreadIds],
+    pauseBudgetMs,
+    pauseBudgetExpired: remaining.budgetExpired,
     reason: remaining.allThreadsStopped
       ? 'a follow-up pause reported allThreadsStopped=true'
-      : 'the adapter never confirmed allThreadsStopped=true; all other threads received bounded best-effort pause requests',
+      : remaining.budgetExpired
+        ? 'the aggregate hang pause budget expired before the adapter confirmed every thread stopped; evidence collection continues conservatively'
+        : 'the adapter never confirmed allThreadsStopped=true; all other threads received bounded best-effort pause requests',
   };
 }
 
@@ -292,7 +387,14 @@ function dedupeVariables(variables: DebugProtocol.Variable[]): DebugProtocol.Var
   const seen = new Set<string>();
   const output: DebugProtocol.Variable[] = [];
   for (const variable of variables) {
-    const key = `${variable.name}\u0000${variable.value}\u0000${variable.type ?? ''}\u0000${variable.memoryReference ?? ''}`;
+    const key = [
+      variable.name,
+      variable.value,
+      variable.type ?? '',
+      String(variable.variablesReference),
+      variable.memoryReference ?? '',
+      variable.evaluateName ?? '',
+    ].join('\u0000');
     if (seen.has(key)) continue;
     seen.add(key);
     output.push(variable);
@@ -460,6 +562,7 @@ async function observeLaunchedOrAttachedTarget(
   configuration: Record<string, unknown>,
   observeMs: number,
   pauseTimeoutMs: number,
+  pauseBudgetMs: number,
   captureOptions: HangCaptureOptions,
   analysisOptions: IntelligentDiagnosisOptions,
 ) {
@@ -492,7 +595,7 @@ async function observeLaunchedOrAttachedTarget(
   }
 
   if (outcome.kind === 'event' && outcome.event.event === 'stopped') {
-    const pause = await pauseForHangCapture(session, pauseTimeoutMs);
+    const pause = await pauseForHangCapture(session, pauseTimeoutMs, pauseBudgetMs);
     const captured = await captureAndAnalyze(session, captureOptions, analysisOptions);
     return {
       requestResult,
@@ -509,7 +612,7 @@ async function observeLaunchedOrAttachedTarget(
     };
   }
 
-  const pause = await pauseForHangCapture(session, pauseTimeoutMs);
+  const pause = await pauseForHangCapture(session, pauseTimeoutMs, pauseBudgetMs);
   const captured = await captureAndAnalyze(session, captureOptions, analysisOptions);
   return {
     requestResult,
@@ -575,9 +678,11 @@ export function registerHangDiagnosticTool(
         observeMs: z.number().int().min(250).max(120000).default(5000)
           .describe('Bounded interval after launch/attach during which a normal stop or process exit prevents automatic hang-timeout classification.'),
         pauseTimeoutMs: z.number().int().min(1000).max(60000).default(10000)
-          .describe('Maximum time to wait for each bounded pause used to freeze a suspected live hang.'),
+          .describe('Maximum time to wait for any single pause request used to freeze a suspected live hang.'),
+        pauseBudgetMs: z.number().int().min(250).max(120000).default(30000)
+          .describe('Aggregate wall-clock budget across thread enumeration and all pause requests. This prevents per-thread pause timeouts from multiplying across large thread sets.'),
         captureTimeoutMs: z.number().int().min(250).max(120000).default(30000)
-          .describe('Global deadline for all-thread stack/scope/variable evidence collection. When it expires, remaining threads are retained as partial/unclassified evidence instead of extending the workflow per thread.'),
+          .describe('Global deadline for all-thread stack/scope/variable evidence collection after the pause phase. When it expires, remaining threads are retained as partial/unclassified evidence instead of extending the workflow per thread.'),
         maxThreads: z.number().int().positive().max(128).default(32)
           .describe('Maximum threads to collect for bounded all-thread triage.'),
         stackLevels: z.number().int().positive().max(100).default(24)
@@ -603,6 +708,7 @@ export function registerHangDiagnosticTool(
       requestTimeoutMs,
       observeMs,
       pauseTimeoutMs,
+      pauseBudgetMs,
       captureTimeoutMs,
       maxThreads,
       stackLevels,
@@ -624,10 +730,11 @@ export function registerHangDiagnosticTool(
             framesWithVariables,
             captureTimeoutMs,
           };
+          const effectivePauseBudgetMs = pauseBudgetMs ?? 30_000;
 
           if (mode === 'current') {
             const before = session.snapshot();
-            const pause = await pauseForHangCapture(session, pauseTimeoutMs);
+            const pause = await pauseForHangCapture(session, pauseTimeoutMs, effectivePauseBudgetMs);
             const captured = await captureAndAnalyze(session, captureOptions, analysisOptions);
             return {
               mode,
@@ -659,6 +766,7 @@ export function registerHangDiagnosticTool(
                 configuration,
                 observeMs,
                 pauseTimeoutMs,
+                effectivePauseBudgetMs,
                 captureOptions,
                 analysisOptions,
               )),
@@ -702,6 +810,7 @@ export function registerHangDiagnosticTool(
                   requestConfiguration,
                   observeMs,
                   pauseTimeoutMs,
+                  effectivePauseBudgetMs,
                   captureOptions,
                   analysisOptions,
                 )),
@@ -742,6 +851,7 @@ export function registerHangDiagnosticTool(
                   requestConfiguration,
                   observeMs,
                   pauseTimeoutMs,
+                  effectivePauseBudgetMs,
                   captureOptions,
                   analysisOptions,
                 )),
@@ -781,6 +891,7 @@ export function registerHangDiagnosticTool(
                 requestConfiguration,
                 observeMs,
                 pauseTimeoutMs,
+                effectivePauseBudgetMs,
                 captureOptions,
                 analysisOptions,
               )),

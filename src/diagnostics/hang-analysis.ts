@@ -454,7 +454,7 @@ export function analyzeHang(
       threadName: item.thread.name,
       ...(item.stack[0] ? { topFunction: item.stack[0].name } : {}),
       ...(project ? { projectFunction: project.frame.name, projectFrameIndex: project.index } : {}),
-      projectControlled: wait.kind === 'running-user-code',
+      projectControlled: Boolean(project),
       wait,
       ...(item.collectionErrors?.length ? { collectionErrors: item.collectionErrors } : {}),
     };
