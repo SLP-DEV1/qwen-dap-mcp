@@ -1,0 +1,998 @@
+name: v0.14 bootstrap
+
+on:
+  push:
+    branches:
+      - feature/v0.14-gdb-find-writer
+    paths:
+      - .github/workflows/v014-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.14-gdb-find-writer
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply v0.14 implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def write(path: str, content: str):
+              Path(path).write_text(content, encoding='utf-8')
+
+          def replace(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'anchor not found in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          write('src/adapters/gdb-dap.ts', r'''import { statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+import { DapError } from '../dap/errors.js';
+import { resolveExistingDirectory, resolveExistingFile } from '../local-path.js';
+
+export const MIN_GDB_DAP_MAJOR = 14;
+
+export type GdbDapDiscoverySource = 'explicit' | 'environment' | 'home' | 'path';
+
+export type GdbDapVersion = {
+  major: number;
+  minor?: number;
+  raw: string;
+};
+
+export type GdbDapDiscoveryResult = {
+  command: string;
+  args: string[];
+  source: GdbDapDiscoverySource;
+  searched: string[];
+  version: GdbDapVersion;
+};
+
+export type DiscoverGdbDapOptions = {
+  explicitPath?: string;
+  env?: NodeJS.ProcessEnv;
+  allowPathFallback?: boolean;
+};
+
+export type GdbDapLaunchOptions = {
+  program: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  stopOnEntry?: boolean;
+  stopAtBeginningOfMainSubprogram?: boolean;
+};
+
+export type GdbDapPidAttachOptions = {
+  pid: number;
+  program?: string;
+};
+
+export type GdbDapRemoteAttachOptions = {
+  target: string;
+  program?: string;
+};
+
+export type GdbDapCoreOptions = {
+  coreFile: string;
+  program?: string;
+};
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function executableNames(): string[] {
+  if (process.platform === 'win32') return ['gdb.exe'];
+  return ['gdb', 'gdb-19', 'gdb-18', 'gdb-17', 'gdb-16', 'gdb-15', 'gdb-14'];
+}
+
+function findOnPath(command: string): string | undefined {
+  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+  const result = spawnSync(locator, [command], {
+    encoding: 'utf8',
+    windowsHide: true,
+    shell: false,
+    timeout: 5_000,
+    maxBuffer: 64 * 1024,
+  });
+  if (result.error || result.status !== 0 || !result.stdout) return undefined;
+  const first = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return first && isFile(first) ? first : undefined;
+}
+
+export function parseGdbVersion(output: string): GdbDapVersion | undefined {
+  const firstLine = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+  const match = firstLine.match(/\b(?:GNU\s+)?gdb(?:\s+\([^)]*\))?\s+(\d+)(?:\.(\d+))?/i)
+    ?? output.match(/\bgdb[^\d]*(\d+)(?:\.(\d+))?/i);
+  if (!match) return undefined;
+  return {
+    major: Number(match[1]),
+    ...(match[2] === undefined ? {} : { minor: Number(match[2]) }),
+    raw: firstLine || match[0],
+  };
+}
+
+function probeGdbVersion(command: string): GdbDapVersion {
+  const result = spawnSync(command, ['--version'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    shell: false,
+    timeout: 8_000,
+    maxBuffer: 128 * 1024,
+  });
+  if (result.error || result.status !== 0) {
+    throw new DapError(`Unable to execute GDB at ${command}: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${String(result.status)}`}`);
+  }
+  const version = parseGdbVersion(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+  if (!version) throw new DapError(`Unable to parse GDB version from ${command}.`);
+  if (version.major < MIN_GDB_DAP_MAJOR) {
+    throw new DapError(`GDB ${version.major}${version.minor === undefined ? '' : `.${version.minor}`} is too old for the built-in DAP interpreter. GDB ${MIN_GDB_DAP_MAJOR}+ is required.`);
+  }
+  return version;
+}
+
+function resultFor(command: string, source: GdbDapDiscoverySource, searched: string[]): GdbDapDiscoveryResult {
+  return {
+    command,
+    args: ['--interpreter=dap', '--quiet', '--nx'],
+    source,
+    searched,
+    version: probeGdbVersion(command),
+  };
+}
+
+export function discoverGdbDap(options: DiscoverGdbDapOptions = {}): GdbDapDiscoveryResult {
+  const env = options.env ?? process.env;
+  const searched: string[] = [];
+
+  if (options.explicitPath) {
+    const candidate = resolveExistingFile(options.explicitPath, 'GDB executable');
+    searched.push(candidate);
+    return resultFor(candidate, 'explicit', searched);
+  }
+
+  for (const key of ['GDB_DAP_PATH', 'GDB_PATH'] as const) {
+    const raw = env[key];
+    if (!raw) continue;
+    const candidate = resolve(raw);
+    searched.push(candidate);
+    if (isFile(candidate)) return resultFor(candidate, 'environment', searched);
+  }
+
+  if (env.GDB_HOME) {
+    const candidate = join(resolve(env.GDB_HOME), 'bin', process.platform === 'win32' ? 'gdb.exe' : 'gdb');
+    searched.push(candidate);
+    if (isFile(candidate)) return resultFor(candidate, 'home', searched);
+  }
+
+  if (options.allowPathFallback !== false) {
+    for (const name of executableNames()) {
+      searched.push(name);
+      const candidate = findOnPath(name);
+      if (candidate) return resultFor(candidate, 'path', searched);
+    }
+  }
+
+  throw new DapError(
+    `GDB with DAP support was not found. Install GDB ${MIN_GDB_DAP_MAJOR}+, set GDB_PATH/GDB_DAP_PATH/GDB_HOME, or pass adapterPath. Searched: ${searched.join(', ')}`,
+  );
+}
+
+export function buildGdbDapLaunchConfiguration(options: GdbDapLaunchOptions): Record<string, unknown> {
+  const program = resolveExistingFile(options.program, 'Program executable');
+  const cwd = options.cwd
+    ? resolveExistingDirectory(options.cwd, 'Working directory')
+    : dirname(program);
+  return {
+    program,
+    args: options.args ?? [],
+    cwd,
+    ...(options.env ? { env: options.env } : {}),
+    stopOnEntry: options.stopOnEntry ?? false,
+    ...(options.stopAtBeginningOfMainSubprogram === undefined
+      ? {}
+      : { stopAtBeginningOfMainSubprogram: options.stopAtBeginningOfMainSubprogram }),
+  };
+}
+
+export function buildGdbDapPidAttachConfiguration(options: GdbDapPidAttachOptions): Record<string, unknown> {
+  if (!Number.isSafeInteger(options.pid) || options.pid <= 0) {
+    throw new DapError(`GDB attach PID must be a positive safe integer; received ${String(options.pid)}`);
+  }
+  return {
+    pid: options.pid,
+    ...(options.program ? { program: resolveExistingFile(options.program, 'Program image') } : {}),
+  };
+}
+
+export function buildGdbDapRemoteAttachConfiguration(options: GdbDapRemoteAttachOptions): Record<string, unknown> {
+  const target = options.target.trim();
+  if (!target) throw new DapError('GDB remote target must not be empty.');
+  return {
+    target,
+    ...(options.program ? { program: resolveExistingFile(options.program, 'Program image') } : {}),
+  };
+}
+
+export function buildGdbDapCoreConfiguration(options: GdbDapCoreOptions): Record<string, unknown> {
+  return {
+    coreFile: resolveExistingFile(options.coreFile, 'Crash dump'),
+    ...(options.program ? { program: resolveExistingFile(options.program, 'Program image') } : {}),
+  };
+}
+''')
+
+          write('src/tools/register-gdb-dap-tools.ts', r'''import type { McpServer } from '@modelcontextprotocol/server';
+import * as z from 'zod/v4';
+
+import {
+  buildGdbDapLaunchConfiguration,
+  buildGdbDapPidAttachConfiguration,
+  buildGdbDapRemoteAttachConfiguration,
+  discoverGdbDap,
+} from '../adapters/gdb-dap.js';
+import { GuardedDapSession } from '../dap/guarded-session.js';
+import { LOCAL_TARGET_EXECUTION_ANNOTATIONS, READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
+
+const breakpointGroupSchema = z.object({
+  source: z.string().min(1).describe('Absolute or GDB-resolvable source file path.'),
+  lines: z.array(z.number().int().positive()).min(1).describe('One or more 1-based source lines to set before configurationDone.'),
+});
+
+function result(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+function errorResult(error: unknown) {
+  return { content: [{ type: 'text' as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
+}
+
+function wrap<TArgs extends Record<string, unknown>>(handler: (args: TArgs) => Promise<unknown> | unknown) {
+  return async (args: TArgs) => {
+    try {
+      return result(await handler(args));
+    } catch (error) {
+      return errorResult(error);
+    }
+  };
+}
+
+export function registerGdbDapTools(server: McpServer, session: GuardedDapSession): void {
+  server.registerTool(
+    'debug_gdb_info',
+    {
+      title: 'Locate GDB DAP',
+      description: 'Locate and version-check a local GDB executable with the built-in DAP interpreter. Use this to verify GDB >= 14 discovery before starting a GNU debugger session; it only probes the local executable and does not launch or attach a debuggee.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+      inputSchema: z.object({
+        adapterPath: z.string().min(1).optional().describe('Optional explicit path to the GDB executable; omit to search GDB_DAP_PATH, GDB_PATH, GDB_HOME, and PATH.'),
+      }),
+    },
+    wrap(async ({ adapterPath }) => discoverGdbDap({ ...(adapterPath ? { explicitPath: adapterPath as string } : {}) })),
+  );
+
+  server.registerTool(
+    'debug_start_gdb',
+    {
+      title: 'Start GDB DAP',
+      description: 'Discover GDB >= 14 and initialize its built-in Debug Adapter Protocol interpreter over stdio. Use this before the manual GDB launch/attach helpers in the full toolset; it starts only GDB itself and does not yet run or attach a target.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      inputSchema: z.object({
+        adapterPath: z.string().min(1).optional().describe('Optional explicit GDB executable path; omit to use normal GDB discovery.'),
+        cwd: z.string().optional().describe('Working directory for the local GDB adapter process.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds.'),
+      }),
+    },
+    wrap(async ({ adapterPath, cwd, requestTimeoutMs }) => {
+      const adapter = discoverGdbDap({ ...(adapterPath ? { explicitPath: adapterPath as string } : {}) });
+      const capabilities = await session.start({
+        command: adapter.command,
+        args: adapter.args,
+        adapterId: 'gdb',
+        ...(cwd ? { cwd: cwd as string } : {}),
+        requestTimeoutMs: requestTimeoutMs as number,
+      });
+      return { adapter, capabilities, status: session.snapshot() };
+    }),
+  );
+
+  server.registerTool(
+    'debug_launch_gdb',
+    {
+      title: 'Launch with GDB DAP',
+      description: 'Launch an authorized local native program through an initialized GDB DAP session. This executes application code and may produce normal target side effects; use debug_this_crash(mode="gdb") for the higher-level diagnose/verify workflow.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      inputSchema: z.object({
+        program: z.string().min(1).describe('Local native executable to launch.'),
+        args: z.array(z.string()).optional().describe('Command-line arguments for the inferior.'),
+        cwd: z.string().optional().describe('Working directory inherited by the inferior.'),
+        env: z.record(z.string(), z.string()).optional().describe('Exact environment object passed to the GDB launch request.'),
+        stopOnEntry: z.boolean().default(false).describe('Stop at the first instruction using GDB starti semantics.'),
+        stopAtBeginningOfMainSubprogram: z.boolean().default(false).describe('Stop at the main subprogram using GDB start semantics.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured before the inferior runs.'),
+      }),
+    },
+    wrap(async ({ program, args, cwd, env, stopOnEntry, stopAtBeginningOfMainSubprogram, breakpoints }) => session.launch(
+      buildGdbDapLaunchConfiguration({
+        program: program as string,
+        ...(args ? { args: args as string[] } : {}),
+        ...(cwd ? { cwd: cwd as string } : {}),
+        ...(env ? { env: env as Record<string, string> } : {}),
+        stopOnEntry: stopOnEntry as boolean,
+        stopAtBeginningOfMainSubprogram: stopAtBeginningOfMainSubprogram as boolean,
+      }),
+      (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+    )),
+  );
+
+  server.registerTool(
+    'debug_attach_gdb',
+    {
+      title: 'Attach GDB to PID',
+      description: 'Attach an initialized GDB DAP session to an authorized local process by PID. This changes debugger/target state and can stop the process; use only for targets you are authorized to inspect.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      inputSchema: z.object({
+        pid: z.number().int().positive().describe('Authorized local process ID to attach.'),
+        program: z.string().min(1).optional().describe('Optional matching executable image used for symbols when GDB cannot infer it.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured before attach setup completes.'),
+      }),
+    },
+    wrap(async ({ pid, program, breakpoints }) => session.attach(
+      buildGdbDapPidAttachConfiguration({ pid: pid as number, ...(program ? { program: program as string } : {}) }),
+      (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+    )),
+  );
+
+  server.registerTool(
+    'debug_attach_gdb_remote',
+    {
+      title: 'Attach GDB Remote Target',
+      description: 'Connect an initialized GDB DAP session to an explicitly authorized target-remote endpoint such as localhost:1234. This opens a debugger connection to the supplied endpoint and can control the remote target; it never starts gdbserver itself.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
+      inputSchema: z.object({
+        target: z.string().min(1).describe('GDB target remote argument, for example localhost:1234 or a local debug socket.'),
+        program: z.string().min(1).optional().describe('Optional local unstripped executable used for matching symbols.'),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoints configured after connecting.'),
+      }),
+    },
+    wrap(async ({ target, program, breakpoints }) => session.attach(
+      buildGdbDapRemoteAttachConfiguration({ target: target as string, ...(program ? { program: program as string } : {}) }),
+      (breakpoints ?? []) as Array<{ source: string; lines: number[] }>,
+    )),
+  );
+}
+''')
+
+          write('src/tools/find-writer.ts', r'''import type { McpServer } from '@modelcontextprotocol/server';
+import type { DebugProtocol } from '@vscode/debugprotocol';
+import * as z from 'zod/v4';
+
+import { correlateSourceDisassembly } from '../diagnostics/analyze-snapshot.js';
+import { DapError } from '../dap/errors.js';
+import { GuardedDapSession } from '../dap/guarded-session.js';
+import type { RuntimeSnapshotOptions } from '../dap/session.js';
+import { DEBUG_SESSION_CONTROL_ANNOTATIONS } from './tool-annotations.js';
+
+export type FindWriterOptions = {
+  name: string;
+  variablesReference?: number;
+  frameId?: number;
+  accessType?: 'read' | 'write' | 'readWrite';
+  condition?: string;
+  hitCondition?: string;
+  threadId?: number;
+  timeoutMs?: number;
+  replaceExistingDataBreakpoints?: boolean;
+  snapshot?: RuntimeSnapshotOptions;
+};
+
+type ResumeOutcome = {
+  event: 'stopped' | 'exited' | 'terminated';
+  body?: unknown;
+};
+
+function isDataBreakpointStop(body: unknown): boolean {
+  const stopped = body as { reason?: unknown; description?: unknown; text?: unknown } | undefined;
+  const text = [stopped?.reason, stopped?.description, stopped?.text]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+  return /data\s*breakpoint|watchpoint/.test(text);
+}
+
+async function continueToOutcome(session: GuardedDapSession, threadId: number, timeoutMs: number): Promise<ResumeOutcome> {
+  const outcome = Promise.any([
+    session.connection.waitForEvent('stopped', timeoutMs).then((event) => ({ event: 'stopped' as const, body: event.body })),
+    session.connection.waitForEvent('exited', timeoutMs).then((event) => ({ event: 'exited' as const, body: event.body })),
+    session.connection.waitForEvent('terminated', timeoutMs).then((event) => ({ event: 'terminated' as const, body: event.body })),
+  ]);
+  await session.continueExecution(threadId, false, timeoutMs);
+  return outcome;
+}
+
+async function restoreDataBreakpoints(
+  session: GuardedDapSession,
+  previous: DebugProtocol.DataBreakpoint[],
+): Promise<string | undefined> {
+  try {
+    await session.setDataBreakpoints(previous);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+export async function findWriter(session: GuardedDapSession, options: FindWriterOptions) {
+  return session.runExclusiveLifecycle('find writer', async () => {
+    if (session.isPostmortem()) {
+      throw new DapError('debug_find_writer requires a live stopped target; a crash dump is frozen and cannot trigger a data breakpoint.');
+    }
+
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    const snapshotOptions: RuntimeSnapshotOptions = {
+      ...(options.snapshot ?? {}),
+      ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+      includeDisassembly: options.snapshot?.includeDisassembly ?? true,
+      includeModules: options.snapshot?.includeModules ?? false,
+      includeExceptionInfo: options.snapshot?.includeExceptionInfo ?? true,
+    };
+    const before = await session.runtimeSnapshot(snapshotOptions);
+    const selectedThreadId = options.threadId ?? before.thread.id;
+    const frameId = options.frameId ?? before.frame.id;
+
+    const resolution = await session.dataBreakpointInfo(
+      options.name,
+      options.variablesReference,
+      options.variablesReference === undefined ? frameId : undefined,
+    );
+    if (!resolution.dataId) {
+      throw new DapError(`The active debugger cannot create a data breakpoint for '${options.name}': ${resolution.description}`);
+    }
+
+    const requestedAccess = options.accessType ?? 'write';
+    if (resolution.accessTypes?.length && !resolution.accessTypes.includes(requestedAccess)) {
+      throw new DapError(
+        `The active debugger does not support accessType='${requestedAccess}' for '${options.name}'. Supported: ${resolution.accessTypes.join(', ')}`,
+      );
+    }
+
+    const previous = session.dataBreakpointConfiguration();
+    const writerBreakpoint: DebugProtocol.DataBreakpoint = {
+      dataId: resolution.dataId,
+      accessType: requestedAccess,
+      ...(options.condition ? { condition: options.condition } : {}),
+      ...(options.hitCondition ? { hitCondition: options.hitCondition } : {}),
+    };
+    const requestedBreakpoints = options.replaceExistingDataBreakpoints
+      ? [writerBreakpoint]
+      : [...previous, writerBreakpoint];
+    const installed = await session.setDataBreakpoints(requestedBreakpoints);
+
+    let outcome: ResumeOutcome;
+    try {
+      outcome = await continueToOutcome(session, selectedThreadId, timeoutMs);
+    } catch (error) {
+      try {
+        await session.pause(selectedThreadId, true, Math.min(timeoutMs, 5_000));
+      } catch {
+        // The target may already have exited or the adapter may no longer be resumable.
+      }
+      const restoreWarning = await restoreDataBreakpoints(session, previous);
+      if (restoreWarning) {
+        throw new DapError(`${error instanceof Error ? error.message : String(error)}; additionally failed to restore prior data breakpoints: ${restoreWarning}`);
+      }
+      throw error;
+    }
+
+    let after;
+    if (outcome.event === 'stopped') {
+      after = await session.runtimeSnapshot({ ...snapshotOptions, threadId: selectedThreadId });
+    }
+    const restoreWarning = await restoreDataBreakpoints(session, previous);
+    const hitConfirmed = outcome.event === 'stopped' && isDataBreakpointStop(outcome.body);
+
+    return {
+      query: {
+        name: options.name,
+        accessType: requestedAccess,
+        ...(options.variablesReference === undefined ? {} : { variablesReference: options.variablesReference }),
+        frameId,
+      },
+      resolution,
+      priorDataBreakpointCount: previous.length,
+      replaceExistingDataBreakpoints: options.replaceExistingDataBreakpoints ?? false,
+      installed,
+      outcome,
+      hitConfirmed,
+      before: {
+        thread: before.thread,
+        frame: before.frame,
+      },
+      ...(after
+        ? {
+            writerFrame: hitConfirmed ? after.frame : undefined,
+            writerCorrelation: hitConfirmed ? correlateSourceDisassembly(after) : undefined,
+            snapshot: after,
+          }
+        : {}),
+      ...(restoreWarning ? { restoreWarning } : {}),
+      guidance: hitConfirmed
+        ? 'The debugger reported a data-breakpoint/watchpoint stop. The top frame is the immediate writer candidate; inspect its source and callers before making a causal claim.'
+        : outcome.event === 'stopped'
+          ? 'Execution stopped for another reason before the watched write. Inspect this stop; call debug_find_writer again only if it is safe to continue the reproduction.'
+          : 'The target exited or terminated before the watched write was observed.',
+      status: session.snapshot(),
+    };
+  });
+}
+
+function result(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+function errorResult(error: unknown) {
+  return { content: [{ type: 'text' as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
+}
+
+export function registerFindWriterTool(server: McpServer, session: GuardedDapSession): void {
+  server.registerTool(
+    'debug_find_writer',
+    {
+      title: 'Find Runtime Writer',
+      description: 'Set a temporary DAP data breakpoint/watchpoint on a variable or expression, resume an authorized live target, and capture the first resulting stop to identify the immediate writer candidate. Use this after a stopped-state diagnosis suggests a value was corrupted and you need runtime provenance; do not use it for crash dumps or when resuming the program is unsafe. The tool preserves data breakpoints previously configured through this MCP session, restores them afterward, and never automatically continues through an unrelated breakpoint, exception, or signal stop.',
+      annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
+      inputSchema: z.object({
+        name: z.string().min(1).describe('Variable child name or debugger expression to watch. Without variablesReference, the expression is resolved in frameId/current frame when supported.'),
+        variablesReference: z.number().int().positive().optional().describe('Optional DAP variable-container reference when watching a named child; obtain it from the current stopped state.'),
+        frameId: z.number().int().positive().optional().describe('Optional stopped frame used to resolve an expression; omit to use the current snapshot frame. Ignored when variablesReference is supplied.'),
+        accessType: z.enum(['read', 'write', 'readWrite']).default('write').describe('Requested watchpoint access mode. write is the normal choice when finding who corrupts a value.'),
+        condition: z.string().min(1).optional().describe('Optional adapter-supported condition applied to the temporary data breakpoint.'),
+        hitCondition: z.string().min(1).optional().describe('Optional adapter-supported hit-count condition for the temporary data breakpoint.'),
+        threadId: z.number().int().positive().optional().describe('Stopped thread to resume and inspect; omit to use the debugger-selected stopped thread.'),
+        timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Maximum time in milliseconds to wait for a stop, exit, or termination after resuming.'),
+        replaceExistingDataBreakpoints: z.boolean().default(false).describe('When false, preserve existing MCP-configured data breakpoints alongside the temporary writer watch; when true, temporarily replace them for a cleaner reproduction.'),
+        snapshot: z.object({
+          stackLevels: z.number().int().positive().max(100).default(12).describe('Maximum stack frames captured at the writer stop.'),
+          maxVariablesPerScope: z.number().int().positive().max(500).default(100).describe('Maximum variables captured per scope at the writer stop.'),
+          includeDisassembly: z.boolean().default(true).describe('Include nearby instructions at the writer stop when supported.'),
+          disassembleBefore: z.number().int().nonnegative().max(100).default(8).describe('Instructions requested before the writer instruction.'),
+          disassembleAfter: z.number().int().nonnegative().max(100).default(12).describe('Instructions requested after the writer instruction.'),
+          includeModules: z.boolean().default(false).describe('Include a bounded module list at the writer stop.'),
+          moduleCount: z.number().int().positive().max(500).default(50).describe('Maximum modules returned when module collection is enabled.'),
+          includeExceptionInfo: z.boolean().default(true).describe('Collect exception information if the resulting stop is an exception rather than the expected watchpoint.'),
+        }).optional().describe('Bounds for the evidence snapshot captured after execution stops.'),
+      }),
+    },
+    async (options) => {
+      try {
+        return result(await findWriter(session, options as FindWriterOptions));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+}
+''')
+
+          write('test/gdb-dap-profile.test.ts', r'''import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import {
+  buildGdbDapCoreConfiguration,
+  buildGdbDapLaunchConfiguration,
+  buildGdbDapPidAttachConfiguration,
+  buildGdbDapRemoteAttachConfiguration,
+  parseGdbVersion,
+} from '../src/adapters/gdb-dap.js';
+
+function fixtureFile(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'qwen-gdb-dap-'));
+  const path = join(dir, name);
+  writeFileSync(path, 'fixture');
+  return path;
+}
+
+test('parseGdbVersion accepts release and distro version strings', () => {
+  assert.deepEqual(parseGdbVersion('GNU gdb (GDB) 17.2\n'), { major: 17, minor: 2, raw: 'GNU gdb (GDB) 17.2' });
+  assert.equal(parseGdbVersion('GNU gdb (Ubuntu 15.0.50.20240403-0ubuntu1) 15.0.50\n')?.major, 15);
+  assert.equal(parseGdbVersion('not gdb'), undefined);
+});
+
+test('GDB DAP launch configuration uses documented launch fields', () => {
+  const program = fixtureFile('app');
+  const configuration = buildGdbDapLaunchConfiguration({
+    program,
+    args: ['--repro'],
+    env: { TESTING: '1' },
+    stopOnEntry: true,
+    stopAtBeginningOfMainSubprogram: false,
+  });
+  assert.equal(configuration.program, program);
+  assert.deepEqual(configuration.args, ['--repro']);
+  assert.deepEqual(configuration.env, { TESTING: '1' });
+  assert.equal(configuration.stopOnEntry, true);
+  assert.equal(configuration.stopAtBeginningOfMainSubprogram, false);
+});
+
+test('GDB DAP supports PID, target-remote, and core-file attach shapes', () => {
+  const program = fixtureFile('app');
+  const coreFile = fixtureFile('core');
+  assert.deepEqual(buildGdbDapPidAttachConfiguration({ pid: 42, program }), { pid: 42, program });
+  assert.deepEqual(buildGdbDapRemoteAttachConfiguration({ target: 'localhost:1234', program }), { target: 'localhost:1234', program });
+  assert.deepEqual(buildGdbDapCoreConfiguration({ coreFile, program }), { coreFile, program });
+});
+''')
+
+          write('test/find-writer.test.ts', r'''import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import type { DebugProtocol } from '@vscode/debugprotocol';
+import type { GuardedDapSession } from '../src/dap/guarded-session.js';
+import { findWriter } from '../src/tools/find-writer.js';
+
+function snapshot(frameName: string): any {
+  return {
+    stopped: { reason: 'breakpoint', threadId: 7 },
+    thread: { id: 7, name: 'main' },
+    stack: [{ id: 101, name: frameName, line: 12, column: 1, instructionPointerReference: '0x1000' }],
+    frame: { id: 101, name: frameName, line: 12, column: 1, instructionPointerReference: '0x1000' },
+    scopes: [],
+    locals: [],
+    registers: [],
+    disassembly: [],
+  };
+}
+
+test('findWriter preserves prior watchpoints and reports the immediate writer stop', async () => {
+  const calls: DebugProtocol.DataBreakpoint[][] = [];
+  const previous: DebugProtocol.DataBreakpoint[] = [{ dataId: 'existing', accessType: 'write' }];
+  let snapshotCount = 0;
+  const session = {
+    isPostmortem: () => false,
+    runExclusiveLifecycle: async (_name: string, action: () => Promise<unknown>) => action(),
+    runtimeSnapshot: async () => snapshot(++snapshotCount === 1 ? 'before' : 'write_counter'),
+    dataBreakpointInfo: async () => ({ dataId: 'watch-counter', description: 'counter', accessTypes: ['write'], canPersist: false }),
+    dataBreakpointConfiguration: () => previous.map((item) => ({ ...item })),
+    setDataBreakpoints: async (breakpoints: DebugProtocol.DataBreakpoint[]) => {
+      calls.push(breakpoints.map((item) => ({ ...item })));
+      return breakpoints.map((_item, index) => ({ verified: true, id: index + 1 }));
+    },
+    connection: {
+      waitForEvent: async (event: string) => {
+        if (event === 'stopped') return { body: { reason: 'data breakpoint', threadId: 7, description: 'watchpoint trigger' } };
+        return new Promise(() => undefined);
+      },
+    },
+    continueExecution: async () => ({}),
+    pause: async () => ({}),
+    snapshot: () => ({ configured: true }),
+  } as unknown as GuardedDapSession;
+
+  const output = await findWriter(session, { name: 'counter', accessType: 'write', timeoutMs: 1000 });
+  assert.equal(output.hitConfirmed, true);
+  assert.equal(output.writerFrame?.name, 'write_counter');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], [previous[0], { dataId: 'watch-counter', accessType: 'write' }]);
+  assert.deepEqual(calls[1], previous);
+});
+''')
+
+          write('docs/gdb-dap.md', r'''# GNU GDB DAP
+
+`qwen-dap-mcp` v0.14 adds a first-class GNU GDB path using GDB's built-in Debug Adapter Protocol interpreter.
+
+## Requirements
+
+- GDB 14 or newer
+- a GDB build with Python/DAP support
+- an authorized native target
+
+GDB 14 introduced the built-in `dap` interpreter. The bridge starts it directly without a shell using:
+
+```text
+gdb --interpreter=dap --quiet --nx
+```
+
+`--nx` deliberately avoids user init files so unexpected startup commands do not interfere with the stdio protocol.
+
+## Discovery
+
+The bridge searches in this order:
+
+1. explicit `adapterPath`
+2. `GDB_DAP_PATH`
+3. `GDB_PATH`
+4. `GDB_HOME/bin/gdb`
+5. `gdb` / common versioned GDB names on `PATH`
+
+The executable is version-probed and GDB < 14 is rejected before a session is started.
+
+## High-level crash workflow
+
+```text
+debug_this_crash(
+  mode="gdb",
+  program="/work/build/app",
+  args=["--repro"],
+  analysis={projectRoots:["/work/src"]}
+)
+```
+
+The same diagnosis, verification fingerprint, and bounded autonomous workflow used by CodeLLDB and `lldb-dap` are applied after GDB produces a stopped-state snapshot.
+
+## Manual full-toolset helpers
+
+With `QWEN_DAP_MCP_TOOLSET=full`:
+
+- `debug_gdb_info`
+- `debug_start_gdb`
+- `debug_launch_gdb`
+- `debug_attach_gdb`
+- `debug_attach_gdb_remote`
+
+GDB's DAP `attach` request supports a local PID, a `target remote` string, or a core file. `debug_attach_gdb_remote` only connects to an endpoint you provide; the MCP server does not start `gdbserver` or open a listener.
+
+## Core files
+
+```text
+debug_open_dump(
+  adapter="gdb",
+  dumpPath="/work/crashes/core.1234",
+  program="/work/build/app"
+)
+```
+
+Core-file sessions are marked postmortem/read-only by the same session guard used for CodeLLDB and upstream `lldb-dap` dumps.
+
+## Find the writer
+
+GDB watchpoints are exposed through DAP data breakpoints, so the high-level adapter-independent workflow can be used after any stopped live session:
+
+```text
+debug_find_writer(
+  name="player->health",
+  accessType="write"
+)
+```
+
+The bridge resolves the data breakpoint, temporarily installs it, resumes to the first stop/exit/termination, and reports the immediate writer frame when the debugger confirms a `data breakpoint`/watchpoint stop. It does not automatically continue through an unrelated stop.
+''')
+
+          write('test/fixtures/gdb-dap-smoke.cpp', r'''#include <cstdint>
+
+volatile std::int32_t watched_value = 1;
+
+__attribute__((noinline)) void mutate_value() {
+    watched_value = 42;
+}
+
+int main() {
+    watched_value = 7;
+    mutate_value();
+    return watched_value == 42 ? 0 : 1;
+}
+''')
+
+          replace('src/dap/session.ts',
+          "  private capabilities?: DebugProtocol.Capabilities;\n  private requestTimeoutMs = 15_000;",
+          "  private capabilities?: DebugProtocol.Capabilities;\n  private dataBreakpoints: DebugProtocol.DataBreakpoint[] = [];\n  private requestTimeoutMs = 15_000;")
+
+          replace('src/dap/session.ts',
+          "    const response = await this.connection.sendRequest(\n      'setDataBreakpoints',\n      { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,\n      this.requestTimeoutMs,\n    );\n    return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);\n  }",
+          "    const response = await this.connection.sendRequest(\n      'setDataBreakpoints',\n      { breakpoints } satisfies DebugProtocol.SetDataBreakpointsArguments,\n      this.requestTimeoutMs,\n    );\n    this.dataBreakpoints = breakpoints.map((breakpoint) => ({ ...breakpoint }));\n    return ((response.body as DebugProtocol.SetDataBreakpointsResponse['body'] | undefined)?.breakpoints ?? []);\n  }\n\n  dataBreakpointConfiguration(): DebugProtocol.DataBreakpoint[] {\n    return this.dataBreakpoints.map((breakpoint) => ({ ...breakpoint }));\n  }")
+
+          replace('src/dap/session.ts',
+          "    this.activeRequest = undefined;\n    this.capabilities = undefined;\n  }",
+          "    this.activeRequest = undefined;\n    this.capabilities = undefined;\n    this.dataBreakpoints = [];\n  }")
+
+          replace('src/server.ts',
+          "import { registerDebugTools } from './tools/register-debug-tools.js';\nimport { registerDumpTools } from './tools/register-dump-tools.js';\nimport { registerLldbDapTools } from './tools/register-lldb-dap-tools.js';",
+          "import { registerDebugTools } from './tools/register-debug-tools.js';\nimport { registerDumpTools } from './tools/register-dump-tools.js';\nimport { registerFindWriterTool } from './tools/find-writer.js';\nimport { registerGdbDapTools } from './tools/register-gdb-dap-tools.js';\nimport { registerLldbDapTools } from './tools/register-lldb-dap-tools.js';")
+
+          replace('src/server.ts',
+          "  registerDebugTools(registrationServer, session);\n  registerLldbDapTools(registrationServer, session);\n  registerRunToStopTool(registrationServer, session);\n  registerAgentDiagnosticTools(registrationServer, session);\n  registerDumpTools(registrationServer, session);",
+          "  registerDebugTools(registrationServer, session);\n  registerLldbDapTools(registrationServer, session);\n  registerGdbDapTools(registrationServer, session);\n  registerRunToStopTool(registrationServer, session);\n  registerAgentDiagnosticTools(registrationServer, session);\n  registerFindWriterTool(registrationServer, session);\n  registerDumpTools(registrationServer, session);")
+
+          replace('src/server.ts',
+          "CodeLLDB remains supported; full toolset mode also exposes first-class upstream LLVM lldb-dap discovery/start/launch/attach helpers. The default agent toolset intentionally hides manual low-level debugger schemas",
+          "CodeLLDB, upstream LLVM lldb-dap, and GNU GDB DAP are first-class adapter paths; full toolset mode also exposes their manual discovery/start/launch/attach helpers. Use debug_find_writer after a stopped live diagnosis when a suspicious value needs a temporary data-breakpoint/watchpoint to identify its immediate runtime writer; never use it for frozen dumps or when resuming is unsafe. The default agent toolset intentionally hides manual low-level debugger schemas")
+
+          replace('src/toolset.ts',
+          "  'debug_source_disassembly',\n  'debug_run_to_stop',",
+          "  'debug_source_disassembly',\n  'debug_find_writer',\n  'debug_run_to_stop',")
+
+          replace('test/toolset.test.ts',
+          "  assert.ok(AGENT_TOOL_NAMES.has('debug_open_dump'));",
+          "  assert.ok(AGENT_TOOL_NAMES.has('debug_open_dump'));\n  assert.ok(AGENT_TOOL_NAMES.has('debug_find_writer'));")
+
+          replace('src/tools/agent-diagnostics.ts',
+          "import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';\nimport { buildLldbDapLaunchConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';",
+          "import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';\nimport { buildGdbDapLaunchConfiguration, discoverGdbDap } from '../adapters/gdb-dap.js';\nimport { buildLldbDapLaunchConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';")
+
+          replace('src/tools/agent-diagnostics.ts',
+          "Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB and launch a local binary, lldb-dap to discover upstream LLVM lldb-dap and launch a local binary, or live with an already initialized generic DAP adapter.",
+          "Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB, lldb-dap to discover upstream LLVM lldb-dap, gdb to discover GNU GDB's built-in DAP interpreter, or live with an already initialized generic DAP adapter.")
+          replace('src/tools/agent-diagnostics.ts',
+          "Do not use codelldb/lldb-dap/live when executing or attaching to the target is not authorized:",
+          "Do not use codelldb/lldb-dap/gdb/live when executing or attaching to the target is not authorized:")
+          replace('src/tools/agent-diagnostics.ts',
+          "mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'dump']).default('current').describe('current inspects an existing stop; live runs launch/attach through an initialized DAP session; codelldb starts CodeLLDB; lldb-dap starts upstream LLVM lldb-dap; dump opens a frozen core/minidump.'),",
+          "mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'gdb', 'dump']).default('current').describe('current inspects an existing stop; live uses an initialized generic DAP session; codelldb starts CodeLLDB; lldb-dap starts upstream LLVM lldb-dap; gdb starts GNU GDB with --interpreter=dap; dump opens a frozen core/minidump.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "program: z.string().min(1).optional().describe('Required for mode=codelldb and mode=lldb-dap; optional for CodeLLDB dumps but required when dumpAdapter=lldb-dap. Local path to the native executable.'),",
+          "program: z.string().min(1).optional().describe('Required for codelldb/lldb-dap/gdb launch modes; optional for CodeLLDB/GDB dumps but required when dumpAdapter=lldb-dap. Local path to the native executable.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in mode=codelldb or mode=lldb-dap.'),",
+          "args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in codelldb/lldb-dap/gdb modes.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in mode=codelldb or mode=lldb-dap.'),",
+          "env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in codelldb/lldb-dap/gdb modes.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "stopOnEntry: z.boolean().default(false).describe('When true in mode=codelldb or mode=lldb-dap, request an initial debugger stop at program entry before normal execution.'),",
+          "stopOnEntry: z.boolean().default(false).describe('When true in codelldb/lldb-dap/gdb modes, request an initial debugger stop at program entry before normal execution.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "adapterPath: z.string().min(1).optional().describe('Optional explicit debugger-adapter executable path for codelldb/lldb-dap/dump modes; omit to auto-discover the selected adapter.'),",
+          "adapterPath: z.string().min(1).optional().describe('Optional explicit debugger executable/adapter path for codelldb/lldb-dap/gdb/dump modes; omit to auto-discover the selected adapter.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "dumpAdapter: z.enum(['codelldb', 'lldb-dap']).default('codelldb').describe('For mode=dump, choose CodeLLDB compatibility behavior or upstream LLVM lldb-dap coreFile loading.'),",
+          "dumpAdapter: z.enum(['codelldb', 'lldb-dap', 'gdb']).default('codelldb').describe('For mode=dump, choose CodeLLDB, upstream LLVM lldb-dap coreFile loading, or GNU GDB coreFile attach semantics.'),")
+          replace('src/tools/agent-diagnostics.ts',
+          "requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds for CodeLLDB operations.'),",
+          "requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds for the selected debugger adapter.'),")
+
+          gdb_block = r'''          if (mode === 'gdb') {
+            if (!program) throw new DapError("debug_this_crash mode='gdb' requires program.");
+
+            const launchConfiguration = buildGdbDapLaunchConfiguration({
+              program,
+              ...(args ? { args } : {}),
+              ...(cwd ? { cwd } : {}),
+              ...(env ? { env } : {}),
+              stopOnEntry,
+            });
+            const adapter = discoverGdbDap({
+              ...(adapterPath ? { explicitPath: adapterPath } : {}),
+            });
+
+            let adapterStarted = false;
+            try {
+              const capabilities = await session.start({
+                command: adapter.command,
+                args: adapter.args,
+                adapterId: 'gdb',
+                ...(cwd ? { cwd } : {}),
+                requestTimeoutMs,
+              });
+              adapterStarted = true;
+              const run = await runToStop(session, {
+                request: 'launch',
+                configuration: launchConfiguration,
+                ...(breakpoints ? { breakpoints: breakpoints as SourceBreakpointGroup[] } : {}),
+                timeoutMs,
+                snapshot: {
+                  ...snapshotOptions,
+                  includeDisassembly: true,
+                  includeModules: true,
+                  includeExceptionInfo: true,
+                },
+              });
+              const diagnosis = run.snapshot
+                ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)
+                : undefined;
+              const terminal = run.snapshot
+                ? undefined
+                : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });
+              return {
+                mode,
+                adapter,
+                capabilities,
+                run,
+                diagnosis: diagnosis
+                  ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),
+                workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),
+                status: session.snapshot(),
+              };
+            } catch (error) {
+              if (adapterStarted) return await resetOwnedSessionAfterFailure(session, error);
+              throw error;
+            }
+          }
+
+'''
+          replace('src/tools/agent-diagnostics.ts', "          if (mode === 'lldb-dap') {", gdb_block + "          if (mode === 'lldb-dap') {")
+
+          replace('src/tools/register-dump-tools.ts',
+          "import { discoverCodeLldb } from '../adapters/codelldb.js';\nimport { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';\nimport { buildLldbDapCoreConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';",
+          "import { discoverCodeLldb } from '../adapters/codelldb.js';\nimport { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';\nimport { buildGdbDapCoreConfiguration, discoverGdbDap } from '../adapters/gdb-dap.js';\nimport { buildLldbDapCoreConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';")
+          replace('src/tools/register-dump-tools.ts',
+          "export type DumpAdapterKind = 'codelldb' | 'lldb-dap';",
+          "export type DumpAdapterKind = 'codelldb' | 'lldb-dap' | 'gdb';")
+          replace('src/tools/register-dump-tools.ts',
+          "    const configuration = adapterKind === 'lldb-dap'\n      ? (() => {",
+          "    if (adapterKind === 'gdb' && options.sourceMap) {\n      throw new DapError(\"debug_open_dump adapter='gdb' does not currently translate sourceMap because GDB's documented DAP core-file attach parameters do not define a source-map field. Configure GDB source substitution externally or omit sourceMap.\");\n    }\n\n    const configuration = adapterKind === 'gdb'\n      ? buildGdbDapCoreConfiguration({\n          coreFile: options.dumpPath,\n          ...(options.program ? { program: options.program } : {}),\n        })\n      : adapterKind === 'lldb-dap'\n      ? (() => {")
+          replace('src/tools/register-dump-tools.ts',
+          "    const adapter = adapterKind === 'lldb-dap'\n      ? discoverLldbDap({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) })\n      : discoverCodeLldb({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) });",
+          "    const adapter = adapterKind === 'gdb'\n      ? discoverGdbDap({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) })\n      : adapterKind === 'lldb-dap'\n      ? discoverLldbDap({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) })\n      : discoverCodeLldb({ ...(options.adapterPath ? { explicitPath: options.adapterPath } : {}) });")
+          replace('src/tools/register-dump-tools.ts',
+          "        command: adapter.command,\n        adapterId: adapterKind === 'lldb-dap' ? 'lldb-dap' : 'lldb',",
+          "        command: adapter.command,\n        ...('args' in adapter ? { args: adapter.args } : {}),\n        adapterId: adapterKind === 'gdb' ? 'gdb' : adapterKind === 'lldb-dap' ? 'lldb-dap' : 'lldb',")
+          replace('src/tools/register-dump-tools.ts',
+          "Open a local native core/minidump with CodeLLDB or upstream LLVM lldb-dap and capture bounded postmortem evidence.",
+          "Open a local native core/minidump with CodeLLDB, upstream LLVM lldb-dap, or GNU GDB DAP and capture bounded postmortem evidence.")
+          replace('src/tools/register-dump-tools.ts',
+          "program: z.string().min(1).optional().describe('Path to the matching executable image. Optional for CodeLLDB, but required when adapter=lldb-dap because LLVM coreFile loading binds the dump to its program image.'),",
+          "program: z.string().min(1).optional().describe('Path to the matching executable image. Optional for CodeLLDB/GDB, but required when adapter=lldb-dap because LLVM coreFile loading binds the dump to its program image.'),")
+          replace('src/tools/register-dump-tools.ts',
+          "sourceMap: z.record(z.string(), z.string()).optional().describe('Optional mapping from source paths recorded in symbols to local source paths; converted to lldb-dap pair arrays when that adapter is selected.'),",
+          "sourceMap: z.record(z.string(), z.string()).optional().describe('Optional mapping from source paths recorded in symbols to local source paths. Supported by CodeLLDB/lldb-dap; GDB currently rejects this field rather than guessing undocumented semantics.'),")
+          replace('src/tools/register-dump-tools.ts',
+          "adapter: z.enum(['codelldb', 'lldb-dap']).default('codelldb').describe('Debugger adapter used for postmortem inspection. codelldb preserves existing behavior; lldb-dap uses upstream LLVM coreFile attach semantics.'),",
+          "adapter: z.enum(['codelldb', 'lldb-dap', 'gdb']).default('codelldb').describe('Debugger adapter used for postmortem inspection. lldb-dap and gdb use their native coreFile attach semantics.'),")
+
+          replace('README.md',
+          "- **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.",
+          "- **Upstream LLVM lldb-dap integration** — first-class live debugging and core-file inspection without treating lldb-dap as a CodeLLDB alias.\n- **GNU GDB DAP integration** — first-class GDB 14+ launch, attach, remote-target, and core-file support through `--interpreter=dap`.\n- **Runtime writer tracing** — `debug_find_writer` uses DAP data breakpoints/watchpoints to stop at the code that actually writes a suspicious value.")
+          replace('README.md',
+          "CodeLLDB and upstream LLVM `lldb-dap` are both first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode=\"lldb-dap\")` when you want the debugger adapter shipped by LLVM itself.",
+          "CodeLLDB, upstream LLVM `lldb-dap`, and GNU GDB DAP are first-class adapter paths. Existing CodeLLDB workflows remain supported; use `debug_this_crash(mode=\"lldb-dap\")` for LLVM's adapter or `debug_this_crash(mode=\"gdb\")` for GDB 14+.")
+          replace('README.md',
+          "Discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical or versioned PATH binaries, common LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. See [docs/lldb-dap.md](docs/lldb-dap.md) for examples, postmortem behavior, and the manual full-toolset helpers.",
+          "LLDB discovery supports an explicit `adapterPath`, `LLDB_DAP_PATH`, canonical/versioned PATH binaries, LLVM toolchain directories / `LLVM_HOME`, and `xcrun --find lldb-dap` on macOS. GDB discovery supports `adapterPath`, `GDB_DAP_PATH`, `GDB_PATH`, `GDB_HOME`, and PATH with a GDB 14+ version gate. See [docs/lldb-dap.md](docs/lldb-dap.md) and [docs/gdb-dap.md](docs/gdb-dap.md).")
+          replace('README.md',
+          "The default `agent` toolset deliberately exposes only the nine high-level tools below",
+          "The default `agent` toolset deliberately exposes only the ten high-level tools below")
+          replace('README.md',
+          "| `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |\n| `debug_run_to_stop` |",
+          "| `debug_source_disassembly` | Fault correlation plus project-frame instruction/operand/register/local context |\n| `debug_find_writer` | Temporarily watch a suspicious value and stop at its immediate runtime writer |\n| `debug_run_to_stop` |")
+          replace('README.md',
+          "The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap lifecycle primitives.",
+          "The `full` toolset additionally exposes manual breakpoint/watchpoint management, stepping, evaluation, threads/stacks/scopes/variables, modules, disassembly, bounded memory reads, exception controls, generic DAP launch/attach, and CodeLLDB / lldb-dap / GDB lifecycle primitives.")
+
+          roadmap = r'''## Roadmap
+
+The roadmap is intentionally ordered around capabilities that make the bridge more useful to coding agents, not around exposing every debugger command. Planned scope may change as real adapter behavior and benchmark evidence improve.
+
+| Release | Focus | Planned capabilities |
+| --- | --- | --- |
+| **v0.14** | GNU debugger + runtime provenance | First-class GDB DAP, `debug_find_writer`, structured MCP results/output schemas, symbol-health reporting, real GDB Linux smoke coverage |
+| **v0.15** | Hangs and concurrency | `debug_this_hang`, bounded all-thread triage, deadlock/wait heuristics, pointer provenance v2, expanded Crash Lab |
+| **v0.16** | Remote/multi-session + evidence | hardened gdbserver/lldb-server workflows, multi-session architecture, existing LLDB-session interoperability where practical, cross-adapter benchmark matrix |
+
+Near-term design rule: keep the default agent surface compact and add high-level evidence workflows before adding raw debugger primitives.
+
+'''
+          replace('README.md', "## Autonomous crash debugging\n", roadmap + "## Autonomous crash debugging\n")
+
+          PY
+
+          npm ci --ignore-scripts
+          npm run check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src test docs README.md
+          git commit -m "feat: add GDB DAP and runtime writer tracing"
+          git push origin HEAD:feature/v0.14-gdb-find-writer
