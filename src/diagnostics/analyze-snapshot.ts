@@ -121,17 +121,8 @@ function exceptionFatality(snapshot: RuntimeSnapshot): boolean | undefined {
   if (mode === 'unhandled' || mode === 'userUnhandled') return true;
 
   const exceptionText = collectText(snapshot.exception).join(' ').toLowerCase();
-  // Upstream lldb-dap reports synchronous POSIX crash signals through the DAP
-  // exception surface with breakMode=always. That value describes debugger
-  // stop policy, not whether SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGABRT is benign.
-  // Keep generic configured/first-chance exceptions conservative, but do not
-  // downgrade an explicit fatal-signal family merely because LLDB always stops
-  // when that signal is raised. crashLikely still means likely, not proven
-  // process termination; verification requires completing the reproduction.
   if (/\bsig(?:segv|bus|ill|fpe|abrt|stkflt)\b/.test(exceptionText)) return true;
 
-  // A frozen postmortem snapshot cannot be continued to determine handling, so
-  // do not let adapter break-mode downgrade a recognized crash family there.
   if (snapshot.postmortem && (mode === 'always' || mode === 'never')) return undefined;
   if (mode === 'always' || mode === 'never') return false;
   return undefined;
@@ -154,27 +145,14 @@ function classify(snapshot: RuntimeSnapshot): CrashDiagnosis['classification'] {
   const text = diagnosticText(snapshot);
   const fatality = stopped?.reason === 'exception' ? exceptionFatality(snapshot) : undefined;
 
-  if (/access violation|exc_bad_access/.test(text)) {
-    return crashClassification('access-violation', 'high', fatality);
-  }
-  if (/segmentation fault|sigsegv/.test(text)) {
-    return crashClassification('segmentation-fault', 'high', fatality);
-  }
-  if (/stack overflow|stackoverflow|sigstkflt/.test(text)) {
-    return crashClassification('stack-overflow', 'high', fatality);
-  }
-  if (/divide by zero|division by zero|integer divide|sigfpe/.test(text)) {
-    return crashClassification('divide-by-zero', 'high', fatality);
-  }
-  if (/illegal instruction|sigill/.test(text)) {
-    return crashClassification('illegal-instruction', 'high', fatality);
-  }
-  if (/heap corruption|double free|invalid free|use[- ]after[- ]free/.test(text)) {
-    return crashClassification('heap-corruption', 'high', fatality);
-  }
-  if (/sigabrt|\babort\b|assertion failed|\bassert\b/.test(text)) {
-    return crashClassification('abort-or-assert', 'high', fatality);
-  }
+  if (/access violation|exc_bad_access/.test(text)) return crashClassification('access-violation', 'high', fatality);
+  if (/segmentation fault|sigsegv/.test(text)) return crashClassification('segmentation-fault', 'high', fatality);
+  if (/bus error|sigbus/.test(text)) return crashClassification('signal', 'high', fatality);
+  if (/stack overflow|stackoverflow|sigstkflt/.test(text)) return crashClassification('stack-overflow', 'high', fatality);
+  if (/divide by zero|division by zero|integer divide|sigfpe/.test(text)) return crashClassification('divide-by-zero', 'high', fatality);
+  if (/illegal instruction|sigill/.test(text)) return crashClassification('illegal-instruction', 'high', fatality);
+  if (/heap corruption|double free|invalid free|use[- ]after[- ]free/.test(text)) return crashClassification('heap-corruption', 'high', fatality);
+  if (/sigabrt|\babort\b|assertion failed|\bassert\b/.test(text)) return crashClassification('abort-or-assert', 'high', fatality);
 
   switch (stopped?.reason) {
     case 'exception':
@@ -192,7 +170,7 @@ function classify(snapshot: RuntimeSnapshot): CrashDiagnosis['classification'] {
     case 'step':
       return { category: 'step', crashLikely: false, confidence: 'high' };
     case 'signal':
-      return { category: 'signal', crashLikely: true, confidence: 'medium' };
+      return { category: 'signal', crashLikely: false, confidence: 'low' };
     default:
       return { category: 'unknown', crashLikely: false, confidence: 'low' };
   }
@@ -308,6 +286,8 @@ function buildHypotheses(
 ): DiagnosisHypothesis[] {
   const hypotheses: DiagnosisHypothesis[] = [];
   const nullValues = suspicious.filter((item) => item.reason === 'null-like-pointer');
+  const nullLocals = nullValues.filter((item) => item.scope === 'local');
+  const nullRegisters = nullValues.filter((item) => item.scope === 'register');
   const poisonValues = suspicious.filter((item) => item.reason === 'poison-pattern');
   const location = locationText(snapshot);
 
@@ -330,17 +310,18 @@ function buildHypotheses(
 
   if (classification.category === 'access-violation' || classification.category === 'segmentation-fault') {
     if (nullValues.length > 0) {
+      const strongestNullEvidence = nullLocals.length > 0 ? nullLocals : nullRegisters;
       hypotheses.push({
         kind: 'null-dereference',
-        title: 'A null or near-null pointer dereference is a strong candidate.',
-        confidence: 'high',
+        title: 'A null pointer is present near the fault and should be correlated with the actual memory operand before treating it as causal.',
+        confidence: nullLocals.length > 0 ? 'medium' : 'low',
         evidence: [
           `The debugger stopped with ${classification.category}.`,
-          ...nullValues.slice(0, 4).map((item) => `${item.scope} ${item.name} = ${item.value}`),
+          ...strongestNullEvidence.slice(0, 4).map((item) => `${item.scope} ${item.name} = ${item.value}`),
           `Faulting frame: ${location}.`,
         ],
         suggestedChecks: [
-          'Inspect the operands used by the current instruction and map them back to locals/registers.',
+          'Confirm whether the null value is the base register/local used by the faulting memory operand; unrelated zero registers are common.',
           'Inspect the caller frame to find where the pointer/reference was produced.',
           'Check object lifetime and validation immediately before the faulting line.',
         ],
