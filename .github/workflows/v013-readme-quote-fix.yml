@@ -1,0 +1,40 @@
+name: Fix v0.13 README quoting
+
+on:
+  push:
+    branches:
+      - feature/v0.13-lldb-dap
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/v0.13-lldb-dap
+      - name: Fix README quoting
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'README.md';
+          let text = fs.readFileSync(path, 'utf8');
+          const before = text;
+          text = text.replaceAll('mode=\\"lldb-dap\\"', 'mode="lldb-dap"');
+          text = text.replaceAll('dumpAdapter=\\"lldb-dap\\"', 'dumpAdapter="lldb-dap"');
+          if (text === before) throw new Error('No escaped lldb-dap README quotes found');
+          if (text.includes('\\"lldb-dap\\"')) throw new Error('Escaped lldb-dap quotes remain');
+          fs.writeFileSync(path, text);
+          NODE
+      - name: Commit README cleanup
+        shell: bash
+        run: |
+          git add README.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: clean lldb-dap README examples'
+          git push origin HEAD:feature/v0.13-lldb-dap
