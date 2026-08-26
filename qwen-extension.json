@@ -1,6 +1,6 @@
 {
   "name": "qwen-dap-mcp",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "displayName": "Qwen DAP MCP",
   "description": "Native runtime and crash-dump debugging for Qwen Code through a local DAP-to-MCP bridge, with a bundled debugging Skill.",
   "mcpServers": {
