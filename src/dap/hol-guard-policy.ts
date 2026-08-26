@@ -119,8 +119,6 @@ function resolvePythonCommand(explicit?: string): string {
 }
 
 function defaultBridgePath(): string {
-  // Normal npm/source layout: dist/dap/hol-guard-policy.js -> ../../scripts.
-  // Bundled Qwen extension layout: dist/index.js -> ../scripts.
   const candidates = [
     fileURLToPath(new URL('../../scripts/hol-guard-dap-policy.py', import.meta.url)),
     fileURLToPath(new URL('../scripts/hol-guard-dap-policy.py', import.meta.url)),
@@ -304,23 +302,24 @@ export function createGuardedDapRequestPolicy(
 ): DapRequestPolicy {
   const builtIn = createDapRequestPolicy(policyMode);
 
-  return async (context: DapRequestPolicyContext) => {
-    const localDecision = await builtIn(context);
+  return (context: DapRequestPolicyContext) => {
+    const localDecision = builtIn(context);
     if (!localDecision.allow) return localDecision;
     if (!evaluator.enabled || !shouldConsultHolGuard(context.command)) return localDecision;
 
     const executionContext = contextProvider?.() ?? {};
-    const decision = await evaluator.evaluate({
+    return evaluator.evaluate({
       kind: 'dap-request',
       command: context.command,
       ...(context.args === undefined ? {} : { args: context.args }),
       ...executionContext,
+    }).then((decision) => {
+      if (decision.allow) return { allow: true } as const;
+      return {
+        allow: false as const,
+        reason: decisionReason(decision),
+      };
     });
-    if (decision.allow) return { allow: true };
-    return {
-      allow: false,
-      reason: decisionReason(decision),
-    };
   };
 }
 
