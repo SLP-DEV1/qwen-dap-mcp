@@ -4,6 +4,8 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.12.1 - 2026-08-26
+
 ### Changed / hardened
 
 - Improved the default agent MCP tool metadata with explicit usage guidance, parameter semantics, and behavior annotations.
