@@ -2,6 +2,58 @@
 
 All notable prototype milestones are documented here.
 
+## 0.11.0 - 2026-08-26
+
+### Added
+
+- Autonomous action protocol v2 for `debug_this_crash(..., workflow={stage:"autonomous"})` with stable action IDs, explicit dependencies, ownership, status, structured inputs, expected results, and success criteria.
+- Evidence-backed action chain `inspect-source -> propose-fix -> apply-fix -> build -> reproduce -> verify`, while keeping source editing and builds outside the debugger bridge.
+- `rootCauseBacktrack` runtime provenance that follows the selected fault operand/value through bounded caller frames and produces ranked project-controlled producer candidates.
+- `verificationQuality` scoring that separates debugger evidence from external build/test/reproduction guarantees and reports reproduction/root-crash/new-crash status explicitly.
+- Regression coverage for Windows path fingerprint normalization, multi-register fault binding, large DAP headers, dump-command control characters, autonomous protocol fields, and verification semantics.
+
+### Changed
+
+- Increased the default bounded caller depth from 2 to 3, with a maximum of 8, for stronger producer/ownership reasoning without unbounded stack analysis.
+- `debug_this_crash` now validates local CodeLLDB launch paths before adapter discovery/startup, and crash-dump opening validates dump/program inputs before starting CodeLLDB.
+- Changed failures are re-baselined against the new trustworthy crash diagnosis instead of automatically rolling back the previous patch; the original root fingerprint remains preserved.
+- The bundled Qwen Skill, MCP server instructions, README, and Windows CodeLLDB guide now teach protocol-v2 action dependencies, runtime backtracking, verification quality, raw-fault-vs-project-frame separation, and the no-automatic-rollback policy.
+- GitHub Actions now use `actions/checkout@v5` and `actions/setup-node@v5`, avoid duplicate branch CI outside `main`, and broaden Windows/extension smoke triggers to cover DAP, diagnostics, agent, Skill, and packaging changes.
+
+### Fixed / hardened
+
+- DAP connection shutdown now waits for actual process exit, escalates to `SIGKILL` when needed, and no longer treats `ChildProcess.killed` as proof of termination.
+- Fresh adapter starts clear stale event history, stderr, parser buffers, request sequence, and pending requests so state cannot leak between debug sessions.
+- Adapter stdin/process failures and adapter exit now reject event waiters immediately instead of leaving them to timeout.
+- DAP framing now bounds unterminated and terminated headers, rejects oversized/unsafe payload lengths, truncates protocol-error previews, and rejects pending requests after fatal protocol-size violations.
+- Launch/attach now race the `initialized` event against an early request rejection so actionable adapter failures surface immediately rather than waiting for a stale timeout.
+- Pause/continue/step event waits are observed immediately, preventing rejected stop waiters from becoming unhandled promises when the underlying request fails first.
+- `debug_run_to_stop` now rejects promptly on adapter exit/error and preserves the more specific launch/attach failure when a concurrent outcome wait has already failed.
+- Exception classification no longer treats configured/first-chance `breakMode="always"` stops as proof of a fatal crash; agents are instructed to continue the reproduction before patching.
+- Address/null parsing accepts common debugger formatting and numeric zero without weakening poison/lifetime evidence rules.
+- Verification fingerprints canonicalize Windows path separator/case differences so equivalent source paths do not become false changed-failure signatures.
+- Root-cause backtracking binds locals to the actual `likelyFaultOperand.register` instead of accidentally selecting the first variable binding when an instruction references multiple registers.
+- Crash-dump LLDB command construction rejects control characters in embedded paths, preventing ambiguous multi-command input through unusual local filenames.
+- Extension packaging refuses dangerous output targets such as filesystem root, repository root, and the script directory before recursive cleanup; protected-path comparison is Windows case-insensitive.
+- MCP stdio startup now installs explicit error reporting and graceful SIGINT/SIGTERM shutdown handling.
+
+### Verified
+
+- Final v0.11 feature head and merged `main` pass `npm run check` on Node.js 20 and 22.
+- Real Windows CodeLLDB live DAP smoke passes against an MSVC-built native target.
+- Real Windows minidump smoke builds a native crash fixture with PDB symbols, generates a real `.dmp`, opens it through CodeLLDB, and validates intelligent project-frame selection plus autonomous state/action generation.
+- Self-contained Qwen extension archive builds, validates, and installs successfully with the pinned Qwen Code smoke environment.
+
+## 0.10.1 - 2026-08-26
+
+### Fixed
+
+- Aligned the `initialized` event timeout with the effective long launch/attach request timeout so slow adapters do not fail configuration prematurely.
+- Observed the parallel launch/attach request rejection immediately, preventing unhandled rejected promises while DAP initialization/configuration is still in progress.
+- Cleared stale `activeRequest` state and kept `configured=false` on every failed launch/attach path while preserving the successful request mode after configuration completes.
+- Preserved the original actionable launch/attach exception in `debug_run_to_stop` when the independent stopped/exited/terminated outcome wait had already timed out.
+- Added deterministic regression tests for timeout alignment, rejection observation, stale-state cleanup, successful active-request state, and failure preservation.
+
 ## 0.10.0 - 2026-08-26
 
 ### Added
