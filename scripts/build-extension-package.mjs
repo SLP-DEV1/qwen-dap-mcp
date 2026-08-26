@@ -10,6 +10,20 @@ const outputRoot = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(projectRoot, 'release', 'extension');
 
+function assertSafeOutputRoot(candidate) {
+  const resolved = path.resolve(candidate);
+  const filesystemRoot = path.parse(resolved).root;
+  const normalizedProjectRoot = path.resolve(projectRoot);
+  if (resolved === filesystemRoot) {
+    throw new Error(`Refusing to use filesystem root as extension output: ${resolved}`);
+  }
+  if (resolved === normalizedProjectRoot || normalizedProjectRoot.startsWith(`${resolved}${path.sep}`)) {
+    throw new Error(`Refusing to use the project root or one of its ancestors as extension output: ${resolved}`);
+  }
+}
+
+assertSafeOutputRoot(outputRoot);
+
 const packageJson = JSON.parse(
   await readFile(path.join(projectRoot, 'package.json'), 'utf8'),
 );
