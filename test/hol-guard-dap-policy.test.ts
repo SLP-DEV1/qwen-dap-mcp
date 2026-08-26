@@ -46,7 +46,7 @@ function evaluator(
   return { enabled: true, evaluate: async (action) => decide(action) };
 }
 
-test('HOL Guard blocks evaluate/launch before writeMessage while variables stays read-only', async () => {
+test('HOL Guard blocks evaluate/launch before writeMessage while variables stays read-only and synchronous', async () => {
   const evaluated: HolGuardAction[] = [];
   const session = new GuardedDapSession({
     dapPolicyMode: 'standard',
@@ -71,8 +71,9 @@ test('HOL Guard blocks evaluate/launch before writeMessage while variables stays
   );
   assert.equal(requests.length, 0, 'blocked DAP requests must never reach writeMessage');
 
-  await session.connection.sendRequest('variables', { variablesReference: 1 });
-  assert.equal(requests.length, 1);
+  const variablesResponse = session.connection.sendRequest('variables', { variablesReference: 1 });
+  assert.equal(requests.length, 1, 'read-only guarded requests must not insert an async policy hop');
+  await variablesResponse;
   assert.equal(requests[0]?.command, 'variables');
   assert.equal(requests[0]?.seq, 1, 'denied requests must not consume DAP sequence numbers');
   assert.deepEqual(
@@ -161,8 +162,6 @@ test('async HOL Guard failure is fail-closed before request state or transport a
   );
   assert.equal(requests.length, 0);
 
-  // Swap to an allowed read request; denied/failed policy calls must not have
-  // consumed a DAP sequence number.
   await session.connection.sendRequest('variables', { variablesReference: 1 });
   assert.equal(requests[0]?.seq, 1);
 });
