@@ -72,7 +72,6 @@ jobs:
 
       - name: Verify release metadata
         id: metadata
-        shell: bash
         run: |
           node <<'NODE'
           const fs = require('node:fs');
@@ -94,6 +93,9 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `package=${pkg.name}\nversion=${pkg.version}\nserver=${server.name}\n`);
           NODE
 
+      - name: Verify selected release version
+        shell: bash
+        run: |
           if [ "${{ steps.metadata.outputs.version }}" != "${{ steps.release.outputs.version }}" ]; then
             echo '::error::The checked-out release version does not match the version selected from main.'
             exit 1
@@ -140,6 +142,11 @@ jobs:
         if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
         run: npm publish --access public
 
+      - name: Remove bootstrap npm token from runner config
+        if: ${{ always() && inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
+        shell: bash
+        run: npm config delete //registry.npmjs.org/:_authToken || true
+
       - name: Verify package is visible on npm
         if: ${{ inputs.publish_mcp }}
         shell: bash
@@ -173,6 +180,7 @@ jobs:
         run: ./mcp-publisher publish server.json
 
       - name: Summary
+        if: ${{ always() }}
         shell: bash
         run: |
           {
