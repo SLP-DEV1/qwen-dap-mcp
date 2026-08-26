@@ -52,9 +52,7 @@ test('runToStop captures a fast exit without attempting a runtime snapshot', asy
 
   const session: RunToStopSession = {
     connection: events,
-    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> {
-      return action();
-    },
+    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> { return action(); },
     isPostmortem: () => false,
     async launch() {
       events.emit('event', {
@@ -65,9 +63,7 @@ test('runToStop captures a fast exit without attempting a runtime snapshot', asy
       });
       return { launched: true };
     },
-    async attach() {
-      throw new Error('attach should not be called');
-    },
+    async attach() { throw new Error('attach should not be called'); },
     async runtimeSnapshot() {
       snapshotCalls += 1;
       throw new Error('snapshot should not be called after exit');
@@ -92,20 +88,14 @@ test('runToStop preserves the original launch failure after the outcome wait alr
 
   const session: RunToStopSession = {
     connection: events,
-    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> {
-      return action();
-    },
+    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> { return action(); },
     isPostmortem: () => false,
     async launch() {
       await new Promise((resolve) => setTimeout(resolve, 50));
       throw originalError;
     },
-    async attach() {
-      throw new Error('attach should not be called');
-    },
-    async runtimeSnapshot() {
-      throw new Error('snapshot should not be called');
-    },
+    async attach() { throw new Error('attach should not be called'); },
+    async runtimeSnapshot() { throw new Error('snapshot should not be called'); },
     snapshot: () => ({}),
   };
 
@@ -118,23 +108,39 @@ test('runToStop preserves the original launch failure after the outcome wait alr
   );
 });
 
+test('runToStop fails immediately when the adapter exits without a terminal DAP event', async () => {
+  const events = new EventEmitter();
+  const session: RunToStopSession = {
+    connection: events,
+    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> { return action(); },
+    isPostmortem: () => false,
+    async launch() {
+      events.emit('adapterExit', { code: 7, signal: null });
+      return { launched: true };
+    },
+    async attach() { throw new Error('attach should not be called'); },
+    async runtimeSnapshot() { throw new Error('snapshot should not be called'); },
+    snapshot: () => ({}),
+  };
+
+  await assert.rejects(
+    runToStop(session, {
+      configuration: { program: '/tmp/adapter-died' },
+      timeoutMs: 5_000,
+    }),
+    /adapter exited before stopped\/exited\/terminated/i,
+  );
+});
+
 test('runToStop rejects live execution from a postmortem session', async () => {
   const events = new EventEmitter();
   const session: RunToStopSession = {
     connection: events,
-    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> {
-      return action();
-    },
+    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> { return action(); },
     isPostmortem: () => true,
-    async launch() {
-      throw new Error('launch should not be called');
-    },
-    async attach() {
-      throw new Error('attach should not be called');
-    },
-    async runtimeSnapshot() {
-      throw new Error('snapshot should not be called');
-    },
+    async launch() { throw new Error('launch should not be called'); },
+    async attach() { throw new Error('attach should not be called'); },
+    async runtimeSnapshot() { throw new Error('snapshot should not be called'); },
     snapshot: () => ({}),
   };
 

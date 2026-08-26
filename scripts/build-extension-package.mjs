@@ -10,6 +10,26 @@ const outputRoot = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(projectRoot, 'release', 'extension');
 
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function assertSafeOutputRoot(candidate) {
+  const resolved = path.resolve(candidate);
+  const filesystemRoot = comparablePath(path.parse(resolved).root);
+  const comparableOutput = comparablePath(resolved);
+  const comparableProject = comparablePath(projectRoot);
+  if (comparableOutput === filesystemRoot) {
+    throw new Error(`Refusing to use filesystem root as extension output: ${resolved}`);
+  }
+  if (comparableOutput === comparableProject || comparableProject.startsWith(`${comparableOutput}${path.sep}`)) {
+    throw new Error(`Refusing to use the project root or one of its ancestors as extension output: ${resolved}`);
+  }
+}
+
+assertSafeOutputRoot(outputRoot);
+
 const packageJson = JSON.parse(
   await readFile(path.join(projectRoot, 'package.json'), 'utf8'),
 );

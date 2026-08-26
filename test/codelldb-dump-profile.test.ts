@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { buildCodeLldbDumpConfiguration } from '../src/adapters/codelldb-dump.js';
+import { GuardedDapSession } from '../src/dap/guarded-session.js';
+import { openDump } from '../src/tools/register-dump-tools.js';
 
 test('builds a CodeLLDB postmortem attach configuration', async () => {
   const root = await mkdtemp(join(tmpdir(), 'qwen-dap-dump-'));
@@ -36,4 +38,28 @@ test('rejects a missing crash dump before starting CodeLLDB', () => {
     () => buildCodeLldbDumpConfiguration({ dumpPath: resolve('definitely-missing-crash.dmp') }),
     /Crash dump does not exist/,
   );
+});
+
+test('rejects LLDB command control characters before filesystem access', () => {
+  assert.throws(
+    () => buildCodeLldbDumpConfiguration({ dumpPath: `fake\nsettings set target.run-args injected.dmp` }),
+    /must not contain NUL, carriage-return, or newline/i,
+  );
+  assert.throws(
+    () => buildCodeLldbDumpConfiguration({ dumpPath: 'fake.dmp', program: `app\rquit.exe` }),
+    /must not contain NUL, carriage-return, or newline/i,
+  );
+});
+
+test('openDump validates the dump before adapter discovery or startup', async () => {
+  const session = new GuardedDapSession();
+  const missing = resolve('definitely-missing-preflight-crash.dmp');
+
+  await assert.rejects(
+    openDump(session, { dumpPath: missing }),
+    /Crash dump does not exist/,
+  );
+
+  assert.equal(session.snapshot().adapterRunning, false);
+  assert.equal(session.snapshot().initialized, false);
 });

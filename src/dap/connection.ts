@@ -28,6 +28,28 @@ export type DapEventRecord = {
 
 const HEADER_SEPARATOR = Buffer.from('\r\n\r\n');
 const MAX_EVENT_HISTORY = 200;
+const MAX_HEADER_BYTES = 64 * 1024;
+const MAX_DAP_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const TERMINATE_GRACE_MS = 1_000;
+const KILL_GRACE_MS = 2_000;
+
+function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null) return Promise.resolve(true);
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(child.exitCode !== null), timeoutMs);
+    child.once('exit', onExit);
+  });
+}
 
 export class DapConnection extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
@@ -38,7 +60,9 @@ export class DapConnection extends EventEmitter {
   private readonly stderrLines: string[] = [];
 
   get isRunning(): boolean {
-    return Boolean(this.child && this.child.exitCode === null && !this.child.killed);
+    // ChildProcess.killed only means a signal was accepted by kill(); it says
+    // nothing about whether the process has actually exited.
+    return Boolean(this.child && this.child.exitCode === null);
   }
 
   get pid(): number | undefined {
@@ -63,6 +87,15 @@ export class DapConnection extends EventEmitter {
       : undefined;
     logger.debug('Starting DAP adapter', { command: options.command, ...(cwd ? { cwd } : {}) });
 
+    // Every adapter process is a fresh DAP transport. Never let events/stderr
+    // from a previous debuggee influence thread selection or diagnostics.
+    this.rejectAll(new DapError('DAP adapter session replaced'));
+    this.child = undefined;
+    this.buffer = Buffer.alloc(0);
+    this.nextSeq = 1;
+    this.eventHistory.length = 0;
+    this.stderrLines.length = 0;
+
     const child = spawn(options.command, options.args ?? [], {
       cwd,
       env: { ...process.env, ...(options.env ?? {}) },
@@ -72,22 +105,31 @@ export class DapConnection extends EventEmitter {
     });
 
     this.child = child;
-    this.buffer = Buffer.alloc(0);
 
     child.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk));
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => this.captureStderr(chunk));
+    child.stdin.on('error', (error) => {
+      // Broken stdin means no further DAP requests can be delivered. Node
+      // streams emit these errors asynchronously, so they must be observed.
+      const dapError = new DapError(`DAP adapter stdin error: ${error.message}`, { cause: error });
+      logger.warn('DAP adapter stdin error', { pid: child.pid, error: dapError });
+      this.rejectAll(dapError);
+      this.emit('adapterError', dapError);
+    });
 
     child.on('error', (error) => {
       logger.error('DAP adapter process error', { command: options.command, error });
-      this.rejectAll(new DapError(`DAP adapter process error: ${error.message}`, { cause: error }));
-      this.emit('adapterError', error);
+      const dapError = new DapError(`DAP adapter process error: ${error.message}`, { cause: error });
+      this.rejectAll(dapError);
+      this.emit('adapterError', dapError);
     });
 
     child.on('exit', (code, signal) => {
       logger.info('DAP adapter exited', { pid: child.pid, code, signal });
       const detail = signal ? `signal ${signal}` : `exit code ${String(code)}`;
       this.rejectAll(new DapError(`DAP adapter exited with ${detail}`));
+      if (this.child === child) this.child = undefined;
       this.emit('adapterExit', { code, signal });
     });
 
@@ -103,6 +145,7 @@ export class DapConnection extends EventEmitter {
       };
       const onError = (error: Error) => {
         cleanup();
+        if (this.child === child) this.child = undefined;
         reject(new DapError(`Failed to start DAP adapter '${options.command}': ${error.message}`, { cause: error }));
       };
       const cleanup = () => {
@@ -116,35 +159,25 @@ export class DapConnection extends EventEmitter {
 
   async stop(): Promise<void> {
     const child = this.child;
-    if (!child) {
-      return;
-    }
+    if (!child) return;
 
-    if (child.exitCode !== null) {
-      this.rejectAll(new DapError('DAP adapter stopped'));
-      this.child = undefined;
-      return;
-    }
-
-    logger.debug('Stopping DAP adapter', { pid: child.pid });
-    if (!child.killed) {
-      child.kill();
-    }
-
-    await Promise.race([
-      new Promise<void>((resolve) => child.once('exit', () => resolve())),
-      new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-    ]);
-
-    // child.killed only means a signal was sent successfully; it does not mean
-    // the process has exited. Escalate whenever the adapter is still alive.
     if (child.exitCode === null) {
-      logger.warn('DAP adapter did not exit after termination signal; escalating', { pid: child.pid });
-      child.kill('SIGKILL');
+      logger.debug('Stopping DAP adapter', { pid: child.pid });
+      if (!child.killed) child.kill();
+
+      const exitedNormally = await waitForChildExit(child, TERMINATE_GRACE_MS);
+      if (!exitedNormally && child.exitCode === null) {
+        logger.warn('DAP adapter did not exit after termination signal; escalating', { pid: child.pid });
+        child.kill('SIGKILL');
+        const exitedAfterKill = await waitForChildExit(child, KILL_GRACE_MS);
+        if (!exitedAfterKill && child.exitCode === null) {
+          logger.error('DAP adapter still has not reported exit after SIGKILL', { pid: child.pid });
+        }
+      }
     }
 
     this.rejectAll(new DapError('DAP adapter stopped'));
-    this.child = undefined;
+    if (this.child === child) this.child = undefined;
   }
 
   sendRequest(
@@ -191,11 +224,19 @@ export class DapConnection extends EventEmitter {
     return new Promise((resolve, reject) => {
       const eventKey = `event:${eventName}`;
       const handler = (event: DebugProtocol.Event) => {
-        if (predicate && !predicate(event)) {
-          return;
-        }
+        if (predicate && !predicate(event)) return;
         cleanup();
         resolve(event);
+      };
+      const onAdapterExit = () => {
+        cleanup();
+        reject(new DapError(`DAP adapter exited while waiting for event '${eventName}'`));
+      };
+      const onAdapterError = (error: unknown) => {
+        cleanup();
+        reject(error instanceof Error
+          ? error
+          : new DapError(`DAP adapter failed while waiting for event '${eventName}'`));
       };
       const timer = setTimeout(() => {
         cleanup();
@@ -204,8 +245,12 @@ export class DapConnection extends EventEmitter {
       const cleanup = () => {
         clearTimeout(timer);
         this.off(eventKey, handler);
+        this.off('adapterExit', onAdapterExit);
+        this.off('adapterError', onAdapterError);
       };
       this.on(eventKey, handler);
+      this.on('adapterExit', onAdapterExit);
+      this.on('adapterError', onAdapterError);
     });
   }
 
@@ -226,6 +271,22 @@ export class DapConnection extends EventEmitter {
     while (true) {
       const headerEnd = this.buffer.indexOf(HEADER_SEPARATOR);
       if (headerEnd < 0) {
+        if (this.buffer.length > MAX_HEADER_BYTES) {
+          const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes without a terminator`);
+          this.buffer = Buffer.alloc(0);
+          logger.warn('DAP protocol error', { error });
+          this.rejectAll(error);
+          this.emit('protocolError', error);
+        }
+        return;
+      }
+
+      if (headerEnd > MAX_HEADER_BYTES) {
+        const error = new DapError(`DAP header exceeded ${MAX_HEADER_BYTES} bytes before its terminator`);
+        this.buffer = Buffer.alloc(0);
+        logger.warn('DAP protocol error', { error });
+        this.rejectAll(error);
+        this.emit('protocolError', error);
         return;
       }
 
@@ -233,18 +294,25 @@ export class DapConnection extends EventEmitter {
       const match = /(?:^|\r\n)Content-Length:\s*(\d+)/i.exec(headerText);
       if (!match?.[1]) {
         this.buffer = this.buffer.subarray(headerEnd + HEADER_SEPARATOR.length);
-        const error = new DapError(`Invalid DAP header: ${headerText}`);
+        const error = new DapError(`Invalid DAP header: ${headerText.slice(0, 500)}`);
         logger.warn('DAP protocol error', { error });
         this.emit('protocolError', error);
         continue;
       }
 
       const contentLength = Number.parseInt(match[1], 10);
-      const payloadStart = headerEnd + HEADER_SEPARATOR.length;
-      const payloadEnd = payloadStart + contentLength;
-      if (this.buffer.length < payloadEnd) {
+      if (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > MAX_DAP_PAYLOAD_BYTES) {
+        const error = new DapError(`DAP Content-Length ${match[1]} exceeds the ${MAX_DAP_PAYLOAD_BYTES}-byte safety limit`);
+        this.buffer = Buffer.alloc(0);
+        logger.warn('DAP protocol error', { error });
+        this.rejectAll(error);
+        this.emit('protocolError', error);
         return;
       }
+
+      const payloadStart = headerEnd + HEADER_SEPARATOR.length;
+      const payloadEnd = payloadStart + contentLength;
+      if (this.buffer.length < payloadEnd) return;
 
       const payload = this.buffer.subarray(payloadStart, payloadEnd).toString('utf8');
       this.buffer = this.buffer.subarray(payloadEnd);
@@ -278,13 +346,11 @@ export class DapConnection extends EventEmitter {
       if (response.success) {
         pending.resolve(response);
       } else {
-        pending.reject(
-          new DapRequestError(
-            pending.command,
-            response.message ?? 'Unknown adapter error',
-            response.body,
-          ),
-        );
+        pending.reject(new DapRequestError(
+          pending.command,
+          response.message ?? 'Unknown adapter error',
+          response.body,
+        ));
       }
       return;
     }
@@ -319,7 +385,7 @@ export class DapConnection extends EventEmitter {
       request_seq: request.seq,
       command: request.command,
       success: false,
-      message: `Reverse request '${request.command}' is not supported by qwen-dap-mcp MVP`,
+      message: `Reverse request '${request.command}' is not supported by qwen-dap-mcp`,
     };
     this.writeMessage(response);
   }

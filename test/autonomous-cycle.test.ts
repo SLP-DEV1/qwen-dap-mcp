@@ -6,7 +6,9 @@ import { analyzeRuntimeSnapshot } from '../src/diagnostics/analyze-snapshot.js';
 import {
   advanceAutonomousCycle,
   baselineFingerprint,
+  buildRootCauseBacktrack,
   startAutonomousCycle,
+  verificationQuality,
 } from '../src/diagnostics/autonomous-cycle.js';
 import {
   buildIntelligentDiagnosis,
@@ -57,10 +59,11 @@ function crashDiagnosis(
   return buildIntelligentDiagnosis(snapshot, base, selection, evidence);
 }
 
-test('autonomous cycle starts with a stable fingerprint and an executable agent action queue', () => {
+test('autonomous cycle starts with a stable fingerprint and formal executable action protocol', () => {
   const diagnosis = crashDiagnosis();
   const decision = startAutonomousCycle(diagnosis, 4);
 
+  assert.equal(decision.protocolVersion, 2);
   assert.equal(decision.state.schemaVersion, 1);
   assert.equal(decision.state.iteration, 1);
   assert.equal(decision.state.maxIterations, 4);
@@ -70,8 +73,39 @@ test('autonomous cycle starts with a stable fingerprint and an executable agent 
   assert.equal(decision.shouldContinue, true);
   assert.deepEqual(
     decision.nextActions.map((action) => action.type),
-    ['inspect-source', 'apply-fix', 'rebuild', 'reproduce-and-verify'],
+    ['inspect-source', 'propose-fix', 'apply-fix', 'build', 'reproduce', 'verify'],
   );
+  assert.ok(decision.nextActions.every((action) => action.status === 'pending'));
+  assert.equal(decision.nextActions[1]?.requires[0], decision.nextActions[0]?.id);
+  assert.equal(decision.nextActions[4]?.requires[0], decision.nextActions[3]?.id);
+  assert.match(decision.nextActions[3]?.expectedResult.description ?? '', /successful build/i);
+  assert.match(decision.nextActions[5]?.expectedResult.description ?? '', /verification verdict/i);
+});
+
+test('root-cause backtrack binds the fault operand to the selected-frame pointer and producer search', () => {
+  const backtrack = buildRootCauseBacktrack(crashDiagnosis());
+
+  assert.equal(backtrack.target.register, 'rax');
+  assert.equal(backtrack.target.variable, 'widgetPtr');
+  assert.equal(backtrack.target.value, '0x0');
+  assert.equal(backtrack.confidence, 'medium');
+  assert.equal(backtrack.runtimeTrail[0]?.role, 'consumer');
+  assert.match(backtrack.limitation, /runtime provenance, not static source dataflow/i);
+});
+
+test('verification quality exposes debugger evidence separately from external build and tests', () => {
+  const quality = verificationQuality({
+    verdict: 'fixed',
+    confidence: 'high',
+    evidence: ['The reproduction exited successfully with code 0.'],
+  });
+
+  assert.equal(quality.score, 75);
+  assert.equal(quality.grade, 'strong');
+  assert.equal(quality.checks.reproduction, 'complete');
+  assert.equal(quality.checks.rootCrash, 'gone');
+  assert.equal(quality.checks.build, 'external-unverified');
+  assert.equal(quality.checks.tests, 'external-unverified');
 });
 
 test('inconclusive verification does not consume the fix budget or request another edit', () => {
@@ -86,7 +120,8 @@ test('inconclusive verification does not consume the fix budget or request anoth
   assert.equal(decision.state.iteration, 1);
   assert.equal(decision.state.status, 'needs-reproduction');
   assert.equal(decision.shouldContinue, true);
-  assert.deepEqual(decision.nextActions.map((action) => action.type), ['reproduce-and-verify']);
+  assert.deepEqual(decision.nextActions.map((action) => action.type), ['reproduce', 'verify']);
+  assert.equal(decision.verificationQuality?.grade, 'weak');
 });
 
 test('clean verification terminates the autonomous loop as fixed', () => {
@@ -103,6 +138,7 @@ test('clean verification terminates the autonomous loop as fixed', () => {
   assert.equal(decision.shouldContinue, false);
   assert.match(decision.stopReason ?? '', /completed successfully/i);
   assert.deepEqual(decision.nextActions.map((action) => action.type), ['stop-and-report']);
+  assert.equal(decision.verificationQuality?.checks.rootCrash, 'gone');
 });
 
 test('same reproduced crash advances the iteration and eventually broadens diagnosis instead of repeating the same patch strategy', () => {
@@ -119,6 +155,7 @@ test('same reproduced crash advances the iteration and eventually broadens diagn
   assert.equal(third.state.iteration, 3);
   assert.equal(third.state.status, 'retry-fix');
   assert.equal(third.nextActions[0]?.type, 'broaden-diagnosis');
+  assert.equal(third.nextActions[1]?.requires[0], third.nextActions[0]?.id);
 });
 
 test('changed failure re-baselines the active crash while preserving the original root fingerprint', () => {
@@ -136,6 +173,7 @@ test('changed failure re-baselines the active crash while preserving the origina
   assert.notEqual(decision.state.activeFingerprint, started.state.activeFingerprint);
   assert.equal(decision.state.activeFingerprint, baselineFingerprint(changed.verificationBaseline));
   assert.equal(decision.shouldContinue, true);
+  assert.equal(decision.verificationQuality?.checks.newCrash, 'present');
 });
 
 test('autonomous cycle stops deterministically when the fix-attempt budget is exhausted', () => {

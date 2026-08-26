@@ -28,7 +28,31 @@ You can also pass an explicit `adapterPath` to `debug_codelldb_info` or `debug_s
 
 ## Recommended Qwen Code workflow
 
-After adding this MCP server to Qwen Code, the preferred v0.4 sequence is:
+For v0.11+, prefer the high-level crash workflow. It starts CodeLLDB, runs the reproduction, captures bounded debugger evidence, selects the first likely project frame, correlates operands/registers/locals, traces bounded caller provenance, and can return a formal autonomous action plan:
+
+```text
+debug_this_crash(
+  mode="codelldb",
+  program="C:\\project\\build\\app.exe",
+  args=["--repro"],
+  cwd="C:\\project",
+  analysis={
+    projectRoots:["C:\\project"],
+    projectModules:["app.exe"],
+    callerDepth:3
+  },
+  workflow={
+    stage:"autonomous",
+    maxIterations:3
+  }
+)
+```
+
+Read `classification`, `faultLocation`, `projectFrame`, `operandAnalysis`, `callChain`, `workflow.autonomousAgent.rootCauseBacktrack`, and `workflow.autonomousAgent.nextActions` before editing source. The normal agent plan is `inspect-source → propose-fix → apply-fix → build → reproduce → verify`; Qwen Code performs source/build actions through its normal authorized tools while qwen-dap-mcp remains a debugger/evidence bridge.
+
+After a patch and rebuild, repeat the same reproduction and pass `workflow.autonomousAgent.state` back unchanged. A clean terminal exit is strong debugger evidence for a fix; a breakpoint, entry stop, requested pause, step, or configured/first-chance exception stop is not.
+
+For targeted/manual debugging, the lower-level sequence remains available:
 
 ```text
 1. debug_codelldb_info()
@@ -148,7 +172,7 @@ debug_set_exception_breakpoints(
 )
 ```
 
-The exact filter names remain adapter-defined.
+The exact filter names remain adapter-defined. A stop on a configured/first-chance exception is diagnostic evidence, not by itself proof that the process would have terminated; continue the full reproduction before treating it as a fatal crash.
 
 ## Pause behavior on Windows
 

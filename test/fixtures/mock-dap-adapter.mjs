@@ -12,6 +12,10 @@ function response(request, body = {}) {
   write({ seq: seq++, type: 'response', request_seq: request.seq, success: true, command: request.command, body });
 }
 
+function failure(request, message) {
+  write({ seq: seq++, type: 'response', request_seq: request.seq, success: false, command: request.command, message });
+}
+
 function event(name, body = {}) {
   write({ seq: seq++, type: 'event', event: name, body });
 }
@@ -48,6 +52,10 @@ function handle(request) {
       break;
     case 'launch':
     case 'attach':
+      if (request.arguments?.failImmediately) {
+        failure(request, `Mock ${request.command} rejected immediately`);
+        break;
+      }
       launchRequest = request;
       event('initialized');
       break;
@@ -162,6 +170,10 @@ function handle(request) {
       });
       break;
     case 'pause':
+      if (request.arguments?.threadId === 999) {
+        failure(request, 'Mock pause rejected');
+        break;
+      }
       response(request);
       setTimeout(() => event('stopped', { reason: 'pause', threadId: request.arguments?.threadId ?? 1, allThreadsStopped: true }), 5);
       break;
@@ -169,6 +181,10 @@ function handle(request) {
     case 'next':
     case 'stepIn':
     case 'stepOut':
+      if (request.arguments?.threadId === 999) {
+        failure(request, `Mock ${request.command} rejected`);
+        break;
+      }
       response(request, request.command === 'continue' ? { allThreadsContinued: true } : {});
       setTimeout(() => event('stopped', {
         reason: request.command === 'continue' ? 'breakpoint' : 'step',
@@ -182,10 +198,7 @@ function handle(request) {
       setTimeout(() => process.exit(0), 5);
       break;
     default:
-      write({
-        seq: seq++, type: 'response', request_seq: request.seq, success: false, command: request.command,
-        message: `Unsupported mock command: ${request.command}`,
-      });
+      failure(request, `Unsupported mock command: ${request.command}`);
   }
 }
 
