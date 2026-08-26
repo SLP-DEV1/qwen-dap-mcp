@@ -47,6 +47,7 @@ export type HangCaptureOptions = {
   stackLevels?: number;
   maxVariablesPerFrame?: number;
   framesWithVariables?: number;
+  captureTimeoutMs?: number;
 };
 
 type ObservationOutcome =
@@ -56,12 +57,45 @@ type ObservationOutcome =
 type ExecutionState = 'stopped' | 'running' | 'exited' | 'terminated' | 'unknown';
 type GuardedSnapshot = SessionSnapshot & { postmortem?: boolean };
 
+const CAPTURE_DEADLINE_PREFIX = 'Hang evidence capture deadline exceeded';
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function errorResult(error: unknown) {
   return { content: [{ type: 'text' as const, text: errorMessage(error) }], isError: true };
+}
+
+function captureDeadlineError(operation: string): DapError {
+  return new DapError(`${CAPTURE_DEADLINE_PREFIX} before ${operation}.`);
+}
+
+function isCaptureDeadlineError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(CAPTURE_DEADLINE_PREFIX);
+}
+
+async function withCaptureDeadline<T>(
+  deadline: number,
+  operation: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw captureDeadlineError(operation);
+
+  let timer: NodeJS.Timeout | undefined;
+  const request = action();
+  void request.catch(() => undefined);
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(captureDeadlineError(operation)), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function recentExecutionState(snapshot: GuardedSnapshot): ExecutionState {
@@ -271,13 +305,17 @@ async function collectFrameVariables(
   frame: DebugProtocol.StackFrame,
   frameIndex: number,
   maxVariablesPerFrame: number,
+  deadline: number,
 ): Promise<HangFrameVariables> {
   const collectionErrors: string[] = [];
   let scopes: DebugProtocol.Scope[] = [];
   try {
-    scopes = await session.scopes(frame.id);
+    scopes = await withCaptureDeadline(deadline, `scopes for frame ${frame.id}`, () => session.scopes(frame.id));
   } catch (error) {
     collectionErrors.push(`scopes: ${errorMessage(error)}`);
+    if (isCaptureDeadlineError(error)) {
+      return { frameIndex, frame, variables: [], collectionErrors };
+    }
   }
 
   const variables: DebugProtocol.Variable[] = [];
@@ -286,9 +324,14 @@ async function collectFrameVariables(
     .slice(0, 3)) {
     if (scope.variablesReference <= 0) continue;
     try {
-      variables.push(...await session.variables(scope.variablesReference, 0, maxVariablesPerFrame));
+      variables.push(...await withCaptureDeadline(
+        deadline,
+        `${scope.name} variables for frame ${frame.id}`,
+        () => session.variables(scope.variablesReference, 0, maxVariablesPerFrame),
+      ));
     } catch (error) {
       collectionErrors.push(`${scope.name}: ${errorMessage(error)}`);
+      if (isCaptureDeadlineError(error)) break;
     }
   }
 
@@ -309,14 +352,34 @@ export async function captureAllThreadHangEvidence(
   const stackLevels = captureOptions.stackLevels ?? 24;
   const maxVariablesPerFrame = captureOptions.maxVariablesPerFrame ?? 50;
   const framesWithVariables = captureOptions.framesWithVariables ?? 2;
-  const threads = (await session.threads()).slice(0, maxThreads);
+  const captureTimeoutMs = captureOptions.captureTimeoutMs ?? 30_000;
+  const deadline = Date.now() + captureTimeoutMs;
+  const threads = (await withCaptureDeadline(
+    deadline,
+    'thread enumeration',
+    () => session.threads(),
+  )).slice(0, maxThreads);
   const output: HangThreadEvidence[] = [];
 
   for (const thread of threads) {
+    if (Date.now() >= deadline) {
+      output.push({
+        thread,
+        stack: [],
+        variableFrames: [],
+        collectionErrors: [`${CAPTURE_DEADLINE_PREFIX} before thread ${thread.id} collection.`],
+      });
+      continue;
+    }
+
     const collectionErrors: string[] = [];
     let stack: DebugProtocol.StackFrame[] = [];
     try {
-      stack = await session.stackTrace(thread.id, 0, stackLevels);
+      stack = await withCaptureDeadline(
+        deadline,
+        `stackTrace for thread ${thread.id}`,
+        () => session.stackTrace(thread.id, 0, stackLevels),
+      );
     } catch (error) {
       collectionErrors.push(`stackTrace: ${errorMessage(error)}`);
     }
@@ -331,19 +394,25 @@ export async function captureAllThreadHangEvidence(
       .slice(0, framesWithVariables);
 
     const variableFrames: HangFrameVariables[] = [];
-    for (const frameIndex of frameIndexes) {
-      const frame = stack[frameIndex];
-      if (!frame) continue;
-      try {
-        variableFrames.push(await collectFrameVariables(
-          session,
-          frame,
-          frameIndex,
-          maxVariablesPerFrame,
-        ));
-      } catch (error) {
-        collectionErrors.push(`frame ${frameIndex} variables: ${errorMessage(error)}`);
+    if (Date.now() < deadline) {
+      for (const frameIndex of frameIndexes) {
+        const frame = stack[frameIndex];
+        if (!frame) continue;
+        try {
+          variableFrames.push(await collectFrameVariables(
+            session,
+            frame,
+            frameIndex,
+            maxVariablesPerFrame,
+            deadline,
+          ));
+        } catch (error) {
+          collectionErrors.push(`frame ${frameIndex} variables: ${errorMessage(error)}`);
+        }
+        if (Date.now() >= deadline) break;
       }
+    } else if (stack.length > 0) {
+      collectionErrors.push(`${CAPTURE_DEADLINE_PREFIX} before variable collection for thread ${thread.id}.`);
     }
 
     output.push({
@@ -507,6 +576,8 @@ export function registerHangDiagnosticTool(
           .describe('Bounded interval after launch/attach during which a normal stop or process exit prevents automatic hang-timeout classification.'),
         pauseTimeoutMs: z.number().int().min(1000).max(60000).default(10000)
           .describe('Maximum time to wait for each bounded pause used to freeze a suspected live hang.'),
+        captureTimeoutMs: z.number().int().min(250).max(120000).default(30000)
+          .describe('Global deadline for all-thread stack/scope/variable evidence collection. When it expires, remaining threads are retained as partial/unclassified evidence instead of extending the workflow per thread.'),
         maxThreads: z.number().int().positive().max(128).default(32)
           .describe('Maximum threads to collect for bounded all-thread triage.'),
         stackLevels: z.number().int().positive().max(100).default(24)
@@ -532,6 +603,7 @@ export function registerHangDiagnosticTool(
       requestTimeoutMs,
       observeMs,
       pauseTimeoutMs,
+      captureTimeoutMs,
       maxThreads,
       stackLevels,
       maxVariablesPerFrame,
@@ -550,6 +622,7 @@ export function registerHangDiagnosticTool(
             stackLevels,
             maxVariablesPerFrame,
             framesWithVariables,
+            captureTimeoutMs,
           };
 
           if (mode === 'current') {
