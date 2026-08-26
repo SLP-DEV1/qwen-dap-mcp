@@ -58,17 +58,18 @@ try {
   const env = {
     ...process.env,
     HOL_GUARD_HOME: guardHome,
-    // Keep the smoke hermetic: the local approval center is enough and no
-    // cloud sync is required for this compatibility contract.
     HOL_GUARD_HOOK_FAST_PATH: '0',
   };
   const payload = {
     kind: 'adapter-start',
     command: 'fixture-debug-adapter',
-    args: ['--stdio'],
+    args: ['--stdio', '--token', '<redacted:sha256:fixture>'],
     cwd: workspace,
     adapterCommand: 'fixture-debug-adapter',
-    adapterArgs: ['--stdio'],
+    adapterArgs: ['--stdio', '--token', '<redacted:sha256:fixture>'],
+    adapterResolvedCommand: '/fixture/bin/debug-adapter',
+    adapterExecutableHash: `sha256:${'1'.repeat(64)}`,
+    adapterIdentityHash: `sha256:${'2'.repeat(64)}`,
     envKeys: ['PATH'],
     envHash: `sha256:${'0'.repeat(64)}`,
   };
@@ -80,11 +81,6 @@ try {
   assert.equal(typeof decision.reason, 'string');
   assert.equal(typeof decision.allow, 'boolean');
 
-  // A pristine HOL Guard install defaults to balanced/prompt. The synthetic
-  // execute_dap_adapter_start tool is intentionally classified as command
-  // execution, so this exercises the real approval queue rather than a fake
-  // evaluator. If HOL Guard's safe default changes in a future release, an
-  // allow/warn remains valid but must still have traversed the real bridge.
   if (['review', 'require-reapproval'].includes(decision.action)) {
     assert.equal(decision.allow, false);
     assert.equal(typeof decision.approvalRequestId, 'string');
