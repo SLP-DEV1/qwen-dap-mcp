@@ -229,30 +229,33 @@ export class DapConnection extends EventEmitter {
     }
   }
 
-  sendRequest(
+  async sendRequest(
     command: string,
     args?: unknown,
     timeoutMs = 15_000,
   ): Promise<DebugProtocol.Response> {
     let decision;
     try {
-      decision = this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
+      decision = await this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
     } catch (error) {
-      return Promise.reject(new DapError(`DAP request policy failed closed for '${command}'`, {
+      throw new DapError(`DAP request policy failed closed for '${command}'`, {
         cause: error instanceof Error ? error : undefined,
-      }));
+      });
     }
 
     if (!decision.allow) {
       logger.warn('Blocked outgoing DAP request by policy', { command, reason: decision.reason });
-      return Promise.reject(new DapError(`DAP request '${command}' blocked by policy: ${decision.reason}`));
+      throw new DapError(`DAP request '${command}' blocked by policy: ${decision.reason}`);
     }
 
     const child = this.child;
     if (!child || !this.isRunning) {
-      return Promise.reject(new DapError('DAP adapter is not running'));
+      throw new DapError('DAP adapter is not running');
     }
 
+    // Policy evaluation completes before request state is allocated. A denied
+    // or failed async policy therefore cannot consume a sequence number, create
+    // a pending timer, or reach the DAP transport.
     const seq = this.nextSeq++;
     const request: DebugProtocol.Request = {
       seq,
