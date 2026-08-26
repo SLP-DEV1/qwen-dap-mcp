@@ -46,7 +46,6 @@ function validateSkill(content: string): void {
     'callChain',
     'fixWorkflow',
     'verificationBaseline',
-    'workflow.stage="verify"',
     'changed-failure',
     'inconclusive',
   ];
@@ -55,6 +54,7 @@ function validateSkill(content: string): void {
     assert.ok(content.includes(concept), `Skill must explain ${concept}`);
   }
 
+  assert.match(content, /workflow\s*=\s*\{[\s\S]*?stage\s*:\s*["']verify["'][\s\S]*?baseline\s*:/i);
   assert.match(content, /authorized local targets/i);
   assert.match(content, /confidence/i);
   assert.match(content, /rebuild/i);
