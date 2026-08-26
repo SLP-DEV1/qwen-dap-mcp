@@ -1,0 +1,44 @@
+name: Prepare v0.14.0 release
+
+on:
+  push:
+    branches:
+      - release/v0.14.0
+    paths:
+      - '.github/scripts/prepare-v014-release.mjs'
+      - '.github/workflows/prepare-v014-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: release/v0.14.0
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Prepare release metadata
+        run: node .github/scripts/prepare-v014-release.mjs
+
+      - name: Validate release candidate
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+
+      - name: Commit validated release candidate
+        run: |
+          rm .github/scripts/prepare-v014-release.mjs
+          rm .github/workflows/prepare-v014-release.yml
+          git config user.name "SLP-DEV1"
+          git config user.email "aufgeklebt@outlook.de"
+          git add package.json package-lock.json qwen-extension.json server.json CHANGELOG.md .github/scripts/prepare-v014-release.mjs .github/workflows/prepare-v014-release.yml
+          git commit -m "chore: prepare v0.14.0 release"
+          git push origin HEAD:release/v0.14.0
