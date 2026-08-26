@@ -1,0 +1,58 @@
+name: v0.14 GDB order fix
+
+on:
+  push:
+    branches:
+      - feature/v0.14-gdb-find-writer
+    paths:
+      - .github/workflows/v014-gdb-order-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/v0.14-gdb-find-writer
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply GDB configuration-order fix and regression test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if old not in s:
+                  raise SystemExit(f'anchor not found in {path}: {old[:180]!r}')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          anchor = """    const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);\n    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);\n    const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);"""
+          replacement = """    const debugRequestTimeoutMs = Math.max(this.requestTimeoutMs, 60_000);\n\n    // GNU GDB 15+ follows the corrected DAP ordering implemented upstream:\n    // initialize -> configuration requests -> configurationDone -> launch.\n    // Source breakpoints are intentionally allowed to be pending before GDB\n    // knows the executable. CodeLLDB/lldb-dap retain the traditional path\n    // below where launch/attach starts first and initialized gates config.\n    if (this.adapterId === 'gdb') {\n      try {\n        const breakpointResults: Array<{ source: string; breakpoints: DebugProtocol.Breakpoint[] }> = [];\n        for (const group of breakpoints) {\n          breakpointResults.push({ source: group.source, breakpoints: await this.setBreakpoints(group.source, group.lines) });\n        }\n        if (this.capabilities?.supportsConfigurationDoneRequest) {\n          await this.connection.sendRequest('configurationDone', {}, this.requestTimeoutMs);\n        }\n        const response = await this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);\n        this.configured = true;\n        return { request, response: response.body ?? {}, breakpoints: breakpointResults, capabilities: this.capabilities ?? {} };\n      } catch (error) {\n        this.configured = false;\n        this.activeRequest = undefined;\n        throw error;\n      }\n    }\n\n    const initializedEvent = this.connection.waitForEvent('initialized', debugRequestTimeoutMs, undefined, true);\n    const requestPromise = this.connection.sendRequest(request, configuration, debugRequestTimeoutMs);"""
+          replace('src/dap/session.ts', anchor, replacement)
+
+          marker = """test('launch accepts initialized emitted immediately after initialize', async (t) => {"""
+          addition = """test('GDB configures pending breakpoints before launch', async (t) => {\n  const session = new DapSession();\n  t.after(async () => session.reset());\n\n  await session.start({\n    ...mockStartOptions(),\n    adapterId: 'gdb',\n    env: { MOCK_INITIALIZED_ON_INITIALIZE: '1' },\n  });\n\n  const commands: string[] = [];\n  session.connection.waitForEvent = (() => {\n    throw new Error('GDB launch must not wait for a second initialized event');\n  }) as typeof session.connection.waitForEvent;\n  session.connection.sendRequest = (async (command: string) => {\n    commands.push(command);\n    if (command === 'setBreakpoints') {\n      return { body: { breakpoints: [{ verified: false, reason: 'pending' }] } } as never;\n    }\n    return { body: {} } as never;\n  }) as typeof session.connection.sendRequest;\n\n  const launch = await session.launch(\n    { program: '/tmp/gdb-app' },\n    [{ source: '/tmp/main.cpp', lines: [42] }],\n  );\n\n  assert.deepEqual(commands, ['setBreakpoints', 'configurationDone', 'launch']);\n  assert.equal((launch as { request: string }).request, 'launch');\n  assert.equal(session.snapshot().configured, true);\n  assert.equal(session.snapshot().activeRequest, 'launch');\n});\n\n"""
+          replace('test/dap-session.test.ts', marker, addition + marker)
+          PY
+      - name: Validate full project
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+      - name: Commit validated fix and remove helper workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/v014-gdb-order-fix.yml
+          git add src/dap/session.ts test/dap-session.test.ts
+          git commit -m "fix: configure GDB DAP before launch"
+          git push origin HEAD:feature/v0.14-gdb-find-writer
