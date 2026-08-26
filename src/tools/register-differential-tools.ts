@@ -111,6 +111,19 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
             return structuredResult({
               baselineSessionId,
               candidateSessionId,
+              budget: {
+                timeoutMs,
+                sessions: 2,
+                stackLevelsPerSession: snapshot.stackLevels,
+                maxVariablesPerScope: snapshot.maxVariablesPerScope,
+                includeDisassembly: snapshot.includeDisassembly,
+                disassemblyInstructionsPerSession: snapshot.includeDisassembly
+                  ? snapshot.disassembleBefore + snapshot.disassembleAfter + 1
+                  : 0,
+                includeModules: snapshot.includeModules,
+                moduleCountPerSession: snapshot.includeModules ? snapshot.moduleCount : 0,
+                includeExceptionInfo: snapshot.includeExceptionInfo,
+              },
               baseline,
               candidate,
               diff: compareRuntimeSnapshots(baseline.snapshot, candidate.snapshot),
