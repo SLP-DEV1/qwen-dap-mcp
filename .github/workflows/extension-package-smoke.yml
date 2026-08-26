@@ -3,11 +3,17 @@ name: Qwen Extension Package Smoke
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
+      - 'src/**'
       - 'package.json'
       - 'qwen-extension.json'
       - 'skills/**'
+      - '.qwen/skills/**'
+      - 'test/qwen-skill.test.ts'
       - 'scripts/build-extension-package.mjs'
+      - 'tsconfig.json'
       - '.github/workflows/extension-package-smoke.yml'
 
 jobs:
@@ -16,9 +22,9 @@ jobs:
     env:
       QWEN_CODE_SMOKE_VERSION: '0.22.0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -58,7 +64,7 @@ jobs:
     env:
       QWEN_CODE_SMOKE_VERSION: '0.22.0'
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
