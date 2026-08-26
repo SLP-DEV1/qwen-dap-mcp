@@ -136,7 +136,7 @@ export function registerLldbDapTools(server: McpServer, session: DapSession): vo
     'debug_attach_lldb_dap_remote',
     {
       title: 'Attach lldb-dap to lldb-server',
-      description: `Use this to connect an initialized upstream lldb-dap session to an authorized lldb-server gdbserver TCP endpoint using lldb-dap's native gdb-remote-host/gdb-remote-port attach fields. Loopback is allowed by default; a non-loopback host must be listed exactly in ${REMOTE_DEBUG_HOSTS_ENV}. Do not use this for lldb-server platform mode or arbitrary LLDB commands; this path only connects to an already-running gdb-remote server.`,
+      description: `Use this to connect an initialized upstream lldb-dap session to an authorized lldb-server gdbserver TCP endpoint. qwen-dap-mcp validates the structured host/port first, then generates exactly one gdb-remote host:port attach command for compatibility with older lldb-dap releases such as version 18; user-supplied LLDB commands are never accepted. Loopback is allowed by default; a non-loopback host must be listed exactly in ${REMOTE_DEBUG_HOSTS_ENV}. Do not use this for lldb-server platform mode.`,
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       inputSchema: z.object({
         host: z.string().min(1).describe(`Authorized lldb-server hostname/IP. Loopback is allowed automatically; other exact hosts require ${REMOTE_DEBUG_HOSTS_ENV}.`),
