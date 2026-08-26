@@ -185,6 +185,7 @@ export const debugSessionsOutputSchema = z.object({
   sessions: z.array(z.object({
     sessionId: z.string(),
     isDefault: z.boolean(),
+    activeRequests: z.number().int().nonnegative(),
     snapshot: z.object({}).catchall(z.unknown()),
   })),
 }).catchall(z.unknown());
