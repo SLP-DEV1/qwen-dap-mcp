@@ -50,6 +50,10 @@ test('registry publication is manual, release-bound, and verifies npm before MCP
   assert.match(workflow, /pkg\.mcpName !== expectedName/);
   assert.match(workflow, /server\.packages\?\.\[0\]\?\.identifier !== expectedPackage/);
   assert.match(workflow, /npm pack --dry-run --json/);
+  assert.match(workflow, /'NOTICE'/);
+  assert.match(workflow, /MCP_PUBLISHER_VERSION: '1\.8\.1'/);
+  assert.match(workflow, /a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc/);
+  assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /secrets\.NPM_TOKEN/);
 
   const npmVisibilityIndex = workflow.indexOf('- name: Verify package is visible on npm');

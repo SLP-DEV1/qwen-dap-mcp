@@ -35,7 +35,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Build and unit test bridge
         run: npm run check

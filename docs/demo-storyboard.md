@@ -5,7 +5,7 @@ Use the Crash Lab so the recording is reproducible and does not depend on a priv
 ## Preparation
 
 ```bash
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm run demo:build -- null-pointer
 ```
 

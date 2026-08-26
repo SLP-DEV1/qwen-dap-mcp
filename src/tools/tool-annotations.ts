@@ -7,16 +7,16 @@ export const READ_ONLY_LOCAL_TOOL_ANNOTATIONS = {
 
 export const DEBUG_SESSION_CONTROL_ANNOTATIONS = {
   readOnlyHint: false,
-  destructiveHint: false,
+  destructiveHint: true,
   idempotentHint: false,
-  openWorldHint: false,
+  openWorldHint: true,
 } as const;
 
 export const LOCAL_TARGET_EXECUTION_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true,
   idempotentHint: false,
-  openWorldHint: false,
+  openWorldHint: true,
 } as const;
 
 export const SESSION_TEARDOWN_ANNOTATIONS = {

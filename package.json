@@ -11,6 +11,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "NOTICE",
     "qwen-extension.json",
     "server.json",
     "skills"

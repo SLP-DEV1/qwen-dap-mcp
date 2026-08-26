@@ -121,6 +121,7 @@ await Promise.all([
   cp(path.join(projectRoot, 'README.md'), path.join(outputRoot, 'README.md')),
   cp(path.join(projectRoot, 'CHANGELOG.md'), path.join(outputRoot, 'CHANGELOG.md')),
   cp(path.join(projectRoot, 'LICENSE'), path.join(outputRoot, 'LICENSE')),
+  cp(path.join(projectRoot, 'NOTICE'), path.join(outputRoot, 'NOTICE')),
 ]);
 
 const releasePackageJson = {
