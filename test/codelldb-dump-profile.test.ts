@@ -40,6 +40,17 @@ test('rejects a missing crash dump before starting CodeLLDB', () => {
   );
 });
 
+test('rejects LLDB command control characters before filesystem access', () => {
+  assert.throws(
+    () => buildCodeLldbDumpConfiguration({ dumpPath: `fake\nsettings set target.run-args injected.dmp` }),
+    /must not contain NUL, carriage-return, or newline/i,
+  );
+  assert.throws(
+    () => buildCodeLldbDumpConfiguration({ dumpPath: 'fake.dmp', program: `app\rquit.exe` }),
+    /must not contain NUL, carriage-return, or newline/i,
+  );
+});
+
 test('openDump validates the dump before adapter discovery or startup', async () => {
   const session = new GuardedDapSession();
   const missing = resolve('definitely-missing-preflight-crash.dmp');
