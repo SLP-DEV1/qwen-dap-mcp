@@ -38,6 +38,8 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
     [{ source: '/tmp/main.cpp', lines: [42] }],
   );
   assert.equal((launch as { request: string }).request, 'launch');
+  assert.equal(session.snapshot().configured, true);
+  assert.equal(session.snapshot().activeRequest, 'launch');
 
   const advancedSource = await session.setSourceBreakpoints('/tmp/main.cpp', [
     { line: 42, condition: 'answer == 42', hitCondition: '>= 2', logMessage: 'answer={answer}' },
@@ -118,4 +120,50 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
 
   await session.disconnect(true);
   assert.equal(session.snapshot().adapterRunning, false);
+});
+
+test('failed launch aligns initialized timeout, observes the parallel request, and clears stale session state', async (t) => {
+  const session = new DapSession();
+  t.after(async () => session.reset());
+
+  await session.start({
+    command: process.execPath,
+    args: [fixture],
+    adapterId: 'mock',
+    requestTimeoutMs: 2_000,
+  });
+
+  let initializedTimeoutMs: number | undefined;
+  let launchTimeoutMs: number | undefined;
+  let launchRejectionObserved = false;
+
+  const pendingLaunch = new Promise<never>(() => {});
+  const originalCatch = pendingLaunch.catch.bind(pendingLaunch);
+  pendingLaunch.catch = ((onRejected) => {
+    launchRejectionObserved = true;
+    return originalCatch(onRejected);
+  }) as typeof pendingLaunch.catch;
+
+  session.connection.waitForEvent = ((eventName: string, timeoutMs?: number) => {
+    assert.equal(eventName, 'initialized');
+    initializedTimeoutMs = timeoutMs;
+    return Promise.reject(new Error('initialized event failed'));
+  }) as typeof session.connection.waitForEvent;
+
+  session.connection.sendRequest = ((command: string, _args?: unknown, timeoutMs?: number) => {
+    assert.equal(command, 'launch');
+    launchTimeoutMs = timeoutMs;
+    return pendingLaunch;
+  }) as typeof session.connection.sendRequest;
+
+  await assert.rejects(
+    session.launch({ program: '/tmp/slow-app' }),
+    /initialized event failed/,
+  );
+
+  assert.equal(initializedTimeoutMs, 60_000);
+  assert.equal(launchTimeoutMs, 60_000);
+  assert.equal(launchRejectionObserved, true);
+  assert.equal(session.snapshot().configured, false);
+  assert.equal(session.snapshot().activeRequest, undefined);
 });

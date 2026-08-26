@@ -86,6 +86,38 @@ test('runToStop captures a fast exit without attempting a runtime snapshot', asy
   assert.equal(snapshotCalls, 0);
 });
 
+test('runToStop preserves the original launch failure after the outcome wait already timed out', async () => {
+  const events = new EventEmitter();
+  const originalError = new Error('launch failed with actionable adapter detail');
+
+  const session: RunToStopSession = {
+    connection: events,
+    async runExclusiveLifecycle<T>(_operation: string, action: () => Promise<T>): Promise<T> {
+      return action();
+    },
+    isPostmortem: () => false,
+    async launch() {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      throw originalError;
+    },
+    async attach() {
+      throw new Error('attach should not be called');
+    },
+    async runtimeSnapshot() {
+      throw new Error('snapshot should not be called');
+    },
+    snapshot: () => ({}),
+  };
+
+  await assert.rejects(
+    runToStop(session, {
+      configuration: { program: '/tmp/failing-app' },
+      timeoutMs: 10,
+    }),
+    (error) => error === originalError,
+  );
+});
+
 test('runToStop rejects live execution from a postmortem session', async () => {
   const events = new EventEmitter();
   const session: RunToStopSession = {
