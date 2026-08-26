@@ -1,6 +1,6 @@
 {
   "name": "@slp-dev1/qwen-dap-mcp",
-  "version": "0.11.4",
+  "version": "0.12.0",
   "description": "Native runtime and crash-dump debugging for coding agents through a local DAP-to-MCP bridge.",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,6 +21,9 @@
     "test": "tsx --test test/*.test.ts",
     "test:codelldb:real": "tsx test/codelldb-real-smoke.ts",
     "test:codelldb:dump": "tsx test/codelldb-real-dump-smoke.ts",
+    "demo:build": "node scripts/build-crash-lab.mjs",
+    "demo:repro": "node scripts/run-crash-lab.mjs",
+    "benchmark:report": "node scripts/benchmark-report.mjs",
     "package:extension": "node scripts/build-extension-package.mjs",
     "check": "npm run build && npm test && npm run package:extension",
     "prepublishOnly": "npm run check",

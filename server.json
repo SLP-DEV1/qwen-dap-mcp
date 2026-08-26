@@ -7,12 +7,12 @@
     "url": "https://github.com/SLP-DEV1/qwen-dap-mcp",
     "source": "github"
   },
-  "version": "0.11.4",
+  "version": "0.12.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@slp-dev1/qwen-dap-mcp",
-      "version": "0.11.4",
+      "version": "0.12.0",
       "transport": {
         "type": "stdio"
       }
