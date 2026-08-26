@@ -65,7 +65,7 @@ export function registerDifferentialTools(server: McpServer, sessions: DapSessio
     'debug_compare_runs',
     {
       description:
-        'Compare bounded runtime evidence from two existing stopped DAP sessions. Designed for baseline/good vs candidate/bad differential debugging. It compares stack identities, locals, registers, exception state, symbol health, and modules semantically; non-null raw address-only changes are marked unstable rather than treated as causal evidence. This phase does not launch or resume either target.',
+        'Compare bounded runtime evidence from two existing stopped DAP sessions. Use this for baseline or known-good versus candidate or failing differential debugging after both sessions have reached comparable stops. It compares stack identities, locals, registers, exception state, symbol health, and modules semantically; non-null raw address-only changes are marked unstable rather than causal evidence. Do not use it to launch, resume, or alter either target; prepare both runtime states with the normal lifecycle tools first.',
       inputSchema: z.object({
         baselineSessionId: sessionIdSchema.describe('Session representing the known-good or baseline runtime state.'),
         candidateSessionId: sessionIdSchema.describe('Session representing the failing or changed runtime state.'),
