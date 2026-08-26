@@ -5,6 +5,7 @@ import { discoverCodeLldb } from '../adapters/codelldb.js';
 import { buildCodeLldbDumpConfiguration } from '../adapters/codelldb-dump.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import { logger } from '../logger.js';
+import { READ_ONLY_LOCAL_TOOL_ANNOTATIONS } from './tool-annotations.js';
 
 export type OpenDumpOptions = {
   dumpPath: string;
@@ -113,20 +114,21 @@ export function registerDumpTools(server: McpServer, session: GuardedDapSession)
     {
       title: 'Open Native Crash Dump',
       description:
-        'Open a local native core/minidump with CodeLLDB for read-only postmortem analysis. No target process is launched or attached. Returns an initial bounded debug snapshot.',
+        'Open a local native core/minidump with CodeLLDB and capture bounded postmortem evidence. Use this when the failure is already recorded and no target process should execute; use debug_run_to_stop or debug_this_crash mode=codelldb for a live reproduction instead. The tool starts only the local debugger adapter, never launches or resumes the crashed program, treats the dump as read-only, and returns the initial stack/locals/registers plus optional modules and disassembly.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       inputSchema: z.object({
-        dumpPath: z.string().min(1),
-        program: z.string().min(1).optional(),
-        sourceMap: z.record(z.string(), z.string()).optional(),
-        adapterPath: z.string().min(1).optional(),
-        cwd: z.string().optional(),
-        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000),
-        threadId: z.number().int().positive().optional(),
-        stackLevels: z.number().int().positive().max(100).default(20),
-        maxVariablesPerScope: z.number().int().positive().max(500).default(100),
-        includeDisassembly: z.boolean().default(true),
-        includeModules: z.boolean().default(true),
-        moduleCount: z.number().int().positive().max(500).default(100),
+        dumpPath: z.string().min(1).describe('Absolute or local path to the native core/minidump file to inspect.'),
+        program: z.string().min(1).optional().describe('Optional path to the matching executable image, used by CodeLLDB to improve symbol/module resolution.'),
+        sourceMap: z.record(z.string(), z.string()).optional().describe('Optional mapping from source paths recorded in symbols to local source paths.'),
+        adapterPath: z.string().min(1).optional().describe('Optional explicit CodeLLDB executable path; omit to use normal CodeLLDB discovery.'),
+        cwd: z.string().optional().describe('Working directory for the local CodeLLDB adapter process; this does not execute the crashed target.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Per-request DAP timeout in milliseconds while opening and inspecting the dump.'),
+        threadId: z.number().int().positive().optional().describe('Specific dump thread to inspect; omit to use the debugger-selected stopped/crashed thread.'),
+        stackLevels: z.number().int().positive().max(100).default(20).describe('Maximum stack frames to include in the initial postmortem snapshot.'),
+        maxVariablesPerScope: z.number().int().positive().max(500).default(100).describe('Maximum variables returned per scope in the initial snapshot.'),
+        includeDisassembly: z.boolean().default(true).describe('Include best-effort instructions around the selected crash frame.'),
+        includeModules: z.boolean().default(true).describe('Include loaded executable images and libraries recorded in the dump.'),
+        moduleCount: z.number().int().positive().max(500).default(100).describe('Maximum number of modules to include when includeModules is true.'),
       }),
     },
     wrap(async (options) => openDump(session, options as OpenDumpOptions)),

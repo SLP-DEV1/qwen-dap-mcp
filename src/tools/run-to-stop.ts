@@ -8,6 +8,7 @@ import type {
   RuntimeSnapshotOptions,
   SourceBreakpointGroup,
 } from '../dap/session.js';
+import { LOCAL_TARGET_EXECUTION_ANNOTATIONS } from './tool-annotations.js';
 
 export type RunToStopRequest = 'launch' | 'attach';
 
@@ -168,22 +169,22 @@ export async function runToStop(
   });
 }
 
-const jsonRecord = z.record(z.string(), z.unknown());
+const jsonRecord = z.record(z.string(), z.unknown()).describe('Adapter-specific DAP launch or attach configuration.');
 const breakpointGroupSchema = z.object({
-  source: z.string().min(1).describe('Absolute or adapter-resolvable source file path'),
-  lines: z.array(z.number().int().positive()).min(1),
-});
+  source: z.string().min(1).describe('Absolute or adapter-resolvable source file path.'),
+  lines: z.array(z.number().int().positive()).min(1).describe('One or more 1-based source line numbers to replace as breakpoints for this source file.'),
+}).describe('Source file and line breakpoints applied before configuration completes.');
 const snapshotSchema = z.object({
-  threadId: z.number().int().positive().optional(),
-  stackLevels: z.number().int().positive().max(100).optional(),
-  maxVariablesPerScope: z.number().int().positive().max(500).optional(),
-  includeDisassembly: z.boolean().optional(),
-  disassembleBefore: z.number().int().nonnegative().max(100).optional(),
-  disassembleAfter: z.number().int().nonnegative().max(100).optional(),
-  includeModules: z.boolean().optional(),
-  moduleCount: z.number().int().positive().max(500).optional(),
-  includeExceptionInfo: z.boolean().optional(),
-});
+  threadId: z.number().int().positive().optional().describe('Stopped thread to snapshot; omit to use the thread from the stopped event.'),
+  stackLevels: z.number().int().positive().max(100).optional().describe('Maximum stack frames to collect after a stop.'),
+  maxVariablesPerScope: z.number().int().positive().max(500).optional().describe('Maximum variables to return per inspected scope.'),
+  includeDisassembly: z.boolean().optional().describe('Whether to include best-effort disassembly near the selected frame.'),
+  disassembleBefore: z.number().int().nonnegative().max(100).optional().describe('Instructions before the selected instruction to request.'),
+  disassembleAfter: z.number().int().nonnegative().max(100).optional().describe('Instructions after the selected instruction to request.'),
+  includeModules: z.boolean().optional().describe('Whether to include a bounded loaded-module list.'),
+  moduleCount: z.number().int().positive().max(500).optional().describe('Maximum loaded modules to include.'),
+  includeExceptionInfo: z.boolean().optional().describe('Whether to request structured exception information after a stop.'),
+}).describe('Optional bounds and evidence categories for the snapshot captured only when execution stops.');
 
 function result(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
@@ -199,12 +200,13 @@ export function registerRunToStopTool(server: McpServer, session: RunToStopSessi
     'debug_run_to_stop',
     {
       title: 'Run Until Debug Stop or Exit',
-      description: 'Launch or attach through an initialized live DAP session, configure optional source breakpoints, wait race-safely for stopped/exited/terminated, and return a bounded runtime snapshot when execution stops.',
+      description: 'Run one live launch or attach through an already initialized DAP adapter until the first stopped, exited, or terminated event. Use this when you need deterministic runtime evidence from a reproduction; do not use it for a postmortem dump or when executing/attaching to the local target is not authorized. Launch mode executes application code and attach mode changes debugger control of an existing process, so normal target side effects may occur before the stop. Returns the request result, terminal/stopped outcome, session status, and a bounded snapshot only when a stopped event is captured.',
+      annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       inputSchema: z.object({
-        request: z.enum(['launch', 'attach']).default('launch'),
+        request: z.enum(['launch', 'attach']).default('launch').describe('Choose launch to start a new target from configuration, or attach to connect to an existing authorized local target.'),
         configuration: jsonRecord,
-        breakpoints: z.array(breakpointGroupSchema).optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).default(30000),
+        breakpoints: z.array(breakpointGroupSchema).optional().describe('Optional source breakpoint groups configured before the debugger completes launch/attach setup.'),
+        timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Maximum milliseconds to wait for the first stopped, exited, or terminated event.'),
         snapshot: snapshotSchema.optional(),
       }),
     },
