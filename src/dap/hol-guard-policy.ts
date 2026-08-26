@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
@@ -95,6 +95,7 @@ const MAX_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const ADAPTER_IDENTITY_VERSION = 'qwen-dap-mcp-adapter-v1';
 const REDACTED_MARKER = '__qwenDapMcpRedacted';
+const REDACTION_HMAC_KEY = randomBytes(32);
 
 const BRIDGE_ENV_KEYS = new Set([
   'APPDATA',
@@ -110,7 +111,6 @@ const BRIDGE_ENV_KEYS = new Set([
   'PATHEXT',
   'PROGRAMDATA',
   'PYTHONIOENCODING',
-  'PYTHONPATH',
   'PYTHONUTF8',
   'REQUESTS_CA_BUNDLE',
   'SSL_CERT_DIR',
@@ -201,8 +201,12 @@ function pythonBesideHolGuard(): string | undefined {
 
 function resolvePythonCommand(explicit?: string): string {
   const configured = explicit?.trim() || process.env.QWEN_DAP_MCP_HOL_GUARD_PYTHON?.trim();
-  if (configured) return configured;
-  return pythonBesideHolGuard() ?? (process.platform === 'win32' ? 'python' : 'python3');
+  const candidate = configured || pythonBesideHolGuard() || (process.platform === 'win32' ? 'python' : 'python3');
+  const resolved = resolveAdapterExecutable(candidate, undefined, process.env);
+  if (!resolved) {
+    throw new DapError(`HOL Guard Python interpreter '${candidate}' could not be resolved to an executable file.`);
+  }
+  return resolved;
 }
 
 function defaultBridgePath(): string {
@@ -211,6 +215,18 @@ function defaultBridgePath(): string {
     fileURLToPath(new URL('../scripts/hol-guard-dap-policy.py', import.meta.url)),
   ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
+
+function resolveBridgePath(path: string): string {
+  try {
+    if (!statSync(path).isFile()) throw new DapError(`HOL Guard bridge is not a regular file: ${path}`);
+    return realpathSync(path);
+  } catch (error) {
+    if (error instanceof DapError) throw error;
+    throw new DapError(`HOL Guard bridge script not found or unreadable: ${path}`, {
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
 }
 
 function truncate(value: string, max = 500): string {
@@ -256,6 +272,7 @@ export function buildHolGuardBridgeEnvironment(source: NodeJS.ProcessEnv = proce
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) continue;
     const normalized = key.toUpperCase();
+    if (normalized === 'PYTHONPATH' || normalized === 'PYTHONHOME') continue;
     if (BRIDGE_ENV_KEYS.has(normalized) || normalized.startsWith('HOL_GUARD_')) output[key] = value;
   }
   return output;
@@ -268,7 +285,7 @@ function runBridge(
   action: HolGuardAction,
 ): Promise<HolGuardDecision> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(pythonCommand, [bridgePath], {
+    const child = spawn(pythonCommand, ['-I', bridgePath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
@@ -366,18 +383,20 @@ function canonicalJson(value: unknown, seen = new Set<object>()): string {
   }
 }
 
+function privacyDigest(value: string): string {
+  return createHmac('sha256', REDACTION_HMAC_KEY).update(value, 'utf8').digest('hex');
+}
+
 function redactedValue(value: unknown): Record<string, unknown> {
-  const digest = createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
   return {
     [REDACTED_MARKER]: true,
-    sha256: `sha256:${digest}`,
+    sha256: `sha256:${privacyDigest(canonicalJson(value))}`,
     valueType: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
   };
 }
 
 function redactedArgText(value: string): string {
-  const digest = createHash('sha256').update(value, 'utf8').digest('hex');
-  return `<redacted:sha256:${digest}>`;
+  return `<redacted:sha256:${privacyDigest(value)}>`;
 }
 
 function adapterFlagName(value: string): string {
@@ -530,6 +549,10 @@ function hashExecutable(path: string): string {
   return `sha256:${digest}`;
 }
 
+function hashFile(path: string): string {
+  return `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
+}
+
 function buildAdapterIdentityHash(context: HolGuardExecutionContext, rawArgs: readonly string[]): string {
   const material = {
     version: ADAPTER_IDENTITY_VERSION,
@@ -564,12 +587,19 @@ export function createHolGuardEvaluator(options: HolGuardPolicyOptions = {}): Ho
     return { enabled: false, evaluate: async () => ({ allow: true, action: 'allow', reason: 'HOL Guard integration disabled' }) };
   }
   const pythonCommand = resolvePythonCommand(options.pythonCommand);
-  const bridgePath = options.bridgePath ?? defaultBridgePath();
+  const pythonExecutableHash = hashExecutable(pythonCommand);
+  const bridgePath = resolveBridgePath(options.bridgePath ?? defaultBridgePath());
+  const bridgeHash = hashFile(bridgePath);
   const timeoutMs = options.timeoutMs ?? parseTimeout(process.env.QWEN_DAP_MCP_HOL_GUARD_TIMEOUT_MS);
   return {
     enabled: true,
     async evaluate(action) {
-      if (!existsSync(bridgePath)) throw new DapError(`HOL Guard bridge script not found: ${bridgePath}`);
+      if (hashExecutable(pythonCommand) !== pythonExecutableHash) {
+        throw new DapError('HOL Guard Python interpreter changed after evaluator initialization; refusing policy execution.');
+      }
+      if (hashFile(bridgePath) !== bridgeHash) {
+        throw new DapError('HOL Guard bridge script changed after evaluator initialization; refusing policy execution.');
+      }
       return runBridge(pythonCommand, bridgePath, timeoutMs, action);
     },
   };
