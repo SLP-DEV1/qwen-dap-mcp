@@ -25,7 +25,9 @@ jobs:
           cache: npm
 
       - name: Apply reviewed patch
-        run: node .github/scripts/issue44-fix.mjs
+        run: |
+          node .github/scripts/issue44-fix.mjs
+          node .github/scripts/issue44-fix-v2.mjs
 
       - name: Validate project
         run: |
@@ -36,6 +38,7 @@ jobs:
         run: |
           rm .github/workflows/issue44-hardening-fix.yml
           rm .github/scripts/issue44-fix.mjs
+          rm .github/scripts/issue44-fix-v2.mjs
           git config user.name "SLP-DEV1"
           git config user.email "aufgeklebt@outlook.de"
           git add -A
