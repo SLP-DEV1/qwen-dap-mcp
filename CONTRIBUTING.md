@@ -37,7 +37,7 @@ npm run check
 
 `npm run check` builds TypeScript, runs the test suite, and stages the self-contained Qwen extension package.
 
-Adapter-specific real smoke workflows also run in GitHub Actions for CodeLLDB, GDB/gdbserver, lldb-dap/lldb-server, multi-session remote isolation, Differential Runtime, and HOL Guard compatibility.
+GitHub Actions uses a tiered model: fast Node 20/22 CI runs on every PR, while native debuggers, HOL Guard, extension-install, and container smokes are path-targeted; every release runs the complete integration gate. See [docs/ci.md](docs/ci.md) for the exact workflow map.
 
 ## Pull requests
 

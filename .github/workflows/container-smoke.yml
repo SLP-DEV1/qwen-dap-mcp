@@ -1,0 +1,32 @@
+name: Container Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/index.ts'
+      - 'src/server.ts'
+      - 'server.json'
+      - 'glama.json'
+      - '.github/workflows/container-smoke.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build Glama-compatible stdio container
+        run: docker build --tag qwen-dap-mcp:ci .

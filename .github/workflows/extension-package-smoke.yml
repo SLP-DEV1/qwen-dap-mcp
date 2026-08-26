@@ -1,42 +1,46 @@
 name: Qwen Extension Package Smoke
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+  pull_request:
     paths:
-      - 'src/**'
-      - 'package.json'
       - 'qwen-extension.json'
       - 'skills/**'
       - '.qwen/skills/**'
-      - 'test/qwen-skill.test.ts'
-      - 'test/release-workflow.test.ts'
       - 'scripts/build-extension-package.mjs'
       - 'scripts/hol-guard-dap-policy.py'
-      - 'tsconfig.json'
+      - 'src/index.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'test/qwen-skill.test.ts'
+      - 'test/release-workflow.test.ts'
       - '.github/workflows/extension-package-smoke.yml'
       - '.github/workflows/release-extension.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   archive-install:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       QWEN_CODE_SMOKE_VERSION: '0.22.0'
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-
+          cache: npm
       - name: Install bridge dependencies
         run: npm ci --ignore-scripts
-
       - name: Build, test and stage extension
         run: npm run check
-
       - name: Create archive and validate archive shape
         shell: bash
         run: |
@@ -49,10 +53,8 @@ jobs:
             exit 1
           fi
           sha256sum release/qwen-dap-mcp.tar.gz
-
       - name: Install Qwen Code
         run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
-
       - name: Install the generated extension archive
         shell: bash
         run: |

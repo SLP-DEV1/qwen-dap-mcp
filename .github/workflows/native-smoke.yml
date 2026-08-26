@@ -1,0 +1,327 @@
+name: Native Debugger Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'src/adapters/**'
+      - 'src/dap/**'
+      - 'src/diagnostics/**'
+      - 'src/remote-endpoint.ts'
+      - 'src/tools/**'
+      - 'test/codelldb-*.ts'
+      - 'test/gdb*.ts'
+      - 'test/lldb*.ts'
+      - 'test/differential*.ts'
+      - 'test/multi-session*.ts'
+      - 'test/find-writer.test.ts'
+      - 'test/operation-context.test.ts'
+      - 'test/runtime-diff.test.ts'
+      - 'test/value-tracing.test.ts'
+      - 'test/fixtures/*.cpp'
+      - '.github/workflows/native-smoke.yml'
+  schedule:
+    - cron: '23 5 * * 2'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Select smoke suites
+    runs-on: ubuntu-latest
+    outputs:
+      codelldb: ${{ steps.select.outputs.codelldb }}
+      dump: ${{ steps.select.outputs.dump }}
+      gdb: ${{ steps.select.outputs.gdb }}
+      lldb: ${{ steps.select.outputs.lldb }}
+      differential: ${{ steps.select.outputs.differential }}
+      multi: ${{ steps.select.outputs.multi }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Select suites from changed paths
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          set_all() {
+            for suite in codelldb dump gdb lldb differential multi; do
+              echo "$suite=true" >> "$GITHUB_OUTPUT"
+            done
+          }
+
+          if [ "$EVENT_NAME" != 'pull_request' ]; then
+            set_all
+            exit 0
+          fi
+
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" | tee changed-files.txt
+
+          select_suite() {
+            local suite="$1"
+            local pattern="$2"
+            if grep -Eq "$pattern" changed-files.txt; then
+              echo "$suite=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$suite=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+
+          select_suite codelldb '^(src/adapters/codelldb\.ts|src/tools/(agent-diagnostics|register-debug-tools|run-to-stop)\.ts|test/codelldb-real-smoke\.ts|test/codelldb-profile\.test\.ts|test/fixtures/native-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite dump '^(src/adapters/codelldb-dump\.ts|src/dap/postmortem-normalization\.ts|src/tools/register-dump-tools\.ts|test/codelldb-(dump-profile\.test|real-dump-smoke)\.ts|test/fixtures/native-dump\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite gdb '^(src/adapters/gdb-dap\.ts|src/dap/|src/tools/(agent-diagnostics|find-writer|register-gdb-dap-tools)\.ts|test/gdb|test/find-writer\.test\.ts|test/fixtures/gdb-dap-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite lldb '^(src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite differential '^(src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
+
+  codelldb:
+    name: CodeLLDB / Windows
+    needs: changes
+    if: needs.changes.outputs.codelldb == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Build native smoke target
+        shell: pwsh
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
+      - name: Download latest CodeLLDB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'qwen-dap-mcp-ci' }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/vadimcn/codelldb/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -match '^codelldb-(win32-x64|x86_64-windows)\.vsix$' } | Select-Object -First 1
+          if (-not $asset) { throw "No Windows x64 CodeLLDB VSIX found in latest release $($release.tag_name)" }
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile codelldb.vsix
+          Copy-Item codelldb.vsix codelldb.zip
+          Expand-Archive -Path codelldb.zip -DestinationPath .codelldb -Force
+          $adapter = Get-ChildItem .codelldb -Recurse -Filter codelldb.exe | Where-Object { $_.FullName -match '[\\/]adapter[\\/]codelldb\.exe$' } | Select-Object -First 1
+          if (-not $adapter) { throw 'codelldb.exe was not found inside the VSIX' }
+          "CODELLDB_PATH=$($adapter.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run real DAP smoke
+        shell: pwsh
+        run: |
+          npx tsx test/codelldb-real-smoke.ts `
+            --adapter "$env:CODELLDB_PATH" `
+            --program "$pwd\test\fixtures\native-smoke.exe" `
+            --source "$pwd\test\fixtures\native-smoke.cpp"
+
+  dump:
+    name: CodeLLDB minidump / Windows
+    needs: changes
+    if: needs.changes.outputs.dump == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Build native dump fixture
+        shell: pwsh
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-dump.exe test\fixtures\native-dump.cpp /link /DEBUG:FULL dbghelp.lib
+      - name: Generate Windows minidump
+        shell: pwsh
+        run: |
+          Remove-Item native-dump.dmp -ErrorAction SilentlyContinue
+          & .\test\fixtures\native-dump.exe
+          if (-not (Test-Path native-dump.dmp)) { throw 'native-dump.dmp was not generated' }
+          if ((Get-Item native-dump.dmp).Length -lt 1024) { throw 'Generated dump is unexpectedly small' }
+          $global:LASTEXITCODE = 0
+      - name: Download latest CodeLLDB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'qwen-dap-mcp-ci' }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/vadimcn/codelldb/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -match '^codelldb-(win32-x64|x86_64-windows)\.vsix$' } | Select-Object -First 1
+          if (-not $asset) { throw "No Windows x64 CodeLLDB VSIX found in latest release $($release.tag_name)" }
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile codelldb.vsix
+          Copy-Item codelldb.vsix codelldb.zip
+          Expand-Archive -Path codelldb.zip -DestinationPath .codelldb -Force
+          $adapter = Get-ChildItem .codelldb -Recurse -Filter codelldb.exe | Where-Object { $_.FullName -match '[\\/]adapter[\\/]codelldb\.exe$' } | Select-Object -First 1
+          if (-not $adapter) { throw 'codelldb.exe was not found inside the VSIX' }
+          "CODELLDB_PATH=$($adapter.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Inspect minidump through real DAP
+        shell: pwsh
+        run: |
+          npx tsx test/codelldb-real-dump-smoke.ts `
+            --adapter "$env:CODELLDB_PATH" `
+            --program "$pwd\test\fixtures\native-dump.exe" `
+            --dump "$pwd\native-dump.dmp" `
+            --source "$pwd\test\fixtures\native-dump.cpp"
+
+  gdb:
+    name: GDB DAP + gdbserver / Linux
+    needs: changes
+    if: needs.changes.outputs.gdb == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install GDB toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gdb gdbserver g++
+      - run: npm ci --ignore-scripts
+      - name: Build project and fixture
+        run: |
+          npm run build
+          mkdir -p build/gdb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/gdb-dap-smoke.cpp -o build/gdb-dap-smoke/gdb-dap-smoke
+      - name: Run real GDB DAP watchpoint smoke
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/gdb-dap-real-smoke.ts \
+            --program build/gdb-dap-smoke/gdb-dap-smoke \
+            --source test/fixtures/gdb-dap-smoke.cpp
+      - name: Run real gdbserver attach smoke
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME -u QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS \
+            npx tsx test/gdbserver-real-smoke.ts \
+            --program build/gdb-dap-smoke/gdb-dap-smoke \
+            --source test/fixtures/gdb-dap-smoke.cpp
+
+  lldb:
+    name: lldb-dap + lldb-server / Linux
+    needs: changes
+    if: needs.changes.outputs.lldb == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install LLDB toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends lldb g++
+      - name: Locate lldb-dap and lldb-server
+        shell: bash
+        run: |
+          adapter="$(command -v lldb-dap || true)"
+          if [ -z "$adapter" ]; then adapter="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-dap' -print 2>/dev/null | sort -V | tail -n 1)"; fi
+          server="$(command -v lldb-server || true)"
+          if [ -z "$server" ]; then server="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-server' -print 2>/dev/null | sort -V | tail -n 1)"; fi
+          test -x "$adapter"
+          test -x "$server"
+          echo "LLDB_DAP_PATH=$adapter" >> "$GITHUB_ENV"
+          echo "LLDB_SERVER_PATH=$server" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
+      - name: Build project and fixtures
+        run: |
+          npm run build
+          mkdir -p build/lldb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/lldb-dap-smoke/native-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/lldb-dap-crash.cpp -o build/lldb-dap-smoke/lldb-dap-crash
+      - name: Run lldb-dap launch smoke
+        run: |
+          npx tsx test/lldb-dap-real-smoke.ts --adapter "$LLDB_DAP_PATH" --program build/lldb-dap-smoke/native-smoke --source test/fixtures/native-smoke.cpp
+      - name: Run high-level crash smoke
+        run: |
+          npx tsx test/lldb-dap-high-level-smoke.ts --adapter "$LLDB_DAP_PATH" --program build/lldb-dap-smoke/lldb-dap-crash --source test/fixtures/lldb-dap-crash.cpp
+      - name: Run lldb-server attach smoke
+        run: |
+          env -u QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS npx tsx test/lldb-server-real-smoke.ts \
+            --adapter "$LLDB_DAP_PATH" --server "$LLDB_SERVER_PATH" \
+            --program build/lldb-dap-smoke/native-smoke --source test/fixtures/native-smoke.cpp
+
+  differential:
+    name: Differential runtime / GDB
+    needs: changes
+    if: needs.changes.outputs.differential == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install GDB toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gdb g++
+      - run: npm ci --ignore-scripts
+      - name: Build project and fixture
+        run: |
+          npm run build
+          mkdir -p build/differential-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/differential-smoke.cpp -o build/differential-smoke/differential-smoke
+      - name: Compare real good and bad GDB DAP sessions
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/differential-gdb-real-smoke.ts \
+            --program build/differential-smoke/differential-smoke \
+            --source test/fixtures/differential-smoke.cpp
+
+  multi:
+    name: Multi-session remote / Linux
+    needs: changes
+    if: needs.changes.outputs.multi == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install native debugger toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gdb gdbserver g++ lldb
+      - name: Locate lldb-dap and lldb-server
+        shell: bash
+        run: |
+          adapter="$(command -v lldb-dap || true)"
+          if [ -z "$adapter" ]; then adapter="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-dap' -print 2>/dev/null | sort -V | tail -n 1)"; fi
+          server="$(command -v lldb-server || true)"
+          if [ -z "$server" ]; then server="$(find /usr/lib -maxdepth 4 -type f -name 'lldb-server' -print 2>/dev/null | sort -V | tail -n 1)"; fi
+          test -x "$adapter"
+          test -x "$server"
+          echo "LLDB_DAP_PATH=$adapter" >> "$GITHUB_ENV"
+          echo "LLDB_SERVER_PATH=$server" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
+      - name: Build project and fixtures
+        run: |
+          npm run build
+          mkdir -p build/multi-session
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/gdb-dap-smoke.cpp -o build/multi-session/gdb-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/native-smoke.cpp -o build/multi-session/lldb-smoke
+      - name: Run concurrent GDB and LLDB remote-session smoke
+        run: |
+          env -u QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS npx tsx test/multi-session-remote-real-smoke.ts \
+            --gdb "$(command -v gdb)" --gdbserver "$(command -v gdbserver)" \
+            --lldb-dap "$LLDB_DAP_PATH" --lldb-server "$LLDB_SERVER_PATH" \
+            --gdb-program build/multi-session/gdb-smoke --gdb-source test/fixtures/gdb-dap-smoke.cpp \
+            --lldb-program build/multi-session/lldb-smoke --lldb-source test/fixtures/native-smoke.cpp
