@@ -2,6 +2,18 @@
 
 All notable prototype milestones are documented here.
 
+## 0.11.3 - 2026-08-26
+
+### Fixed
+
+- Removed the stale hard-coded MCP server runtime version and derive it from `package.json` instead.
+- Added regression coverage that requires package, Qwen extension, MCP Registry, npm package entry, and runtime versions to stay aligned.
+- Extension packaging now validates `package.json`, `qwen-extension.json`, and `server.json` versions plus MCP/npm identifiers before producing an archive.
+
+### Release note
+
+- `v0.11.2` was created successfully on GitHub before the stale internal runtime-version string was discovered. The npm/MCP Registry publication is intentionally advanced to `0.11.3` so registries receive the corrected version-aligned build.
+
 ## 0.11.2 - 2026-08-26
 
 ### Fixed / hardened
