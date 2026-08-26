@@ -1,0 +1,37 @@
+name: v0.14 patch
+
+on:
+  push:
+    branches:
+      - feature/v0.14-gdb-find-writer
+    paths:
+      - .github/workflows/v014-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.14-gdb-find-writer
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply patch
+        run: node .tmp/v014-patch.mjs
+      - name: Validate
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+      - name: Commit validated patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md src test docs .tmp
+          git commit -m "feat: integrate GDB DAP and writer tracing"
+          git push origin HEAD:feature/v0.14-gdb-find-writer
