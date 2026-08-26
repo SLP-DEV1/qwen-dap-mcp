@@ -31,30 +31,33 @@ coding-agent
 typescript
 ```
 
+## Live launch links
+
+- Qwen Code Show and tell: https://github.com/QwenLM/qwen-code/discussions/10130
+- Glama: https://glama.ai/mcp/servers/SLP-DEV1/qwen-dap-mcp
+- npm: https://www.npmjs.com/package/@slp-dev1/qwen-dap-mcp
+- GitHub repository: https://github.com/SLP-DEV1/qwen-dap-mcp
+- Official MCP Registry name: `io.github.SLP-DEV1/qwen-dap-mcp`
+
 ## Qwen Code Show and tell
 
-### Title
+The launch discussion is live at:
+
+https://github.com/QwenLM/qwen-code/discussions/10130
+
+Use that discussion for follow-up results, compatibility reports, demo clips, and meaningful release updates. Do not duplicate the same launch post into the old feature issue.
+
+### Reference title
 
 I gave Qwen Code a real native debugger through DAP and MCP
 
-### Post
+### Reference project summary
 
 I built **qwen-dap-mcp**, a local DAP → MCP bridge that gives Qwen Code structured access to a real native debugger instead of asking it to infer every crash from source and terminal output alone.
 
 The useful evidence for a native crash is often inside the debugger: stack frames, registers, locals, exception state, disassembly, loaded modules and crash dumps. qwen-dap-mcp exposes that evidence through MCP and keeps the fix/build work in the normal coding-agent workflow.
 
 `v0.12.0` adds a compact default agent toolset, while the full low-level debugger surface remains available through `QWEN_DAP_MCP_TOOLSET=full`. It also includes a reproducible Crash Lab and benchmark scaffold so the workflow can be tested rather than only described.
-
-Current tested path:
-
-- CodeLLDB launch/attach through DAP
-- Windows minidump / postmortem analysis
-- stack, register, local, module, disassembly and bounded memory evidence
-- project-frame and fault-operand correlation
-- bounded runtime root-cause backtracking
-- diagnose → inspect → fix → build → reproduce → verify orchestration
-- explicit crash fingerprints and changed-failure detection
-- local stdio MCP with no arbitrary shell or unrestricted memory-write primitive
 
 Install in Qwen Code:
 
@@ -68,20 +71,12 @@ Or run the published MCP package directly:
 npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-Repository:
-https://github.com/SLP-DEV1/qwen-dap-mcp
-
-npm:
-`@slp-dev1/qwen-dap-mcp@0.12.0`
-
-Official MCP Registry:
-`io.github.SLP-DEV1/qwen-dap-mcp`
-
-I would especially like feedback from people using Qwen Code on native C/C++ projects, and from anyone interested in testing additional DAP adapters.
+Glama:
+https://glama.ai/mcp/servers/SLP-DEV1/qwen-dap-mcp
 
 ## Reddit / LocalLLaMA
 
-**Important:** current `r/LocalLLaMA` moderation actively limits self-promotion. Do not post this just because the draft exists. First make sure your recent participation in the subreddit is overwhelmingly normal discussion rather than links to your own projects. The subreddit also scrutinizes undisclosed LLM-generated promotional posts, so rewrite the final version in your own voice and disclose assistance where appropriate.
+**Important:** avoid repeated self-promotion. Participate normally in the subreddit, and rewrite the final version in your own voice before posting.
 
 ### Suggested title
 
@@ -103,13 +98,15 @@ Everything runs locally over stdio. The MCP itself deliberately does not expose 
 
 Repo: https://github.com/SLP-DEV1/qwen-dap-mcp
 
+Glama: https://glama.ai/mcp/servers/SLP-DEV1/qwen-dap-mcp
+
 npm: `npx -y @slp-dev1/qwen-dap-mcp`
 
 If anyone tries it on a real native project, I would be interested in where the debugger evidence helps and where the agent still gets stuck.
 
 ## Hacker News
 
-**Important:** HN currently limits Show HN submissions from accounts that are not yet established participants. Do not create or warm up an account just to submit this project. If the account is already an ordinary HN participant, the project qualifies as a Show HN because it is open source, runnable, and requires no signup.
+Use Show HN only from an account that already participates normally on Hacker News.
 
 ### Title
 
@@ -127,7 +124,7 @@ v0.12 adds a compact agent-facing toolset and a reproducible Crash Lab. The repo
 
 https://github.com/SLP-DEV1/qwen-dap-mcp
 
-## Short X / social post
+## Short social post
 
 Qwen Code can now use a real native debugger.
 
@@ -136,6 +133,8 @@ Qwen Code can now use a real native debugger.
 v0.12 adds a compact agent toolset + reproducible Crash Lab.
 
 https://github.com/SLP-DEV1/qwen-dap-mcp
+
+Glama: https://glama.ai/mcp/servers/SLP-DEV1/qwen-dap-mcp
 
 ## Demo storyboard
 
@@ -166,7 +165,7 @@ Keep the recording around 30–45 seconds and avoid private source paths or unre
 - Qwen Code GitHub install: `qwen extensions install SLP-DEV1/qwen-dap-mcp`.
 - npm: `@slp-dev1/qwen-dap-mcp@0.12.0`, with `latest` pointing to `0.12.0`.
 - MCP Registry: `io.github.SLP-DEV1/qwen-dap-mcp` published through GitHub OIDC.
-- npm ownership verification: matching `mcpName` in `package.json`.
-- Glama: pending indexing/claim/build score before the large awesome-list PR.
+- Glama: live at `https://glama.ai/mcp/servers/SLP-DEV1/qwen-dap-mcp`.
+- Qwen Code Show and tell: live at `https://github.com/QwenLM/qwen-code/discussions/10130`.
 
-Do not post further updates in `QwenLM/qwen-code/issues/10051`; use a new Qwen Code Show and tell discussion instead.
+Do not post further updates in `QwenLM/qwen-code/issues/10051`; use the live Qwen Code Show and tell discussion instead.
