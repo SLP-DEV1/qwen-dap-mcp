@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const projectRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const bridge = path.join(projectRoot, 'scripts', 'hol-guard-dap-policy.py');
 const python = process.env.QWEN_DAP_MCP_HOL_GUARD_PYTHON
   || process.env.PYTHON
