@@ -48,6 +48,10 @@ function childHasExited(child: Pick<ChildProcessWithoutNullStreams, 'exitCode' |
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+  return typeof (value as { then?: unknown }).then === 'function';
+}
+
 function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
   if (childHasExited(child)) return Promise.resolve(true);
 
@@ -87,9 +91,6 @@ export class DapConnection extends EventEmitter {
   }
 
   get isRunning(): boolean {
-    // ChildProcess.killed only means a signal was accepted by kill(); it says
-    // nothing about whether the process has actually exited. signalCode is
-    // populated for signal-terminated children while exitCode can remain null.
     return Boolean(this.child && !childHasExited(this.child));
   }
 
@@ -115,8 +116,6 @@ export class DapConnection extends EventEmitter {
       : undefined;
     logger.debug('Starting DAP adapter', { command: options.command, ...(cwd ? { cwd } : {}) });
 
-    // Every adapter process is a fresh DAP transport. Never let events/stderr
-    // from a previous debuggee influence thread selection or diagnostics.
     this.rejectAll(new DapError('DAP adapter session replaced'));
     this.child = undefined;
     this.buffer = Buffer.alloc(0);
@@ -145,8 +144,6 @@ export class DapConnection extends EventEmitter {
       this.captureStderr(chunk);
     });
     child.stdin.on('error', (error) => {
-      // A retired child can emit stream errors after a new adapter has already
-      // started. Never let an old transport reject the new session's requests.
       if (!isCurrentChild()) return;
       const dapError = new DapError(`DAP adapter stdin error: ${error.message}`, { cause: error });
       logger.warn('DAP adapter stdin error', { pid: child.pid, error: dapError });
@@ -223,8 +220,6 @@ export class DapConnection extends EventEmitter {
     this.rejectAll(new DapError('DAP adapter stopped'));
     if (this.child === child) {
       this.child = undefined;
-      // A direct stop can retire the transport before Node reports an exit.
-      // Wake event waiters deterministically instead of leaving them to timeout.
       this.emit('adapterExit', { code: child.exitCode, signal: child.signalCode, forcedStop: true });
     }
   }
@@ -236,7 +231,8 @@ export class DapConnection extends EventEmitter {
   ): Promise<DebugProtocol.Response> {
     let decision;
     try {
-      decision = await this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
+      const policyResult = this.requestPolicy({ command, ...(args === undefined ? {} : { args }) });
+      decision = isPromiseLike(policyResult) ? await policyResult : policyResult;
     } catch (error) {
       throw new DapError(`DAP request policy failed closed for '${command}'`, {
         cause: error instanceof Error ? error : undefined,
@@ -253,9 +249,6 @@ export class DapConnection extends EventEmitter {
       throw new DapError('DAP adapter is not running');
     }
 
-    // Policy evaluation completes before request state is allocated. A denied
-    // or failed async policy therefore cannot consume a sequence number, create
-    // a pending timer, or reach the DAP transport.
     const seq = this.nextSeq++;
     const request: DebugProtocol.Request = {
       seq,
@@ -319,10 +312,6 @@ export class DapConnection extends EventEmitter {
       this.on('adapterExit', onAdapterExit);
       this.on('adapterError', onAdapterError);
 
-      // Some valid DAP adapters (notably GNU GDB) emit `initialized`
-      // immediately after the initialize response, before launch/attach.
-      // Register the live listener first, then inspect this transport's
-      // bounded event history so an event cannot race between the two.
       if (includeRecent) {
         const recent = [...this.eventHistory].reverse().find((record) => {
           if (record.event !== eventName) return false;
@@ -498,19 +487,12 @@ export class DapConnection extends EventEmitter {
     this.emit('adapterStderr', chunk);
   }
 
-  /**
-   * DAP framing/JSON errors are fatal for this transport. Once message
-   * boundaries are untrustworthy, attempting stream resynchronization can
-   * pair a response with the wrong request. Fail closed and retire the adapter.
-   */
   private failProtocol(error: DapError): void {
     this.buffer = Buffer.alloc(0);
     logger.warn('Fatal DAP protocol error; retiring adapter transport', { error });
     this.rejectAll(error);
     this.emit('protocolError', error);
     this.emit('adapterError', error);
-    // Production adapters are ChildProcess instances. The runtime guard also
-    // keeps parser unit-test doubles from turning transport retirement into noise.
     if (typeof this.child?.kill === 'function') {
       void this.stop().catch((stopError) => {
         logger.warn('Failed while retiring DAP adapter after protocol error', { error: stopError });
