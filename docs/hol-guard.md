@@ -6,12 +6,12 @@ The integration is defense in depth. The built-in `QWEN_DAP_MCP_DAP_POLICY=inspe
 
 ## What is gated
 
-Two boundaries are protected:
+The first integration deliberately matches the boundary proposed by the HOL Guard maintainer:
 
-1. **Outgoing DAP requests before `writeMessage()`** for actions that can execute code or change debuggee execution state, including `evaluate`, `launch`, `attach`, resume/step operations, `setVariable`, `setExpression`, `writeMemory`, and termination.
+1. **DAP `evaluate` and `launch` before `writeMessage()`**. `evaluate` can execute code in the debuggee; `launch` can start the wrong target process.
 2. **DAP adapter start before `DapConnection.start()` can spawn the adapter process.** This closes the separate process-start path that does not flow through `sendRequest()`.
 
-Inspection requests such as `variables`, `stackTrace`, `scopes`, `threads`, `modules`, `readMemory`, and disassembly remain on the read-only fast path and do not invoke the HOL Guard bridge.
+Inspection requests such as `variables`, `stackTrace`, `scopes`, `threads`, `modules`, `readMemory`, and disassembly remain on the read-only fast path and do not invoke the HOL Guard bridge. Other DAP control requests keep their existing qwen-dap-mcp behavior in this initial integration; the HOL Guard DAP set can be expanded deliberately later without surprising users with extra approval boundaries.
 
 ## Enable
 
@@ -50,7 +50,7 @@ The bundled bridge converts each protected debugger action into a local HOL Guar
 
 `build_tool_call_artifact -> build_tool_call_hash -> evaluate_tool_call -> resolve_tool_call_policy_action`
 
-HOL Guard `allow` and `warn` decisions proceed. In HOL Guard `observe` mode, actions are observed but not blocked. `review`, `require-reapproval`, `sandbox-required`, and `block` do **not** cross the DAP boundary.
+HOL Guard `allow` and `warn` decisions proceed. In HOL Guard `observe` mode, actions are observed but not blocked. `review`, `require-reapproval`, `sandbox-required`, and `block` do **not** cross the DAP boundary when Guard is in an enforcing/prompting mode.
 
 The first integration deliberately fails closed instead of implementing a second approval UI inside qwen-dap-mcp. Interactive approval/receipt workflows remain HOL Guard's responsibility; an upstream HOL Guard MCP proxy can provide that user-facing flow. Saved HOL Guard policy decisions can still participate in the local evaluation performed by the bridge.
 
@@ -74,4 +74,4 @@ $env:QWEN_DAP_MCP_DAP_POLICY = "inspect-only"
 $env:QWEN_DAP_MCP_HOL_GUARD = "1"
 ```
 
-`inspect-only` remains the authoritative local allowlist. HOL Guard then protects the separate adapter-start boundary and any executable DAP operations allowed by a less restrictive future/custom local policy.
+`inspect-only` remains the authoritative local allowlist. HOL Guard then protects the separate adapter-start boundary; `evaluate` and `launch` remain locally denied before the external guard is consulted.
