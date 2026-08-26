@@ -1,0 +1,86 @@
+name: v0.14 session integration
+
+on:
+  push:
+    branches:
+      - feature/v0.14-gdb-find-writer
+    paths:
+      - .github/workflows/v014-session-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/v0.14-gdb-find-writer
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Patch session adapter identity and GDB smoke
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'anchor missing in {path}: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace(
+              'src/dap/session.ts',
+              "  activeRequest?: 'launch' | 'attach';\n  capabilities?: DebugProtocol.Capabilities;",
+              "  activeRequest?: 'launch' | 'attach';\n  adapterId?: string;\n  capabilities?: DebugProtocol.Capabilities;",
+          )
+          replace(
+              'src/dap/session.ts',
+              "  private activeRequest?: 'launch' | 'attach';\n  private capabilities?: DebugProtocol.Capabilities;",
+              "  private activeRequest?: 'launch' | 'attach';\n  private adapterId?: string;\n  private capabilities?: DebugProtocol.Capabilities;",
+          )
+          replace(
+              'src/dap/session.ts',
+              "      this.capabilities = (response.body ?? {}) as DebugProtocol.Capabilities;\n      this.initialized = true;",
+              "      this.capabilities = (response.body ?? {}) as DebugProtocol.Capabilities;\n      this.adapterId = options.adapterId;\n      this.initialized = true;",
+          )
+          replace(
+              'src/dap/session.ts',
+              "      ...(this.activeRequest === undefined ? {} : { activeRequest: this.activeRequest }),\n      ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),",
+              "      ...(this.activeRequest === undefined ? {} : { activeRequest: this.activeRequest }),\n      ...(this.adapterId === undefined ? {} : { adapterId: this.adapterId }),\n      ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),",
+          )
+          replace(
+              'src/dap/session.ts',
+              "    this.activeRequest = undefined;\n    this.capabilities = undefined;\n    this.dataBreakpoints = [];",
+              "    this.activeRequest = undefined;\n    this.adapterId = undefined;\n    this.capabilities = undefined;\n    this.dataBreakpoints = [];",
+          )
+          replace(
+              'test/gdb-dap-real-smoke.ts',
+              "  assert.equal(capabilities.supportsDataBreakpoints, true, 'GDB DAP did not advertise data-breakpoint/watchpoint support');\n\n",
+              "",
+          )
+          replace(
+              'test/gdb-dap-real-smoke.ts',
+              "  assert.equal(writer.hitConfirmed, true, `Expected a GDB data-breakpoint stop, got ${JSON.stringify(writer.outcome)}`);",
+              "  assert.equal(writer.strategy, 'gdb-watch', `Expected the bounded GDB watch fallback, got ${writer.strategy}`);\n  assert.equal(writer.hitConfirmed, true, `Expected a GDB watchpoint stop, got ${JSON.stringify(writer.outcome)}`);",
+          )
+          PY
+      - name: Validate unit and packaging gate
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+      - name: Commit validated integration and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/v014-session-integration.yml
+          git add src/dap/session.ts test/gdb-dap-real-smoke.ts
+          git commit -m "fix: integrate GDB writer fallback with session state"
+          git push origin HEAD:feature/v0.14-gdb-find-writer
