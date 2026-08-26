@@ -1,3 +1,5 @@
+import { logger } from './logger.js';
+
 export type ToolsetMode = 'agent' | 'full';
 
 export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
@@ -19,13 +21,19 @@ type ToolRegistrar = {
   registerTool: (...args: any[]) => any;
 };
 
+const FILTERED_TOOL_HANDLE = Object.freeze({
+  disable: () => undefined,
+  enable: () => undefined,
+  update: (..._args: any[]) => undefined,
+  remove: () => undefined,
+});
+
 export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): ToolsetMode {
   if (value === undefined || value.trim() === '') return 'agent';
   const normalized = value.trim().toLowerCase();
   if (normalized === 'agent' || normalized === 'full') return normalized;
-  throw new Error(
-    `Invalid QWEN_DAP_MCP_TOOLSET '${value}'. Expected 'agent' or 'full'.`,
-  );
+  logger.warn('Invalid QWEN_DAP_MCP_TOOLSET; falling back to the safe agent toolset', { value });
+  return 'agent';
 }
 
 export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
@@ -39,7 +47,10 @@ export function filterToolRegistrar<T extends ToolRegistrar>(registrar: T, mode:
     get(target, property, receiver) {
       if (property === 'registerTool') {
         return (name: string, ...args: any[]) => {
-          if (!toolsetAllows(mode, name)) return undefined;
+          if (!toolsetAllows(mode, name)) {
+            logger.debug('Tool registration filtered by active toolset', { mode, tool: name });
+            return FILTERED_TOOL_HANDLE;
+          }
           return target.registerTool.call(target, name, ...args);
         };
       }

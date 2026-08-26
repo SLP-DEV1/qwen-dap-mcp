@@ -3,6 +3,16 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import { DapConnection, type DapAdapterStartOptions } from './connection.js';
 import { DapError } from './errors.js';
 
+const MAX_READ_MEMORY_BYTES = 1024 * 1024;
+const MAX_DISASSEMBLY_INSTRUCTIONS = 10_000;
+const MAX_RELATIVE_DAP_OFFSET = 2_147_483_647;
+
+function assertSafeIntegerInRange(name: string, value: number, min: number, max: number): void {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new DapError(`${name} must be a safe integer between ${min} and ${max}; received ${String(value)}`);
+  }
+}
+
 export type SourceBreakpointGroup = {
   source: string;
   lines: number[];
@@ -306,6 +316,9 @@ export class DapSession {
   async disassemble(memoryReference: string, instructionCount = 20, instructionOffset = 0, offset = 0, resolveSymbols = true): Promise<DebugProtocol.DisassembledInstruction[]> {
     this.assertConfigured();
     this.assertCapability('supportsDisassembleRequest', 'disassemble');
+    assertSafeIntegerInRange('instructionCount', instructionCount, 1, MAX_DISASSEMBLY_INSTRUCTIONS);
+    assertSafeIntegerInRange('instructionOffset', instructionOffset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
+    assertSafeIntegerInRange('offset', offset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
     const response = await this.connection.sendRequest(
       'disassemble',
       { memoryReference, instructionCount, instructionOffset, offset, resolveSymbols } satisfies DebugProtocol.DisassembleArguments,
@@ -317,6 +330,8 @@ export class DapSession {
   async readMemory(memoryReference: string, count: number, offset = 0): Promise<NonNullable<DebugProtocol.ReadMemoryResponse['body']>> {
     this.assertConfigured();
     this.assertCapability('supportsReadMemoryRequest', 'readMemory');
+    assertSafeIntegerInRange('count', count, 1, MAX_READ_MEMORY_BYTES);
+    assertSafeIntegerInRange('offset', offset, -MAX_RELATIVE_DAP_OFFSET, MAX_RELATIVE_DAP_OFFSET);
     const response = await this.connection.sendRequest('readMemory', { memoryReference, count, offset } satisfies DebugProtocol.ReadMemoryArguments, this.requestTimeoutMs);
     return (response.body ?? { address: memoryReference }) as NonNullable<DebugProtocol.ReadMemoryResponse['body']>;
   }

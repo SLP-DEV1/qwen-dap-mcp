@@ -167,6 +167,7 @@ test('launch accepts initialized emitted immediately after initialize', async (t
     ...mockStartOptions(),
     env: { MOCK_INITIALIZED_ON_INITIALIZE: '1' },
   });
+  await session.connection.waitForEvent('initialized', 2_000, undefined, true);
   assert.ok(
     session.snapshot().recentEvents.some((event) => event.event === 'initialized'),
     'mock adapter should emit initialized before launch',
