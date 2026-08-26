@@ -12,6 +12,7 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
   'debug_this_hang',
   'debug_compare_runs',
+  'debug_trace_value',
   'debug_diagnose_stop',
   'debug_source_disassembly',
   'debug_find_writer',
@@ -74,6 +75,7 @@ const FILTERED_TOOL_HANDLE = Object.freeze({
 function defaultAnnotationsForTool(name: string) {
   if (name === 'debug_disconnect' || name === 'debug_sessions') return SESSION_TEARDOWN_ANNOTATIONS;
   if (name === 'debug_compare_runs') return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
+  if (name === 'debug_trace_value') return DEBUG_SESSION_CONTROL_ANNOTATIONS;
   if (LOCAL_EXECUTION_TOOLS.has(name)) return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
   if (SESSION_CONTROL_TOOLS.has(name)) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
   if (READ_ONLY_FULL_TOOLS.has(name)) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
