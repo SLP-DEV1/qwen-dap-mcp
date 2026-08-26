@@ -67,7 +67,9 @@ Core-file sessions are marked postmortem/read-only by the same session guard use
 
 ## Find the writer
 
-GDB watchpoints are exposed through DAP data breakpoints, so the high-level adapter-independent workflow can be used after any stopped live session:
+`debug_find_writer` remains a high-level adapter-independent workflow, but GDB currently needs a compatibility path. In the real Ubuntu 24.04 smoke environment, GDB 15.1 does not advertise DAP `supportsDataBreakpoints`, even though GDB itself supports hardware watchpoints.
+
+For adapters that advertise native DAP data breakpoints, the bridge uses `dataBreakpointInfo` and `setDataBreakpoints`. For GDB without that capability flag, the bridge uses a deliberately bounded DAP `evaluate` request in `repl` context to issue exactly one of `watch`, `rwatch`, or `awatch` for the supplied expression:
 
 ```text
 debug_find_writer(
@@ -76,4 +78,6 @@ debug_find_writer(
 )
 ```
 
-The bridge resolves the data breakpoint, temporarily installs it, resumes to the first stop/exit/termination, and reports the immediate writer frame when the debugger confirms a `data breakpoint`/watchpoint stop. It does not automatically continue through an unrelated stop.
+The GDB fallback does not expose a general command shell through the agent tool. The watch expression is length-bounded and rejects control characters or line breaks; conditional and hit-count watches are rejected on this fallback. The bridge parses the newly created GDB watchpoint number and later deletes only that temporary watchpoint.
+
+After installation, the target resumes only to the first stop, exit, or termination. A confirmed data-breakpoint/watchpoint stop returns the immediate writer frame and bounded runtime evidence. An unrelated breakpoint, exception, or signal is returned without automatically continuing through it.
