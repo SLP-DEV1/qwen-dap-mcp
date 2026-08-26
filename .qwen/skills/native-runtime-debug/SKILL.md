@@ -7,11 +7,9 @@ description: Diagnose native C/C++ runtime bugs and crash dumps with qwen-dap-mc
 
 Use `qwen-dap-mcp` to reason from structured debugger evidence instead of guessing from logs. This skill is for software, crash artifacts, and authorized local targets the user owns or is permitted to debug.
 
-## Prefer the autonomous crash workflow
+## Prefer `debug_this_crash`
 
-For crash-fixing tasks, prefer one high-level loop through `debug_this_crash` instead of manually chaining many DAP calls.
-
-Start with:
+For crash-fixing work, prefer the high-level workflow instead of manually chaining raw DAP calls:
 
 ```text
 debug_this_crash(
@@ -24,20 +22,54 @@ debug_this_crash(
 )
 ```
 
-The first autonomous call diagnoses the failure and returns `workflow.autonomousAgent`. Read:
+The first autonomous call returns `workflow.autonomousAgent`. Treat it as a formal protocol, not free-form advice.
 
-- `state.rootFingerprint`: immutable fingerprint of the original failure,
-- `state.activeFingerprint`: failure currently being fixed,
-- `state.iteration` / `maxIterations`: bounded fix-attempt budget,
-- `state.history`: diagnosis/verification history,
-- `state.status`: current loop state,
-- `nextActions`: ordered actions assigned to either `coding-agent` or `debugger`,
-- `shouldContinue`: whether the loop may continue,
-- `stopReason`: why the loop ended when present.
+Read:
 
-Follow `nextActions` in order. Use Qwen Code's normal authorized file-editing and build tools for `inspect-source`, `apply-fix`, and `rebuild`. qwen-dap-mcp intentionally does not expose an arbitrary shell or source-writing executor.
+- `protocolVersion`: action protocol version. v0.11 uses version 2.
+- `state.rootFingerprint`: immutable signature of the original failure.
+- `state.activeFingerprint`: crash currently being fixed.
+- `state.iteration` / `maxIterations`: bounded fix-attempt budget.
+- `state.history`: serialized diagnosis and verification history.
+- `state.status`: current autonomous loop state.
+- `nextActions`: ordered formal actions.
+- `rootCauseBacktrack`: runtime consumer → propagation → producer-candidate evidence.
+- `verificationQuality`: debugger-evidence score and explicit external-unverified checks.
+- `shouldContinue`: whether the loop may continue.
+- `stopReason`: deterministic stop explanation when present.
 
-After the requested edit/rebuild, reproduce the **same scenario** and pass the returned state back unchanged:
+Each `nextActions` entry contains:
+
+- `id`
+- `type`
+- `owner` (`coding-agent` or `debugger`)
+- `status`
+- `requires` dependency IDs
+- `input`
+- `expectedResult.description`
+- `expectedResult.successCriteria`
+- optional evidence
+
+Honor dependencies. Do not execute an action before all IDs in `requires` are satisfied.
+
+The normal fix chain is:
+
+```text
+inspect-source
+→ propose-fix
+→ apply-fix
+→ build
+→ reproduce
+→ verify
+```
+
+When evidence is weak the MCP emits `collect-evidence` instead of a patch action. After repeated identical failures it can prepend `broaden-diagnosis` so the agent investigates earlier producer/ownership evidence instead of repeatedly guarding the final dereference.
+
+qwen-dap-mcp intentionally does not expose a general shell, arbitrary source writer, git reset, or arbitrary memory-write primitive. Use Qwen Code's normal authorized coding/build tools for source inspection, editing, builds, tests, and repository operations.
+
+## Continue an autonomous cycle
+
+After the requested edit/rebuild, reproduce the same scenario and pass the returned state back unchanged:
 
 ```text
 debug_this_crash(
@@ -53,65 +85,51 @@ debug_this_crash(
 )
 ```
 
-Do not invent or edit the serialized state yourself. The MCP owns crash fingerprinting and loop transitions.
+Do not invent, partially copy, or edit serialized state yourself. The MCP owns fingerprints and state transitions.
 
-### Autonomous state policy
+### Autonomous states
 
-- `needs-fix`: inspect the evidence-backed source location, apply the smallest justified fix, rebuild, reproduce.
-- `retry-fix`: the same crash survived; revise the fix rather than claiming success.
-- `needs-evidence`: do not patch yet. Improve project hints / bounded caller evidence first.
-- `needs-reproduction`: the run stopped at a breakpoint, entry, pause, or another inconclusive state. Continue the original reproduction; do **not** consume another edit attempt.
-- `changed-failure`: the old active signature changed. The MCP preserves the original `rootFingerprint`, re-baselines the new source-backed crash as the active failure, and continues within the same budget.
-- `fixed`: stop editing. Report the source change and verification evidence.
-- `budget-exhausted`: stop automatic editing and report the iteration history.
-- `blocked`: stop because the available evidence is not trustworthy enough for another autonomous patch.
+- `needs-evidence`: do not patch. Improve bounded source/caller evidence first.
+- `needs-fix`: inspect, propose, patch, build, reproduce, verify.
+- `retry-fix`: the same crash survived. Revise the hypothesis instead of claiming success.
+- `needs-reproduction`: the run stopped too early. Reproduce again without consuming another edit attempt.
+- `changed-failure`: the active failure changed. Preserve the original root fingerprint, re-baseline the new failure, and diagnose it before editing again.
+- `fixed`: stop editing and report the evidence.
+- `budget-exhausted`: stop automatic editing and report iteration history.
+- `blocked`: stop because trustworthy evidence is unavailable.
 
-After repeated identical `not-fixed` verification results, obey a `broaden-diagnosis` action before editing again. Inspect earlier caller/provenance evidence and the producer/ownership boundary rather than repeatedly adding guards at the final dereference.
+### Rollback policy
 
-## What the intelligent diagnosis means
+Do **not** automatically revert a patch just because verification reports `changed-failure`. A changed crash can mean either a regression or that the original fix exposed a downstream defect. qwen-dap-mcp therefore does not automatically emit a rollback action. Preserve the patch, diagnose the changed failure, compare the causal evidence, and only use normal source-control tools to revert when the source/build evidence supports that decision.
 
-Read the diagnosis in this order:
+## Read the intelligent diagnosis in this order
 
 1. `classification`: crash/stop family and confidence.
-2. `faultLocation`: raw debugger stop frame. It can be inside `ntdll`, `ucrtbase`, libc, libstdc++, an allocator, or another runtime.
+2. `faultLocation`: raw debugger stop frame.
 3. `projectFrame`: first likely application-controlled frame.
 4. `frameSelection`: scored stack-frame evidence and reasons runtime/system frames were skipped.
-5. `operandAnalysis`: selected instruction, referenced registers, memory operands, and register↔local bindings.
-6. `callChain`: project callers, runtime boundary, repeated frames, pointer provenance, and a root-cause candidate.
-7. `hypotheses`: ranked evidence-based explanations.
-8. `fixWorkflow`: candidate location and suggested change direction.
-9. `verificationBaseline`: compact failure signature used by manual verification and the autonomous state machine.
+5. `operandAnalysis`: selected project-frame instruction, operands, registers, and local bindings.
+6. `callChain`: project callers, runtime boundary, repeated frames, pointer provenance, root-cause candidate.
+7. `rootCauseBacktrack` in autonomous mode: bounded runtime provenance toward producer candidates.
+8. `hypotheses`: ranked evidence-based explanations.
+9. `fixWorkflow`: candidate location and suggested change direction.
+10. `verificationBaseline`: compact failure signature used for verification.
+11. `verificationQuality`: strength of debugger evidence after a verification run.
 
-A high project-frame confidence means “very likely project code”, not “proven root cause”. Do not turn a heuristic into certainty. Prefer wording such as “the debugger shows”, “consistent with”, or “strong candidate” until operand/data-flow and reproduction evidence agree.
+A high project-frame confidence means “very likely project code”, not “proven root cause”. Do not turn a heuristic into certainty.
 
-## Automatic project-frame selection
+## Fault frame versus project frame
 
-The bridge prefers:
+When the raw crash is inside runtime/system code, keep these two views separate:
 
-- source paths under explicit `analysis.projectRoots`,
-- modules matching `analysis.projectModules` or the launched program,
-- source-backed non-runtime frames,
-- negative weights for known runtime/system modules and paths.
+- `faultLocation` / `faultCorrelation`: the literal stopped instruction/frame reported by the debugger.
+- `projectFrame` / `operandAnalysis`: the first likely application-controlled frame and its instruction context.
 
-When the stack begins in system/runtime code, pass project hints whenever known.
+`debug_source_disassembly` intentionally returns the raw `faultCorrelation` alongside the selected `projectFrame` and its `operandAnalysis`. Do not assume the project frame is the literal machine instruction that faulted. Check `operandAnalysis.likelyFaultOperand.faultingFrame`.
 
-For an already stopped session:
+## Operand → register → variable reasoning
 
-```text
-debug_diagnose_stop(
-  analysis={
-    projectRoots:["C:\\repo\\my-project"],
-    projectModules:["myapp.exe"],
-    callerDepth:3
-  }
-)
-```
-
-Use `debug_source_disassembly()` when you need a focused machine-code view of `projectFrame` and its operand/register/local mapping.
-
-## Operand ↔ register ↔ variable reasoning
-
-Do not claim “RAX is zero, therefore null dereference” unless the instruction actually uses RAX in the relevant memory operand.
+Do not claim “RAX is zero, therefore null dereference” unless the relevant instruction actually uses RAX as a memory operand.
 
 A stronger chain is:
 
@@ -127,28 +145,58 @@ local Widget* = 0x0
 local numeric value matches RAX
 ```
 
-If `projectFrame.index !== 0`, its instruction is project call-site/context evidence, not automatically the literal faulting machine instruction. Check `operandAnalysis.likelyFaultOperand.faultingFrame`.
+Poison/debug values such as `0xFEEEFEEE`, `0xDDDDDDDD`, `0xCDCDCDCD`, `0xCCCCCCCC`, and `0xDEADBEEF` strengthen lifetime/uninitialized-memory hypotheses but are not standalone proof.
 
-Poison/debug patterns such as `0xFEEEFEEE`, `0xDDDDDDDD`, `0xCDCDCDCD`, `0xCCCCCCCC`, and `0xDEADBEEF` can strengthen lifetime/uninitialized-memory hypotheses, but still are not standalone proof.
+## Root-cause backtracking
 
-## Call-chain cause analysis
+`rootCauseBacktrack` is runtime provenance, not static dataflow analysis.
 
-Use `callChain` to reason backwards from symptom to producer:
+Use:
 
-- `runtimeBoundaryDepth > 0`: raw fault sits above project code; inspect the first project call site and arguments feeding the runtime.
-- `projectCallerFrames`: bounded project callers that may have produced the bad value.
-- `provenance`: same pointer-like numeric value across frames.
-- `repeatedFunctions`: possible recursion/re-entry evidence.
+- `target`: suspicious register/local/value/instruction being traced.
+- `runtimeTrail`: consumer and matching values visible through bounded caller frames.
+- `producerCandidates`: earlier project-controlled frames worth reading in source.
+- `confidence`: strength of the runtime trail.
+- `limitation`: reminder that exact assignments/returns still need source confirmation.
 
-A distinctive poison value repeated through multiple callers can be high-confidence provenance. Repeated `0x0` values are intentionally low-confidence because unrelated pointers can independently be null.
+Prefer the earliest source-confirmed producer or ownership boundary over a defensive guard at the final crash site.
 
-For heap corruption, allocator/runtime failure may occur well after the original invalid write/free. Prefer ASan, PageHeap, allocator diagnostics, or a targeted live data-breakpoint investigation when available.
+Repeated `0x0` values across frames are intentionally weak provenance because unrelated pointers may independently be null. Distinctive poison values repeated across frames are stronger.
 
-## Manual Diagnose → Fix → Rebuild → Reproduce → Verify
+For heap corruption, allocator/runtime failure can occur well after the original invalid write/free. Prefer ASan, PageHeap, allocator diagnostics, or targeted data breakpoints when available.
 
-Use the manual workflow when you do not want the autonomous state machine.
+## Verification quality
 
-Diagnose with `debug_this_crash(...)`, read `fixWorkflow`, edit with normal coding tools, rebuild with matching debug symbols, then reproduce with the original baseline:
+`verificationQuality.score` is a 0–100 score for **debugger evidence only**.
+
+It never fabricates external evidence. The following remain `external-unverified` until the coding/build agent actually reports them:
+
+- build success
+- project tests
+- exact reproduction inputs
+
+A strong debugger score does not replace compilation or tests.
+
+Interpret verification verdicts:
+
+- `fixed`: the complete reproduction reached a clean successful terminal outcome, currently exit code 0.
+- `not-fixed`: the same failure signature reproduced.
+- `changed-failure`: execution still crashed, but the active signature changed.
+- `inconclusive`: not enough evidence to claim success or failure.
+
+Windows source paths are compared canonically for verification, so path separator and drive/path casing differences alone must not create a false `changed-failure`.
+
+A breakpoint, entry stop, pause, step, or configured first-chance exception is not proof of a fix. Finish the original reproduction.
+
+## First-chance/configured exceptions
+
+A DAP exception stop whose exception info indicates an always/configured break can be a first-chance diagnostic stop rather than an unhandled fatal crash. Do not automatically patch from that stop alone. Continue the reproduction or gather stronger fatal evidence.
+
+## Manual diagnose → fix → rebuild → reproduce → verify
+
+Autonomous mode is optional.
+
+Diagnose, preserve the returned baseline, edit with normal coding tools, rebuild with matching symbols, then run:
 
 ```text
 debug_this_crash(
@@ -163,14 +211,7 @@ debug_this_crash(
 )
 ```
 
-Interpret `workflow.verification.verdict`:
-
-- `fixed`: the complete reproduction reached a clean successful terminal outcome (currently a clean exit code 0).
-- `not-fixed`: the same failure signature reproduced.
-- `changed-failure`: execution still crashed but the failure signature changed.
-- `inconclusive`: there is not enough evidence to claim success or failure.
-
-A breakpoint, entry stop, pause, or step is not proof of a fix. Finish the original reproduction. After debugger verification, run the project's normal automated tests too.
+After debugger verification, run the project's normal automated tests too.
 
 ## Crash dumps
 
@@ -186,7 +227,21 @@ debug_this_crash(
 )
 ```
 
-A dump is frozen postmortem state. Never call live execution/watchpoint operations on it. Valid inspection includes `debug_snapshot`, `debug_diagnose_stop`, `debug_source_disassembly`, `debug_threads`, `debug_stack`, `debug_scopes`, `debug_variables`, `debug_modules`, `debug_disassemble`, `debug_read_memory`, and `debug_exception_info` when supported.
+A dump is frozen postmortem state. Never call live execution/watchpoint operations on it.
+
+Valid inspection includes:
+
+- `debug_snapshot`
+- `debug_diagnose_stop`
+- `debug_source_disassembly`
+- `debug_threads`
+- `debug_stack`
+- `debug_scopes`
+- `debug_variables`
+- `debug_modules`
+- `debug_disassemble`
+- `debug_read_memory`
+- `debug_exception_info` when supported
 
 Never use these on a dump:
 
@@ -198,13 +253,13 @@ Never use these on a dump:
 
 Finish dump analysis with `debug_disconnect(terminateDebuggee=false)`.
 
-A dump can seed diagnosis, but verification after a source fix should use a rebuilt live reproduction or a newly generated dump, not the stale original artifact.
+A stale original dump cannot verify a source fix. Use a rebuilt live reproduction or a newly generated dump.
 
-## Raw/live fallback tools
+## Raw/live fallback
 
 Use lower-level tools only for a concrete unanswered question from the high-level diagnosis.
 
-Typical live fallback:
+Typical fallback:
 
 ```text
 1. debug_codelldb_info()
@@ -221,7 +276,7 @@ Typical live fallback:
 
 ### Unexpected variable write
 
-Use a live data breakpoint rather than repeatedly stepping:
+Use a live data breakpoint instead of repeatedly stepping:
 
 ```text
 1. debug_snapshot()
@@ -233,32 +288,26 @@ Use a live data breakpoint rather than repeatedly stepping:
 7. debug_set_data_breakpoints(breakpoints=[])
 ```
 
-### Other targeted controls
-
-- `debug_set_function_breakpoints`: known suspicious function.
-- `debug_set_source_breakpoints`: conditional/hit-count/log source stop.
-- `debug_set_instruction_breakpoints`: exact live instruction stop after resolving an instruction reference.
-- `debug_evaluate`: narrow expression inspection; remember debugger evaluation can have side effects.
-- `debug_read_memory`: bounded memory only when structured variables/disassembly do not answer the question.
-
 ## Windows CodeLLDB pause caveat
 
-A requested `debug_pause` on Windows can surface as a `DebugBreak` / `0x80000003` exception-like stop. Do not classify that alone as an application crash when it immediately follows a requested pause.
+A requested `debug_pause` on Windows can surface as `DebugBreak` / `0x80000003`. Do not classify that alone as an application crash when it immediately follows a requested pause.
 
-## Root-cause / autonomous completion standard
+## Completion standard
 
 A strong final result records:
 
-- how state was captured,
-- raw exception/stop evidence,
-- raw fault frame,
-- selected project frame and selection reasons,
-- operand/register/variable evidence,
-- caller/provenance evidence,
-- most likely cause and confidence,
-- source change actually made,
-- rebuild result,
-- autonomous iteration history or manual verification verdict,
-- exact clean reproduction evidence when claiming `fixed`.
+- how state was captured
+- raw exception/stop evidence
+- raw fault frame
+- selected project frame and selection reasons
+- operand/register/variable evidence
+- caller/provenance/backtrack evidence
+- most likely cause and confidence
+- source change actually made
+- rebuild result
+- project test result
+- autonomous iteration history or manual verification verdict
+- verification quality and its external-unverified fields
+- exact clean reproduction evidence when claiming `fixed`
 
-Never call a bug fixed solely because the source looks plausible or because execution reached a breakpoint without crashing.
+Never call a bug fixed solely because the source looks plausible or execution reached a nonfatal stop.
