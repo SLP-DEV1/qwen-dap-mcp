@@ -1,0 +1,126 @@
+name: Apply v0.13 lldb-dap high-level integration
+
+on:
+  push:
+    branches:
+      - feature/v0.13-lldb-dap
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/v0.13-lldb-dap
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Patch high-level workflow
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/tools/agent-diagnostics.ts';
+          let text = fs.readFileSync(path, 'utf8');
+
+          function replaceOnce(from, to, label) {
+            const first = text.indexOf(from);
+            if (first < 0) throw new Error(`Missing patch anchor: ${label}`);
+            if (text.indexOf(from, first + from.length) >= 0) throw new Error(`Non-unique patch anchor: ${label}`);
+            text = text.slice(0, first) + to + text.slice(first + from.length);
+          }
+
+          replaceOnce(
+            "import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';",
+            "import { buildCodeLldbLaunchConfiguration, discoverCodeLldb } from '../adapters/codelldb.js';\nimport { buildLldbDapLaunchConfiguration, discoverLldbDap } from '../adapters/lldb-dap.js';",
+            'lldb-dap import',
+          );
+
+          replaceOnce(
+            "logger.warn('Failed to reset owned CodeLLDB session after high-level workflow failure', {",
+            "logger.warn('Failed to reset owned debugger session after high-level workflow failure', {",
+            'generic cleanup log',
+          );
+
+          replaceOnce(
+            "'Preferred high-level native crash workflow. Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB and launch a local binary, or live with an already initialized generic DAP adapter. Do not use codelldb/live when executing or attaching to the target is not authorized: those modes can run application code and cause its normal side effects, while current/dump only inspect stopped evidence. workflow.stage selects initial diagnosis, verification against a prior baseline, or the bounded autonomous cycle. Returns runtime evidence, diagnosis, verification/autonomous metadata, and debugger status with deterministic fixed/blocked/budget-exhausted outcomes where applicable.',",
+            "'Preferred high-level native crash workflow. Use mode=current for an already stopped session, dump for read-only postmortem analysis, codelldb to discover CodeLLDB and launch a local binary, lldb-dap to discover upstream LLVM lldb-dap and launch a local binary, or live with an already initialized generic DAP adapter. Do not use codelldb/lldb-dap/live when executing or attaching to the target is not authorized: those modes can run application code and cause its normal side effects, while current/dump only inspect stopped evidence. workflow.stage selects initial diagnosis, verification against a prior baseline, or the bounded autonomous cycle. Returns runtime evidence, diagnosis, verification/autonomous metadata, and debugger status with deterministic fixed/blocked/budget-exhausted outcomes where applicable.',",
+            'tool description',
+          );
+
+          replaceOnce(
+            "mode: z.enum(['current', 'live', 'codelldb', 'dump']).default('current').describe('current inspects an existing stop; live runs launch/attach through an initialized DAP session; codelldb starts CodeLLDB and launches program; dump opens a frozen core/minidump.'),",
+            "mode: z.enum(['current', 'live', 'codelldb', 'lldb-dap', 'dump']).default('current').describe('current inspects an existing stop; live runs launch/attach through an initialized DAP session; codelldb starts CodeLLDB; lldb-dap starts upstream LLVM lldb-dap; dump opens a frozen core/minidump.'),",
+            'mode schema',
+          );
+
+          replaceOnce(
+            "program: z.string().min(1).optional().describe('Required for mode=codelldb; optional for dump symbol resolution. Local path to the native executable.'),",
+            "program: z.string().min(1).optional().describe('Required for mode=codelldb and mode=lldb-dap; optional for CodeLLDB dumps but required when dumpAdapter=lldb-dap. Local path to the native executable.'),",
+            'program schema',
+          );
+
+          replaceOnce(
+            "args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in mode=codelldb.'),",
+            "args: z.array(z.string()).optional().describe('Command-line arguments passed to the launched program in mode=codelldb or mode=lldb-dap.'),",
+            'args schema',
+          );
+
+          replaceOnce(
+            "cwd: z.string().optional().describe('Working directory for CodeLLDB/target launch and a project-root hint for diagnosis.'),",
+            "cwd: z.string().optional().describe('Working directory for the selected debugger/target launch and a project-root hint for diagnosis.'),",
+            'cwd schema',
+          );
+
+          replaceOnce(
+            "env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in mode=codelldb.'),",
+            "env: z.record(z.string(), z.string()).optional().describe('Environment variables supplied to the launched program in mode=codelldb or mode=lldb-dap.'),",
+            'env schema',
+          );
+
+          replaceOnce(
+            "stopOnEntry: z.boolean().default(false).describe('When true in mode=codelldb, request an initial debugger stop at program entry before normal execution.'),",
+            "stopOnEntry: z.boolean().default(false).describe('When true in mode=codelldb or mode=lldb-dap, request an initial debugger stop at program entry before normal execution.'),",
+            'stopOnEntry schema',
+          );
+
+          replaceOnce(
+            "adapterPath: z.string().min(1).optional().describe('Optional explicit CodeLLDB executable path for codelldb/dump modes; omit to auto-discover it.'),",
+            "adapterPath: z.string().min(1).optional().describe('Optional explicit debugger-adapter executable path for codelldb/lldb-dap/dump modes; omit to auto-discover the selected adapter.'),\n        dumpAdapter: z.enum(['codelldb', 'lldb-dap']).default('codelldb').describe('For mode=dump, choose CodeLLDB compatibility behavior or upstream LLVM lldb-dap coreFile loading.'),",
+            'adapter schema',
+          );
+
+          replaceOnce(
+            "      adapterPath,\n      requestTimeoutMs,",
+            "      adapterPath,\n      dumpAdapter,\n      requestTimeoutMs,",
+            'destructure dumpAdapter',
+          );
+
+          replaceOnce(
+            "              ...(adapterPath ? { adapterPath } : {}),\n              ...(cwd ? { cwd } : {}),",
+            "              adapter: dumpAdapter,\n              ...(adapterPath ? { adapterPath } : {}),\n              ...(cwd ? { cwd } : {}),",
+            'dump adapter forwarding',
+          );
+
+          const codelldbAnchor = "          if (mode === 'codelldb') {\n";
+          const lldbDapBlock = `          if (mode === 'lldb-dap') {\n            if (!program) throw new DapError(\"debug_this_crash mode='lldb-dap' requires program.\");\n\n            const launchConfiguration = buildLldbDapLaunchConfiguration({\n              program,\n              ...(args ? { args } : {}),\n              ...(cwd ? { cwd } : {}),\n              ...(env ? { env } : {}),\n              stopOnEntry,\n            });\n            const adapter = discoverLldbDap({\n              ...(adapterPath ? { explicitPath: adapterPath } : {}),\n            });\n\n            let adapterStarted = false;\n            try {\n              const capabilities = await session.start({\n                command: adapter.command,\n                adapterId: 'lldb-dap',\n                ...(cwd ? { cwd } : {}),\n                requestTimeoutMs,\n              });\n              adapterStarted = true;\n              const run = await runToStop(session, {\n                request: 'launch',\n                configuration: launchConfiguration,\n                ...(breakpoints ? { breakpoints: breakpoints as SourceBreakpointGroup[] } : {}),\n                timeoutMs,\n                snapshot: {\n                  ...snapshotOptions,\n                  includeDisassembly: true,\n                  includeModules: true,\n                  includeExceptionInfo: true,\n                },\n              });\n              const diagnosis = run.snapshot\n                ? await diagnoseSnapshot(session, run.snapshot, snapshotOptions, analysisOptions)\n                : undefined;\n              const terminal = run.snapshot\n                ? undefined\n                : terminalForVerification(run.outcome as { event: 'exited' | 'terminated'; body?: unknown });\n              return {\n                mode,\n                adapter,\n                capabilities,\n                run,\n                diagnosis: diagnosis\n                  ?? terminalOutcomeDiagnosis(run.outcome as { event: 'exited' | 'terminated'; body?: unknown }),\n                workflow: workflowMetadata(stage, baseline, diagnosis, terminal, agentState, maxIterations),\n                status: session.snapshot(),\n              };\n            } catch (error) {\n              if (adapterStarted) return await resetOwnedSessionAfterFailure(session, error);\n              throw error;\n            }\n          }\n\n`;
+          replaceOnce(codelldbAnchor, lldbDapBlock + codelldbAnchor, 'lldb-dap high-level branch');
+
+          fs.writeFileSync(path, text);
+          NODE
+
+          npm ci --ignore-scripts
+          npm run check
+
+      - name: Commit tested integration
+        shell: bash
+        run: |
+          git add src/tools/agent-diagnostics.ts
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: integrate lldb-dap into debug_this_crash'
+          git push origin HEAD:feature/v0.13-lldb-dap
