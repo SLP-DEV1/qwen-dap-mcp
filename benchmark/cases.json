@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "null-pointer",
+      "source": "examples/crash-lab/null-pointer/main.cpp",
+      "expectedFailureFamily": "access-violation-or-segmentation-fault",
+      "reproduction": "npm run demo:repro -- null-pointer"
+    },
+    {
+      "id": "divide-by-zero",
+      "source": "examples/crash-lab/divide-by-zero/main.cpp",
+      "expectedFailureFamily": "divide-by-zero-or-sigfpe",
+      "reproduction": "npm run demo:repro -- divide-by-zero"
+    },
+    {
+      "id": "bad-call-target",
+      "source": "examples/crash-lab/bad-call-target/main.cpp",
+      "expectedFailureFamily": "access-violation-or-segmentation-fault",
+      "reproduction": "npm run demo:repro -- bad-call-target"
+    }
+  ]
+}
