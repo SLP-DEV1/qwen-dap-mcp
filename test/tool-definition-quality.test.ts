@@ -4,11 +4,13 @@ import { z } from 'zod';
 import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
+import { registerDifferentialTools } from '../src/tools/register-differential-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
+import { registerValueTracingTool } from '../src/tools/value-tracing.js';
 import { AGENT_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
 
 type ToolDefinition = {
@@ -31,14 +33,17 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
   };
   const agentServer = filterToolRegistrar(server as never, 'agent');
   const session = {} as never;
+  const registry = new DapSessionRegistry();
 
-  registerSessionTools(agentServer as never, new DapSessionRegistry());
+  registerSessionTools(agentServer as never, registry);
+  registerDifferentialTools(agentServer as never, registry);
   registerDebugTools(agentServer as never, session);
   registerDumpTools(agentServer as never, session);
   registerRunToStopTool(agentServer as never, session);
   registerAgentDiagnosticTools(agentServer as never, session);
   registerHangDiagnosticTool(agentServer as never, session);
   registerFindWriterTool(agentServer as never, session);
+  registerValueTracingTool(agentServer as never, session);
 
   return definitions;
 }
@@ -80,6 +85,7 @@ test('agent tool annotations distinguish inspection from target execution', () =
   const definitions = collectToolDefinitions();
 
   for (const name of [
+    'debug_compare_runs',
     'debug_diagnose_stop',
     'debug_source_disassembly',
     'debug_open_dump',
@@ -95,6 +101,7 @@ test('agent tool annotations distinguish inspection from target execution', () =
   for (const name of [
     'debug_this_crash',
     'debug_this_hang',
+    'debug_trace_value',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
@@ -111,6 +118,7 @@ test('agent tool annotations distinguish inspection from target execution', () =
   for (const name of [
     'debug_this_crash',
     'debug_this_hang',
+    'debug_trace_value',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
