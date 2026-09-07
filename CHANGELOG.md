@@ -4,6 +4,19 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.17.1 - 2026-09-07
+
+### Fixed / hardened
+
+- Fixed hang capture so evidence collection stops at the aggregate/global operation deadline instead of continuing after the deadline has expired.
+- Consolidated native debugger smoke coverage into tiered, path-aware CI gates while preserving CodeLLDB, LLDB DAP, GDB DAP, remote, dump, differential, and multi-session validation before release.
+
+### Maintenance
+
+- Updated the runtime validation dependency to Zod 4.5.4.
+- Updated the TypeScript execution/runtime tooling to tsx 4.23.13 and Node type definitions to 26.4.0.
+- Refreshed CI actions/toolchain dependencies, package discoverability, support documentation, and release guidance after v0.17.0.
+
 ## 0.17.0 - 2026-08-26
 
 ### Added
