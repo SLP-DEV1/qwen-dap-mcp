@@ -8,6 +8,7 @@ import test from 'node:test';
 const scriptPath = fileURLToPath(new URL('../scripts/build-extension-package.mjs', import.meta.url));
 const sourcePath = fileURLToPath(new URL('../src/index.ts', import.meta.url));
 const sourceDirectory = fileURLToPath(new URL('../src', import.meta.url));
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 
 test('extension packaging refuses destructive output directories inside the project', async () => {
   const before = await readFile(sourcePath, 'utf8');
@@ -20,4 +21,15 @@ test('extension packaging refuses destructive output directories inside the proj
   assert.match(`${result.stdout}\n${result.stderr}`, /outside the generated release subtree/i);
   await access(sourcePath, constants.R_OK);
   assert.equal(await readFile(sourcePath, 'utf8'), before, 'source file must remain untouched');
+});
+
+test('npm CLI bin metadata stays publish-normalized and points at a shebang entrypoint', async () => {
+  const packageJson = JSON.parse(await readFile(packagePath, 'utf8')) as {
+    bin?: Record<string, string>;
+  };
+  const cliPath = packageJson.bin?.['qwen-dap-mcp'];
+
+  assert.equal(cliPath, 'dist/index.js');
+  assert.doesNotMatch(cliPath ?? '', /^\.\//, 'npm bin path must not require publish-time normalization');
+  assert.match(await readFile(sourcePath, 'utf8'), /^#!\/usr\/bin\/env node\r?\n/);
 });
