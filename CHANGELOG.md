@@ -4,6 +4,13 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.17.2 - 2026-09-07
+
+### Fixed / packaging
+
+- Normalized the npm CLI `bin` entry to `dist/index.js` so current npm no longer needs to auto-correct the executable path during publish.
+- Added regression coverage requiring the npm CLI path to stay publish-normalized and the executable entrypoint to retain its Node shebang.
+
 ## 0.17.1 - 2026-09-07
 
 ### Fixed / hardened
