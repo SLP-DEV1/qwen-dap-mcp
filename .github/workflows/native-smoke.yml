@@ -107,9 +107,15 @@ jobs:
         run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fd:test\fixtures\native-smoke.pdb /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
       - name: Download latest CodeLLDB
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $headers = @{ 'User-Agent' = 'qwen-dap-mcp-ci' }
+          $headers = @{
+            'User-Agent' = 'qwen-dap-mcp-ci'
+            'Authorization' = "Bearer $env:GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
           $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/vadimcn/codelldb/releases/latest'
           $asset = $release.assets | Where-Object { $_.name -match '^codelldb-(win32-x64|x86_64-windows)\.vsix$' } | Select-Object -First 1
           if (-not $asset) { throw "No Windows x64 CodeLLDB VSIX found in latest release $($release.tag_name)" }
@@ -178,9 +184,15 @@ jobs:
           $global:LASTEXITCODE = 0
       - name: Download latest CodeLLDB
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $headers = @{ 'User-Agent' = 'qwen-dap-mcp-ci' }
+          $headers = @{
+            'User-Agent' = 'qwen-dap-mcp-ci'
+            'Authorization' = "Bearer $env:GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
           $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/vadimcn/codelldb/releases/latest'
           $asset = $release.assets | Where-Object { $_.name -match '^codelldb-(win32-x64|x86_64-windows)\.vsix$' } | Select-Object -First 1
           if (-not $asset) { throw "No Windows x64 CodeLLDB VSIX found in latest release $($release.tag_name)" }
