@@ -216,15 +216,18 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
         if (args.action === 'doctor') return structuredResult({ action: 'doctor', rr: discoverRr({ ...(args.rrPath ? { explicitPath: args.rrPath } : {}) }), security: securityProfileSnapshot() });
         if (args.action === 'record') {
           if (!args.program) throw new DapError('debug_time_travel action=record requires program.');
-          return structuredResult(recordWithRr({ program: args.program, args: args.args, cwd: args.cwd, env: args.env, traceDir: args.traceDir, timeoutMs: args.timeoutMs, rrPath: args.rrPath }));
+          return structuredResult({ action: 'record' as const, ...recordWithRr({ program: args.program, args: args.args, cwd: args.cwd, env: args.env, traceDir: args.traceDir, timeoutMs: args.timeoutMs, rrPath: args.rrPath }) });
         }
         if (args.action === 'replay-plan') {
           if (!args.traceDir) throw new DapError('debug_time_travel action=replay-plan requires traceDir.');
-          return structuredResult(buildRrReplayPlan({
-            traceDir: args.traceDir,
-            port: args.port,
-            ...(args.rrPath ? { rrPath: args.rrPath } : {}),
-          }));
+          return structuredResult({
+            action: 'replay-plan' as const,
+            ...buildRrReplayPlan({
+              traceDir: args.traceDir,
+              port: args.port,
+              ...(args.rrPath ? { rrPath: args.rrPath } : {}),
+            }),
+          });
         }
         const replay = replayManagerFor(session);
         if (args.action === 'replay-status') {
