@@ -15,6 +15,20 @@ When a known-good reproduction and a failing/changed reproduction can be stopped
 
 Do not use a crash-only interpretation for a hang snapshot and do not turn a hang heuristic, static runtime difference, or observed writer into certainty.
 
+## Advanced runtime workflows
+
+Use `debug_causal_trace` when the current crash/differential evidence has already identified a suspicious value and you need a bounded consumer-to-writer producer chain. It resumes the live target through the existing watchpoint tracing path, so do not use it for frozen dumps or unsafe-to-resume targets.
+
+Use `debug_progress_probe` when a process appears hung but one snapshot cannot distinguish blocking from spinning. It deliberately resumes and pauses the target across short bounded intervals. Treat `probable-busy-loop` as sampling evidence, not proof that no useful work occurs.
+
+Use `debug_reverse_execution` only when the adapter advertises reverse execution support. `stepBack` and `reverseContinue` are target-control operations and remain subject to DAP policy and HOL Guard.
+
+Use `debug_runtime_report` to produce a shareable normalized crash fingerprint plus Symbol Doctor state, sanitizer-output correlation, poison-pattern memory hazards, ABI argument-register mapping, and recent debugger output. Use `debug_cluster_crashes` to group several such reports. Use `debug_regression_oracle` for bisect-style reproduction classification; a changed crash is not automatically a good revision.
+
+Use `debug_child_requests` to inspect bounded DAP reverse requests such as `startDebugging`. The bridge intentionally keeps those requests fail-closed and does not silently create or authorize child sessions.
+
+See `docs/advanced-runtime-debugging.md` for the complete evidence and safety model.
+
 ## Differential and causal debugging
 
 For a known-good versus failing comparison, keep the two runs in different DAP sessions:
