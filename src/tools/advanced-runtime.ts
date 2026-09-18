@@ -121,10 +121,11 @@ export function detectMemoryHazards(snapshot: RuntimeSnapshot) {
 
 export function parseSanitizerEvidence(lines: readonly string[]) {
   const findings: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
   const joined = lines.join('\n');
   const patterns: Array<[RegExp, string]> = [
-    [/AddressSanitizer:\s*([^\n]+)/i, 'asan'],
     [/ERROR:\s*AddressSanitizer:\s*([^\n]+)/i, 'asan'],
+    [/AddressSanitizer:\s*([^\n]+)/i, 'asan'],
     [/UndefinedBehaviorSanitizer|runtime error:\s*([^\n]+)/i, 'ubsan'],
     [/ThreadSanitizer:\s*([^\n]+)/i, 'tsan'],
     [/LeakSanitizer:\s*([^\n]+)/i, 'lsan'],
@@ -132,10 +133,14 @@ export function parseSanitizerEvidence(lines: readonly string[]) {
   for (const [pattern, sanitizer] of patterns) {
     const match = pattern.exec(joined);
     if (!match) continue;
+    const summary = (match[1] ?? match[0]).trim().slice(0, 500);
+    const key = `${sanitizer}\u0000${summary.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     findings.push({
       sanitizer,
-      summary: (match[1] ?? match[0]).trim().slice(0, 500),
-      evidenceSource: 'adapter-stderr',
+      summary,
+      evidenceSource: 'debugger-output',
     });
   }
   return findings;
