@@ -468,7 +468,7 @@ export const debugAdapterDoctorOutputSchema = z.object({
 }).catchall(z.unknown());
 
 export const debugTimeTravelOutputSchema = z.object({
-  action: z.enum(['doctor', 'record', 'replay-plan', 'reverse']).optional(),
+  action: z.enum(['doctor', 'record', 'replay-plan', 'replay-start', 'replay-status', 'replay-stop', 'reverse']).optional(),
 }).catchall(z.unknown());
 
 export const AGENT_OUTPUT_SCHEMAS = {
