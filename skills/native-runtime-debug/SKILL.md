@@ -19,7 +19,7 @@ Do not use a crash-only interpretation for a hang snapshot and do not turn a han
 
 Prefer `debug_adaptive_evidence` when the required evidence depth is unknown and a cheap first pass may be sufficient. Use the richer `debug_runtime_report` directly when you already need modules, disassembly, crash-family fingerprints, API argument analysis, stack-integrity evidence, competing hypotheses, and the breakpoint plan.
 
-Use `debug_time_travel` for record/replay work. `record` executes only the explicit program under rr with literal argv and no shell; `replay-plan` returns a loopback GDB handoff rather than silently starting an open debug server. Reverse execution still requires an adapter that advertises reverse support.
+Use `debug_time_travel` for record/replay work. `record` executes only the explicit program under rr with literal argv and no shell; `replay-plan` returns a loopback GDB handoff; `replay-start/status/stop` manage only that fixed loopback rr process and can optionally use the hardened GDB attach path. Reverse execution still requires an adapter that advertises reverse support.
 
 Use `debug_trace_lifetime` for suspected stale object ownership or use-after-free. Prefer sanitizer allocation/free provenance over poison patterns, and remember that an observed writer can propagate an already-invalid pointer.
 
