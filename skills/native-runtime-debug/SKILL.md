@@ -47,7 +47,7 @@ Use `debug_reverse_execution` only when the adapter advertises reverse execution
 
 Use `debug_runtime_report` to produce a shareable normalized crash fingerprint plus Symbol Doctor state, sanitizer-output correlation, poison-pattern memory hazards, ABI argument-register mapping, and recent debugger output. Use `debug_cluster_crashes` to group several such reports. Use `debug_regression_oracle` for bisect-style reproduction classification; a changed crash is not automatically a good revision.
 
-Use `debug_child_requests` to inspect bounded DAP reverse requests such as `startDebugging`. The bridge intentionally keeps those requests fail-closed and does not silently create or authorize child sessions.
+Use `debug_child_requests` to inspect bounded DAP reverse requests such as `startDebugging`. The transport keeps them fail-closed. Only when `QWEN_DAP_MCP_CHILD_DEBUG=1` and the target is explicitly authorized, `debug_adopt_child` may sanitize one captured launch/PID-attach request and create an isolated child session.
 
 See `docs/advanced-runtime-debugging.md` for the complete evidence and safety model.
 
