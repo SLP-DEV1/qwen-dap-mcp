@@ -143,9 +143,9 @@ async function captureTimeline(session: GuardedDapSession, options: { samples: n
       if (sample === options.samples) break;
       const resumeThread = threads[0];
       if (!resumeThread) break;
-      await session.continueExecution(resumeThread.id, false, Math.max(1000, options.intervalMs * 4));
+      await session.continueExecution(resumeThread.id, false, Math.max(5000, options.intervalMs * 4));
       await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
-      await session.pause(resumeThread.id, true, Math.max(1000, options.intervalMs * 4));
+      await session.pause(resumeThread.id, true, Math.max(5000, options.intervalMs * 4));
     }
     const lockGraph = buildLockOwnerGraph(observations);
     const byThread = new Map<number, typeof observations>();
