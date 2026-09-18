@@ -4,6 +4,15 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.18.1 - 2026-09-18
+
+### Fixed / release hardening
+
+- Shortened the MCP Registry `server.json` description to satisfy the registry's 100-character validation limit and added a regression test enforcing that limit before publication.
+- Added deterministic `QWEN_DAP_MCP_LLVM_READOBJ` / `QWEN_DAP_MCP_LLVM_PDBUTIL` tool overrides and exact Windows CI wiring so PE/PDB identity checks do not depend on PATH propagation.
+- Hardened npm publication recovery for versions accepted into npm's staged state: the specific staged-version E409 is treated as accepted and metadata visibility is polled for up to five minutes before MCP publication.
+- Made the release workflow retrigger when reusable native, HOL Guard, extension, container, security, or registry-publisher workflows change.
+
 ## 0.18.0 - 2026-09-18
 
 ### Hardening / pre-release
