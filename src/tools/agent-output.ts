@@ -275,6 +275,7 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_runtime_report: debugAdvancedOutputSchema,
   debug_cluster_crashes: debugAdvancedOutputSchema,
   debug_regression_oracle: debugAdvancedOutputSchema,
+  debug_child_requests: debugAdvancedOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,
