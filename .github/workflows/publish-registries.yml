@@ -140,7 +140,24 @@ jobs:
 
       - name: Publish package to npm
         if: ${{ inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
-        run: npm publish --access public
+        shell: bash
+        run: |
+          set +e
+          npm_output="$(npm publish --access public 2>&1)"
+          npm_status=$?
+          set -e
+          printf '%s\n' "$npm_output"
+
+          if [ "$npm_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if grep -Fq 'Cannot publish over previously staged version' <<<"$npm_output"; then
+            echo 'npm reports that this exact version is already staged; continuing with registry visibility verification.'
+            exit 0
+          fi
+
+          exit "$npm_status"
 
       - name: Remove bootstrap npm token from runner config
         if: ${{ always() && inputs.publish_npm && steps.npm_version.outputs.exists != 'true' }}
@@ -151,13 +168,13 @@ jobs:
         if: ${{ inputs.publish_mcp }}
         shell: bash
         run: |
-          for attempt in {1..20}; do
+          for attempt in {1..60}; do
             published_mcp_name="$(npm view "${{ steps.metadata.outputs.package }}@${{ steps.metadata.outputs.version }}" mcpName 2>/dev/null || true)"
             if [ "$published_mcp_name" = "${{ steps.metadata.outputs.server }}" ]; then
               echo "npm ownership metadata verified: $published_mcp_name"
               exit 0
             fi
-            sleep 3
+            sleep 5
           done
           echo '::error::The exact package/version is not visible on npm with the expected mcpName. Publish npm first or check the npm scope/credentials.'
           exit 1
