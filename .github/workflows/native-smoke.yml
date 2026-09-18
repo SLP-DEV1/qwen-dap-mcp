@@ -198,11 +198,17 @@ jobs:
           npm run build
           mkdir -p build/gdb-dap-smoke
           g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/gdb-dap-smoke.cpp -o build/gdb-dap-smoke/gdb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer -pthread test/fixtures/runtime-v2-smoke.cpp -o build/gdb-dap-smoke/runtime-v2-smoke
       - name: Run real GDB DAP watchpoint smoke
         run: |
           env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/gdb-dap-real-smoke.ts \
             --program build/gdb-dap-smoke/gdb-dap-smoke \
             --source test/fixtures/gdb-dap-smoke.cpp
+      - name: Run runtime v2 high-level GDB smoke
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/runtime-v2-gdb-real-smoke.ts \
+            --program build/gdb-dap-smoke/runtime-v2-smoke \
+            --source test/fixtures/runtime-v2-smoke.cpp
       - name: Run real gdbserver attach smoke
         run: |
           env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME -u QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS \
