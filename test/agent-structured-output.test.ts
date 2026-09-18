@@ -4,7 +4,7 @@ import test from 'node:test';
 import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
 import { registerAdvancedRuntimeTools } from '../src/tools/advanced-runtime.js';
-import { AGENT_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-output.js';
+import { AGENT_OUTPUT_SCHEMAS, FORENSICS_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-output.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
@@ -12,9 +12,10 @@ import { registerDifferentialTools } from '../src/tools/register-differential-to
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
 import { registerRuntimeV2Tools } from '../src/tools/runtime-v2.js';
+import { registerChildDebugTools } from '../src/tools/child-debug.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
 import { registerValueTracingTool } from '../src/tools/value-tracing.js';
-import { AGENT_TOOL_NAMES } from '../src/toolset.js';
+import { AGENT_TOOL_NAMES, FORENSICS_TOOL_NAMES } from '../src/toolset.js';
 
 function captureRegistrations() {
   const registrations = new Map<string, { config: Record<string, unknown>; handler: (...args: any[]) => unknown }>();
@@ -39,6 +40,7 @@ function captureRegistrations() {
   registerAgentDiagnosticTools(server as never, session as never);
   registerAdvancedRuntimeTools(server as never, session as never);
   registerRuntimeV2Tools(server as never, session as never);
+  registerChildDebugTools(server as never, session as never, registry);
   registerHangDiagnosticTool(server as never, session as never);
   registerFindWriterTool(server as never, session as never);
   registerValueTracingTool(server as never, session as never);
@@ -54,6 +56,16 @@ test('every default agent tool declares an MCP v2 output schema', () => {
   for (const name of AGENT_TOOL_NAMES) {
     const registration = registrations.get(name);
     assert.ok(registration, 'missing registration for ' + name);
+    assert.ok(registration.config.outputSchema, name + ' is missing outputSchema');
+  }
+});
+
+test('every forensics tool declares an MCP v2 output schema', () => {
+  assert.deepEqual(new Set(Object.keys(FORENSICS_OUTPUT_SCHEMAS)), new Set(FORENSICS_TOOL_NAMES));
+  const { registrations } = captureRegistrations();
+  for (const name of FORENSICS_TOOL_NAMES) {
+    const registration = registrations.get(name);
+    assert.ok(registration, 'missing forensics registration for ' + name);
     assert.ok(registration.config.outputSchema, name + ' is missing outputSchema');
   }
 });
