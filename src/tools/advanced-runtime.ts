@@ -240,6 +240,7 @@ export async function progressProbe(
   session: GuardedDapSession,
   options: { samples?: number; intervalMs?: number; threadId?: number },
 ) {
+  return session.runExclusiveLifecycle('progress probe', async () => {
   if (session.isPostmortem()) throw new Error('debug_progress_probe requires a live target; frozen dumps cannot demonstrate forward progress.');
   const samples = options.samples ?? 4;
   const intervalMs = options.intervalMs ?? 250;
@@ -293,12 +294,15 @@ export async function progressProbe(
     ],
     status: session.snapshot(),
   };
+
+  });
 }
 
 export async function causalTrace(
   session: GuardedDapSession,
   options: { name: string; maxDepth?: number; maxStops?: number; timeoutMs?: number },
 ) {
+  return session.runExclusiveLifecycle('causal trace', async () => {
   const initial = await session.runtimeSnapshot({
     stackLevels: 16,
     maxVariablesPerScope: 120,
@@ -339,6 +343,8 @@ export async function causalTrace(
       'A writer may merely propagate an already-invalid value. Continue source/lifetime analysis when the first writer is not the origin.',
     ],
   };
+
+  });
 }
 
 export function clusterCrashReports(reports: Array<{ fingerprint: string; frameKey?: string; exceptionKey?: string }>) {
