@@ -126,6 +126,21 @@ jobs:
             --adapter "$env:CODELLDB_PATH" `
             --program "$pwd\test\fixtures\native-smoke.exe" `
             --source "$pwd\test\fixtures\native-smoke.cpp"
+      - name: Locate LLVM symbol tools
+        shell: pwsh
+        run: |
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (Test-Path "$llvm\llvm-readobj.exe") {
+            $llvm | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          if (-not (Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-readobj.exe")) { throw 'llvm-readobj.exe not found' }
+          if (-not (Get-Command llvm-pdbutil.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-pdbutil.exe")) { throw 'llvm-pdbutil.exe not found' }
+      - name: Run PE/PDB identity smoke
+        shell: pwsh
+        run: |
+          npx tsx test/symbol-doctor-windows-real-smoke.ts `
+            --program "$pwd\test\fixtures\native-smoke.exe" `
+            --pdb "$pwd\test\fixtures\native-smoke.pdb"
 
   dump:
     name: CodeLLDB minidump / Windows
@@ -175,6 +190,16 @@ jobs:
             --program "$pwd\test\fixtures\native-dump.exe" `
             --dump "$pwd\native-dump.dmp" `
             --source "$pwd\test\fixtures\native-dump.cpp"
+      - name: Run runtime v2 dump batch smoke
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime-v2-dumps | Out-Null
+          Copy-Item native-dump.dmp runtime-v2-dumps\first.dmp
+          Copy-Item native-dump.dmp runtime-v2-dumps\second.dmp
+          npx tsx test/runtime-v2-dump-batch-real-smoke.ts `
+            --adapter "$env:CODELLDB_PATH" `
+            --program "$pwd\test\fixtures\native-dump.exe" `
+            --directory "$pwd\runtime-v2-dumps"
 
   gdb:
     name: GDB DAP + gdbserver / Linux
