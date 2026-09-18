@@ -4,6 +4,12 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added opt-in `debug_adopt_child` for explicit adoption of one captured DAP `startDebugging` request into an isolated debugger session.
+- Child adoption requires `QWEN_DAP_MCP_CHILD_DEBUG=1`, is forensics-only, sanitizes to a bounded local launch/PID-attach subset, and keeps raw reverse requests fail-closed.
+
+
 ## 0.18.1 - 2026-09-18
 
 ### Fixed / release hardening

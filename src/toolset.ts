@@ -36,6 +36,7 @@ export const FORENSICS_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_cluster_crashes',
   'debug_regression_oracle',
   'debug_child_requests',
+  'debug_adopt_child',
   'debug_time_travel',
   'debug_thread_timeline',
   'debug_symbol_doctor',

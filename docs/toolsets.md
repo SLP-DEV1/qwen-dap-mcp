@@ -41,6 +41,7 @@ Use `forensics` when the investigation needs specialized workflows but not raw m
 - `debug_cluster_crashes`
 - `debug_regression_oracle`
 - `debug_child_requests`
+- `debug_adopt_child` — explicit opt-in adoption of one captured `startDebugging` request into an isolated session
 - `debug_time_travel`
 - `debug_thread_timeline`
 - `debug_symbol_doctor`
@@ -53,6 +54,8 @@ Use `forensics` when the investigation needs specialized workflows but not raw m
 ```bash
 QWEN_DAP_MCP_TOOLSET=forensics npx -y @slp-dev1/qwen-dap-mcp
 ```
+
+`debug_adopt_child` is additionally disabled unless `QWEN_DAP_MCP_CHILD_DEBUG=1`; captured reverse requests remain fail-closed by default.
 
 The `advanced` security profile defaults to this surface. It does **not** automatically expose raw `evaluate`, breakpoint mutation, stepping, memory inspection, or adapter lifecycle commands.
 

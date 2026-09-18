@@ -30,6 +30,8 @@ test('agent toolset exposes the high-level workflow surface and hides manual too
   assert.equal(toolsetAllows('agent', 'debug_set_data_breakpoints'), false);
   assert.equal(toolsetAllows('agent', 'debug_read_memory'), false);
   assert.equal(toolsetAllows('forensics', 'debug_symbol_doctor'), true);
+  assert.equal(toolsetAllows('forensics', 'debug_adopt_child'), true);
+  assert.equal(toolsetAllows('agent', 'debug_adopt_child'), false);
   assert.equal(toolsetAllows('forensics', 'debug_read_memory'), false);
   assert.equal(toolsetAllows('full', 'debug_read_memory'), true);
   assert.ok(FORENSICS_TOOL_NAMES.size > AGENT_TOOL_NAMES.size);

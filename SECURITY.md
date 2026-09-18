@@ -51,6 +51,12 @@ Symbol resolution remains non-fetching by default. `debug_symbol_doctor` may ins
 
 Evidence export is bounded to dedicated `.qwen-dap.json`, `.qwen-dap.md`, or `.qwen-dap.sarif` artifact names, rejects symbolic-link targets, refuses overwrite unless explicitly requested, and caps output size. This keeps evidence handoff from becoming a general source/config writing primitive. Imported evidence is offline/read-only context and has no authority over the original target.
 
+## Child-debug adoption boundary
+
+DAP reverse requests such as `startDebugging` remain transport-level fail-closed and are never auto-executed. Optional child adoption is exposed only through `debug_adopt_child` in the `forensics` toolset and additionally requires `QWEN_DAP_MCP_CHILD_DEBUG=1`.
+
+The adoption path sanitizes the captured configuration to a small local `launch` / PID-`attach` subset, rejects unknown request kinds, does not forward arbitrary commands, terminal settings, remote-target strings, or unknown adapter fields, and starts the child in a separate `DapSessionRegistry` session. The caller selects the debugger adapter explicitly; adapter type from the reverse request is not trusted automatically.
+
 ## DAP request policy boundary
 
 Outgoing DAP requests pass through an enforceable transport policy in `DapConnection.sendRequest()` before sequence allocation, pending-request state, or the adapter transport write occurs. A denied request therefore cannot reach the debug adapter through the normal request path.

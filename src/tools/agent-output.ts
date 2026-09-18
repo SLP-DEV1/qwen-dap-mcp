@@ -345,6 +345,21 @@ export const debugChildRequestsOutputSchema = z.object({
   guidance: z.array(z.string()),
 }).catchall(z.unknown());
 
+export const debugAdoptChildOutputSchema = z.object({
+  action: z.literal('adopt'),
+  sourceRequest: z.object({
+    receivedAt: z.string(),
+    command: z.literal('startDebugging'),
+    arguments: z.unknown().optional(),
+  }).catchall(z.unknown()),
+  childSessionId: z.string(),
+  adapter: z.enum(['gdb', 'lldb-dap', 'codelldb']),
+  request: z.enum(['launch', 'attach']),
+  capabilities: z.unknown(),
+  result: z.unknown(),
+  sessions: z.array(z.unknown()),
+}).catchall(z.unknown());
+
 export const debugReverseExecutionOutputSchema = z.object({
   action: z.enum(['reverseContinue', 'stepBack']),
   result: z.unknown(),
