@@ -65,7 +65,8 @@ test('release publication waits for all integration gates', async () => {
   assert.match(release, /uses: \.\/\.github\/workflows\/hol-guard-compat\.yml/);
   assert.match(release, /uses: \.\/\.github\/workflows\/extension-package-smoke\.yml/);
   assert.match(release, /uses: \.\/\.github\/workflows\/container-smoke\.yml/);
-  assert.match(release, /needs:\s*\n\s*- native-smoke\s*\n\s*- hol-guard\s*\n\s*- extension-smoke\s*\n\s*- container-smoke/);
+  assert.match(release, /uses: \.\/\.github\/workflows\/security-analysis\.yml/);
+  assert.match(release, /needs:\s*\n\s*- native-smoke\s*\n\s*- hol-guard\s*\n\s*- extension-smoke\s*\n\s*- container-smoke\s*\n\s*- security-analysis/);
 });
 
 
