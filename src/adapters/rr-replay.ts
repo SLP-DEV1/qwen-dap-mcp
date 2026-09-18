@@ -65,7 +65,7 @@ export class ManagedRrReplay {
     const child = spawn(plan.command, plan.args, {
       cwd: plan.traceDir,
       env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     });
