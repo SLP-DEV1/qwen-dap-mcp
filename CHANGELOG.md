@@ -4,6 +4,17 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Hardening / pre-release
+
+- Reduced the default MCP `agent` surface from 31 tools to 18 core workflows and added a separate `forensics` surface for specialized record/replay, symbol, crash-fleet, C++ object, evidence-export, and adapter-diagnostic workflows.
+- Changed the `advanced` security profile to default to the high-level `forensics` surface instead of exposing raw manual DAP commands; `QWEN_DAP_MCP_TOOLSET=full` remains an explicit opt-in.
+- Replaced catch-all structured-output schemas for the core agent/runtime-v2 workflows with concrete Zod contracts and added regression coverage preventing core tools from falling back to the generic schema.
+- Extended native CI path selection so runtime-v2, advanced-runtime, symbol-doctor, and rr changes trigger real adapter smoke coverage.
+- Added a real GDB-DAP runtime-v2 smoke covering C++ object/vtable inspection, adaptive evidence, pointer lifetime tracing, and multi-thread timeline capture.
+- Added CodeQL JavaScript/TypeScript analysis and a portable production-dependency audit; the release gate now includes security analysis and publishes a CycloneDX SBOM plus archive SHA-256.
+- Refreshed package/Qwen/MCP descriptions and keywords for the expanded runtime-forensics feature set.
+
+
 ### Added — runtime debugging v2
 
 - Added composable security profiles through `QWEN_DAP_MCP_PROFILE=inspect|local-debug|advanced`, while preserving explicit toolset/DAP-policy overrides and independent remote/HOL Guard gates.

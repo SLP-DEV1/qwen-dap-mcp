@@ -28,6 +28,10 @@ test('native real-adapter coverage is consolidated and path-selected on PRs', as
   assert.match(native, /^\s{2}workflow_dispatch:/m);
   assert.match(native, /^\s{2}workflow_call:/m);
   assert.match(native, /Select smoke suites/);
+  assert.match(native, /runtime-v2/);
+  assert.match(native, /symbol-doctor/);
+  assert.match(native, /adapters\/rr\\\.ts/);
+  assert.match(native, /runtime-v2-gdb-real-smoke/);
 
   for (const job of ['codelldb', 'dump', 'gdb', 'lldb', 'differential', 'multi']) {
     assert.match(native, new RegExp(`^\\s{2}${job}:`, 'm'), `missing consolidated ${job} smoke job`);
@@ -61,5 +65,15 @@ test('release publication waits for all integration gates', async () => {
   assert.match(release, /uses: \.\/\.github\/workflows\/hol-guard-compat\.yml/);
   assert.match(release, /uses: \.\/\.github\/workflows\/extension-package-smoke\.yml/);
   assert.match(release, /uses: \.\/\.github\/workflows\/container-smoke\.yml/);
-  assert.match(release, /needs:\s*\n\s*- native-smoke\s*\n\s*- hol-guard\s*\n\s*- extension-smoke\s*\n\s*- container-smoke/);
+  assert.match(release, /uses: \.\/\.github\/workflows\/security-analysis\.yml/);
+  assert.match(release, /needs:\s*\n\s*- native-smoke\s*\n\s*- hol-guard\s*\n\s*- extension-smoke\s*\n\s*- container-smoke\s*\n\s*- security-analysis/);
+});
+
+
+test('security analysis covers source and dependency changes', async () => {
+  const security = await text('security-analysis.yml');
+  assert.match(security, /github\/codeql-action\/init@v4/);
+  assert.match(security, /github\/codeql-action\/analyze@v4/);
+  assert.match(security, /npm audit --omit=dev --audit-level=high/);
+  assert.match(security, /^\s{2}schedule:/m);
 });

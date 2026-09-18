@@ -8,7 +8,7 @@ Set `QWEN_DAP_MCP_PROFILE` to one of:
 
 - `inspect` — agent toolset + inspect-only DAP policy.
 - `local-debug` — default compact agent toolset + normal authorized local debugger control.
-- `advanced` — full toolset + normal DAP policy.
+- `advanced` — high-level `forensics` toolset + normal DAP policy; raw manual DAP remains explicit via `QWEN_DAP_MCP_TOOLSET=full`.
 
 Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override the corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent gates.
 

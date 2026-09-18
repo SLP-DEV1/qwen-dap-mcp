@@ -80,11 +80,11 @@ jobs:
             fi
           }
 
-          select_suite codelldb '^(src/adapters/codelldb\.ts|src/tools/(agent-diagnostics|register-debug-tools|run-to-stop)\.ts|test/codelldb-real-smoke\.ts|test/codelldb-profile\.test\.ts|test/fixtures/native-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
-          select_suite dump '^(src/adapters/codelldb-dump\.ts|src/dap/postmortem-normalization\.ts|src/tools/register-dump-tools\.ts|test/codelldb-(dump-profile\.test|real-dump-smoke)\.ts|test/fixtures/native-dump\.cpp|\.github/workflows/native-smoke\.yml)$'
-          select_suite gdb '^(src/adapters/gdb-dap\.ts|src/dap/|src/tools/(agent-diagnostics|find-writer|register-gdb-dap-tools)\.ts|test/gdb|test/find-writer\.test\.ts|test/fixtures/gdb-dap-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
-          select_suite lldb '^(src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
-          select_suite differential '^(src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite codelldb '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/codelldb\.ts|src/tools/(agent-diagnostics|register-debug-tools|run-to-stop)\.ts|test/codelldb-real-smoke\.ts|test/codelldb-profile\.test\.ts|test/fixtures/native-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite dump '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/codelldb-dump\.ts|src/dap/postmortem-normalization\.ts|src/tools/register-dump-tools\.ts|test/codelldb-(dump-profile\.test|real-dump-smoke)\.ts|test/fixtures/native-dump\.cpp|\.github/workflows/native-smoke\.yml)$'
+          select_suite gdb '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/gdb-dap\.ts|src/dap/|src/tools/(agent-diagnostics|find-writer|register-gdb-dap-tools)\.ts|test/gdb|test/find-writer\.test\.ts|test/fixtures/gdb-dap-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite lldb '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite differential '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
           select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
 
   codelldb:
@@ -104,7 +104,7 @@ jobs:
       - run: npm run build
       - name: Build native smoke target
         shell: pwsh
-        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fd:test\fixtures\native-smoke.pdb /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
       - name: Download latest CodeLLDB
         shell: pwsh
         run: |
@@ -126,6 +126,21 @@ jobs:
             --adapter "$env:CODELLDB_PATH" `
             --program "$pwd\test\fixtures\native-smoke.exe" `
             --source "$pwd\test\fixtures\native-smoke.cpp"
+      - name: Locate LLVM symbol tools
+        shell: pwsh
+        run: |
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (Test-Path "$llvm\llvm-readobj.exe") {
+            $llvm | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          if (-not (Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-readobj.exe")) { throw 'llvm-readobj.exe not found' }
+          if (-not (Get-Command llvm-pdbutil.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-pdbutil.exe")) { throw 'llvm-pdbutil.exe not found' }
+      - name: Run PE/PDB identity smoke
+        shell: pwsh
+        run: |
+          npx tsx test/symbol-doctor-windows-real-smoke.ts `
+            --program "$pwd\test\fixtures\native-smoke.exe" `
+            --pdb "$pwd\test\fixtures\native-smoke.pdb"
 
   dump:
     name: CodeLLDB minidump / Windows
@@ -144,7 +159,7 @@ jobs:
       - run: npm run build
       - name: Build native dump fixture
         shell: pwsh
-        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-dump.exe test\fixtures\native-dump.cpp /link /DEBUG:FULL dbghelp.lib
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fd:test\fixtures\native-dump.pdb /Fe:test\fixtures\native-dump.exe test\fixtures\native-dump.cpp /link /DEBUG:FULL dbghelp.lib
       - name: Generate Windows minidump
         shell: pwsh
         run: |
@@ -175,6 +190,16 @@ jobs:
             --program "$pwd\test\fixtures\native-dump.exe" `
             --dump "$pwd\native-dump.dmp" `
             --source "$pwd\test\fixtures\native-dump.cpp"
+      - name: Run runtime v2 dump batch smoke
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime-v2-dumps | Out-Null
+          Copy-Item native-dump.dmp runtime-v2-dumps\first.dmp
+          Copy-Item native-dump.dmp runtime-v2-dumps\second.dmp
+          npx tsx test/runtime-v2-dump-batch-real-smoke.ts `
+            --adapter "$env:CODELLDB_PATH" `
+            --program "$pwd\test\fixtures\native-dump.exe" `
+            --directory "$pwd\runtime-v2-dumps"
 
   gdb:
     name: GDB DAP + gdbserver / Linux
@@ -198,11 +223,17 @@ jobs:
           npm run build
           mkdir -p build/gdb-dap-smoke
           g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer test/fixtures/gdb-dap-smoke.cpp -o build/gdb-dap-smoke/gdb-dap-smoke
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer -pthread test/fixtures/runtime-v2-smoke.cpp -o build/gdb-dap-smoke/runtime-v2-smoke
       - name: Run real GDB DAP watchpoint smoke
         run: |
           env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/gdb-dap-real-smoke.ts \
             --program build/gdb-dap-smoke/gdb-dap-smoke \
             --source test/fixtures/gdb-dap-smoke.cpp
+      - name: Run runtime v2 high-level GDB smoke
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME npx tsx test/runtime-v2-gdb-real-smoke.ts \
+            --program build/gdb-dap-smoke/runtime-v2-smoke \
+            --source test/fixtures/runtime-v2-smoke.cpp
       - name: Run real gdbserver attach smoke
         run: |
           env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME -u QWEN_DAP_MCP_REMOTE_DEBUG_HOSTS \

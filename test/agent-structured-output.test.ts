@@ -4,7 +4,7 @@ import test from 'node:test';
 import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
 import { registerAdvancedRuntimeTools } from '../src/tools/advanced-runtime.js';
-import { AGENT_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-output.js';
+import { AGENT_OUTPUT_SCHEMAS, debugAdvancedOutputSchema, structuredResult } from '../src/tools/agent-output.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
@@ -55,6 +55,7 @@ test('every default agent tool declares an MCP v2 output schema', () => {
     const registration = registrations.get(name);
     assert.ok(registration, 'missing registration for ' + name);
     assert.ok(registration.config.outputSchema, name + ' is missing outputSchema');
+    assert.notEqual(registration.config.outputSchema, debugAdvancedOutputSchema, name + ' must not use the unstructured catch-all output schema');
   }
 });
 

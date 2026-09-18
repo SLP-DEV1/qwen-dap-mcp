@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   actions: write
+  security-events: write
 
 env:
   QWEN_CODE_SMOKE_VERSION: '0.22.0'
@@ -34,12 +35,17 @@ jobs:
     name: Container gate
     uses: ./.github/workflows/container-smoke.yml
 
+  security-analysis:
+    name: Security analysis gate
+    uses: ./.github/workflows/security-analysis.yml
+
   release:
     needs:
       - native-smoke
       - hol-guard
       - extension-smoke
       - container-smoke
+      - security-analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -83,6 +89,8 @@ jobs:
             exit 1
           fi
           sha256sum release/qwen-dap-mcp.tar.gz | tee release/qwen-dap-mcp.sha256.txt
+          npm sbom --sbom-format cyclonedx > release/qwen-dap-mcp.cdx.json
+          test -s release/qwen-dap-mcp.cdx.json
 
       - name: Install Qwen Code for smoke tests
         run: npm install --global "@qwen-code/qwen-code@${QWEN_CODE_SMOKE_VERSION}"
@@ -116,6 +124,8 @@ jobs:
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             "release/qwen-dap-mcp.tar.gz#qwen-dap-mcp.tar.gz" \
+            "release/qwen-dap-mcp.sha256.txt#qwen-dap-mcp.sha256.txt" \
+            "release/qwen-dap-mcp.cdx.json#qwen-dap-mcp.cdx.json" \
             --target "$GITHUB_SHA" \
             --title "qwen-dap-mcp ${{ steps.version.outputs.tag }}" \
             --generate-notes

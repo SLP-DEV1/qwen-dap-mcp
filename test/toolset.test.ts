@@ -3,15 +3,17 @@ import test from 'node:test';
 
 import {
   AGENT_TOOL_NAMES,
+  FORENSICS_TOOL_NAMES,
   filterToolRegistrar,
   resolveToolsetMode,
   toolsetAllows,
 } from '../src/toolset.js';
 
-test('agent is the default toolset and full remains opt-in', () => {
+test('agent is the default toolset, forensics is high-level opt-in, and full remains explicit', () => {
   assert.equal(resolveToolsetMode(undefined), 'agent');
   assert.equal(resolveToolsetMode(''), 'agent');
   assert.equal(resolveToolsetMode(' AGENT '), 'agent');
+  assert.equal(resolveToolsetMode('FORENSICS'), 'forensics');
   assert.equal(resolveToolsetMode('FULL'), 'full');
   assert.equal(resolveToolsetMode('tiny'), 'agent');
 });
@@ -27,7 +29,10 @@ test('agent toolset exposes the high-level workflow surface and hides manual too
   assert.equal(toolsetAllows('agent', 'debug_find_writer'), true);
   assert.equal(toolsetAllows('agent', 'debug_set_data_breakpoints'), false);
   assert.equal(toolsetAllows('agent', 'debug_read_memory'), false);
+  assert.equal(toolsetAllows('forensics', 'debug_symbol_doctor'), true);
+  assert.equal(toolsetAllows('forensics', 'debug_read_memory'), false);
   assert.equal(toolsetAllows('full', 'debug_read_memory'), true);
+  assert.ok(FORENSICS_TOOL_NAMES.size > AGENT_TOOL_NAMES.size);
 });
 
 test('registration filter suppresses hidden schemas without changing handlers', () => {

@@ -30,7 +30,11 @@ All targeted workflows use `concurrency` with `cancel-in-progress`, so an update
 
 `native-smoke.yml` also runs the complete native suite on its weekly schedule and when started manually.
 
-## 3. Release gate
+## 3. Security analysis
+
+`.github/workflows/security-analysis.yml` runs CodeQL for JavaScript/TypeScript on pull requests, `main`, and a weekly schedule. A separate production dependency audit runs `npm audit --omit=dev --audit-level=high`, avoiding reliance on repository-level Dependency Graph configuration.
+
+## 4. Release gate
 
 `release-extension.yml` calls all reusable integration workflows before the release job can publish:
 
@@ -38,7 +42,8 @@ All targeted workflows use `concurrency` with `cancel-in-progress`, so an update
 2. HOL Guard compatibility,
 3. Qwen extension archive installation,
 4. container build,
-5. only then the existing build, GitHub release verification, published-extension install check, and npm/MCP Registry publication handoff.
+5. CodeQL + production dependency audit,
+6. only then the existing build, GitHub release verification, published-extension install check, and npm/MCP Registry publication handoff.
 
 A path-selected PR therefore does not need to execute every native adapter on every edit, while a release still cannot proceed without the complete real-integration gate.
 

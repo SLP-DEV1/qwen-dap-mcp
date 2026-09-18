@@ -35,7 +35,7 @@ Use `debug_evidence_bundle` to export JSON, Markdown, or SARIF for issue/CI hand
 
 Use `debug_adapter_doctor` during setup or when a workflow is unavailable. It reports the current capability matrix, installed debugger discovery, rr availability, and the resolved security profile.
 
-Security profiles are `inspect`, `local-debug`, and `advanced`. Explicit toolset and DAP-policy settings override their corresponding profile defaults; remote allowlisting and HOL Guard remain independent.
+Security profiles are `inspect`, `local-debug`, and `advanced`. `advanced` selects the high-level `forensics` toolset rather than the raw manual DAP surface. Use `QWEN_DAP_MCP_TOOLSET=full` only when low-level debugger primitives are intentionally required. Explicit toolset and DAP-policy settings override their corresponding profile defaults; remote allowlisting and HOL Guard remain independent.
 
 ## Advanced runtime workflows
 

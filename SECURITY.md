@@ -41,7 +41,7 @@ These boundaries are security properties. Changes that weaken them should receiv
 
 - `inspect` → agent toolset + inspect-only DAP policy,
 - `local-debug` → agent toolset + standard DAP policy,
-- `advanced` → full toolset + standard DAP policy.
+- `advanced` → high-level `forensics` toolset + standard DAP policy. Raw manual DAP remains an explicit `QWEN_DAP_MCP_TOOLSET=full` choice.
 
 Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override only their corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent.
 
