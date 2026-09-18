@@ -308,6 +308,48 @@ export class DapSession {
     return { response: response.body ?? {}, stopped: event.body ?? {} };
   }
 
+  async reverseContinue(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
+    this.assertConfigured();
+    this.assertCapability('supportsStepBack', 'reverseContinue');
+    const stopped = waitForStop ? this.createThreadStopWait(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.promise.catch(() => undefined);
+
+    let response: DebugProtocol.Response;
+    try {
+      response = await this.sendStateChangingRequest(
+        'reverseContinue',
+        { threadId } satisfies DebugProtocol.ReverseContinueArguments,
+      );
+    } catch (error) {
+      stopped?.cancel();
+      throw error;
+    }
+    if (!stopped) return response.body ?? {};
+    const event = await stopped.promise;
+    return { response: response.body ?? {}, stopped: event.body ?? {} };
+  }
+
+  async stepBack(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
+    this.assertConfigured();
+    this.assertCapability('supportsStepBack', 'stepBack');
+    const stopped = waitForStop ? this.createThreadStopWait(threadId, timeoutMs) : undefined;
+    if (stopped) void stopped.promise.catch(() => undefined);
+
+    let response: DebugProtocol.Response;
+    try {
+      response = await this.sendStateChangingRequest(
+        'stepBack',
+        { threadId } satisfies DebugProtocol.StepBackArguments,
+      );
+    } catch (error) {
+      stopped?.cancel();
+      throw error;
+    }
+    if (!stopped) return response.body ?? {};
+    const event = await stopped.promise;
+    return { response: response.body ?? {}, stopped: event.body ?? {} };
+  }
+
   async threads(): Promise<DebugProtocol.Thread[]> {
     this.assertConfigured();
     const response = await this.connection.sendRequest('threads', {}, this.requestTimeoutMs);
