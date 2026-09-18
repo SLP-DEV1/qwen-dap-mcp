@@ -3,7 +3,7 @@ import { DapError } from './dap/errors.js';
 export type SecurityProfile = 'inspect' | 'local-debug' | 'advanced';
 
 export type SecurityProfileDefaults = {
-  toolset: 'agent' | 'full';
+  toolset: 'agent' | 'forensics' | 'full';
   dapPolicy: 'standard' | 'inspect-only';
   description: string;
 };
@@ -20,9 +20,9 @@ const PROFILES: Record<SecurityProfile, SecurityProfileDefaults> = {
     description: 'Compact agent surface with normal authorized local debugger execution/control.',
   },
   advanced: {
-    toolset: 'full',
+    toolset: 'forensics',
     dapPolicy: 'standard',
-    description: 'Full manual DAP surface plus high-level workflows. Existing remote allowlists and HOL Guard still apply.',
+    description: 'Expanded high-level forensic debugger surface without exposing the raw manual DAP tool catalog. Existing remote allowlists and HOL Guard still apply.',
   },
 };
 
