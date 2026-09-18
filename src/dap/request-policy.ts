@@ -1,4 +1,5 @@
 import { DapError } from './errors.js';
+import { resolveSecurityProfile, securityProfileDefaults } from '../security-profile.js';
 
 export type DapPolicyMode = 'standard' | 'inspect-only';
 
@@ -85,7 +86,8 @@ export function createDapRequestPolicy(mode: DapPolicyMode = 'standard'): DapReq
 /** Resolve the built-in policy from QWEN_DAP_MCP_DAP_POLICY. */
 export function resolveDapPolicyMode(value = process.env.QWEN_DAP_MCP_DAP_POLICY): DapPolicyMode {
   const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === 'standard') return 'standard';
+  if (!normalized) return securityProfileDefaults(resolveSecurityProfile()).dapPolicy;
+  if (normalized === 'standard') return 'standard';
   if (normalized === 'inspect-only' || normalized === 'readonly' || normalized === 'read-only') {
     return 'inspect-only';
   }
