@@ -446,7 +446,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
     'debug_runtime_report',
     {
       title: 'Build Runtime Debug Report',
-      description: 'Create a shareable structured report from the current stopped target with normalized crash fingerprinting, Symbol Doctor status, sanitizer stderr correlation, poison-pattern memory hazard detection, ABI register-to-argument mapping, and recent debugger output. Use it for triage and issue handoff. Do not treat heuristic poison patterns, ABI mappings, or sanitizer text correlation as standalone proof.',
+      description: 'Create a shareable structured report from the current stopped target with normalized crash fingerprinting, Symbol Doctor status, sanitizer stderr correlation, poison-pattern memory hazard detection, ABI register-to-argument mapping, and recent debugger output. Use it only for evidence-driven triage and issue handoff. Do not treat heuristic poison patterns, ABI mappings, or sanitizer text correlation as standalone proof.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
@@ -512,7 +512,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
     'debug_regression_oracle',
     {
       title: 'Classify Regression Reproduction',
-      description: 'Classify a completed reproduction against an original crash fingerprint for git-bisect-style workflows. Use it after debug_runtime_report or crash verification has produced stable fingerprints. It reports original-crash, changed-crash, or inconclusive; it intentionally does not label a changed crash as good, because a different downstream failure can still be a regression.',
+      description: 'Classify a completed reproduction against an original crash fingerprint for git-bisect-style workflows. Use it only after debug_runtime_report or crash verification has produced stable fingerprints. It reports original-crash, changed-crash, or inconclusive; it intentionally does not label a changed crash as good, because a different downstream failure can still be a regression.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
