@@ -15,6 +15,28 @@ When a known-good reproduction and a failing/changed reproduction can be stopped
 
 Do not use a crash-only interpretation for a hang snapshot and do not turn a hang heuristic, static runtime difference, or observed writer into certainty.
 
+## Runtime debugging v2
+
+Prefer `debug_adaptive_evidence` when the required evidence depth is unknown and a cheap first pass may be sufficient. Use the richer `debug_runtime_report` directly when you already need modules, disassembly, crash-family fingerprints, API argument analysis, stack-integrity evidence, competing hypotheses, and the breakpoint plan.
+
+Use `debug_time_travel` for record/replay work. `record` executes only the explicit program under rr with literal argv and no shell; `replay-plan` returns a loopback GDB handoff rather than silently starting an open debug server. Reverse execution still requires an adapter that advertises reverse support.
+
+Use `debug_trace_lifetime` for suspected stale object ownership or use-after-free. Prefer sanitizer allocation/free provenance over poison patterns, and remember that an observed writer can propagate an already-invalid pointer.
+
+Use `debug_thread_timeline` when one hang snapshot cannot distinguish starvation, livelock, lock contention, or changing progress. Only call a lock cycle proven when the tool returns `lockGraph.cycleProven=true`; generic waits without explicit owner thread IDs remain heuristic.
+
+Use `debug_symbol_doctor` before source-level conclusions when symbols are partial, missing, or potentially mismatched. A local filename candidate is not proof; strong PE/PDB mismatch evidence requires binary and PDB identity data.
+
+Use `debug_dump_batch` for bounded fleets of local core/minidump files, then inspect `families` and individual reports. Use `debug_crash_families` when reports already exist and you only need exact/semantic/family grouping.
+
+Use `debug_cpp_object` for read-only object-header/vtable inspection when virtual dispatch or stale C++ object state is suspicious. A module-backed first word is consistent with a vtable but is not dynamic-type proof.
+
+Use `debug_evidence_bundle` to export JSON, Markdown, or SARIF for issue/CI handoff or import JSON/SARIF as offline evidence. Imported evidence cannot control the original target.
+
+Use `debug_adapter_doctor` during setup or when a workflow is unavailable. It reports the current capability matrix, installed debugger discovery, rr availability, and the resolved security profile.
+
+Security profiles are `inspect`, `local-debug`, and `advanced`. Explicit toolset and DAP-policy settings override their corresponding profile defaults; remote allowlisting and HOL Guard remain independent.
+
 ## Advanced runtime workflows
 
 Use `debug_causal_trace` when the current crash/differential evidence has already identified a suspicious value and you need a bounded consumer-to-writer producer chain. It resumes the live target through the existing watchpoint tracing path, so do not use it for frozen dumps or unsafe-to-resume targets.
