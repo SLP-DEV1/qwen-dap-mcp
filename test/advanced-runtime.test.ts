@@ -110,7 +110,12 @@ test('runtime report creates stable normalized fingerprints and correlates outpu
   };
   const first = buildCrashReport(snapshot(), status as never, { redactPaths: true, abi: 'windows-x64' });
   const second = buildCrashReport(snapshot(), status as never, { redactPaths: true, abi: 'windows-x64' });
+  const relocated = snapshot();
+  if (relocated.stack[0]?.source) relocated.stack[0].source.path = 'C:\\different\\build\\copy.cpp';
+  if (relocated.stack[1]?.source) relocated.stack[1].source.path = 'C:\\different\\build\\texture.cpp';
+  const third = buildCrashReport(relocated, status as never, { redactPaths: true, abi: 'windows-x64' });
   assert.equal(first.fingerprint, second.fingerprint);
+  assert.equal(first.fingerprint, third.fingerprint);
   assert.match(first.frameKey, /<path>/);
   assert.ok(first.sanitizer.some((finding) => finding.sanitizer === 'ubsan'));
   assert.equal(first.symbolDoctor.status, 'partial');
