@@ -41,11 +41,14 @@ These boundaries are security properties. Changes that weaken them should receiv
 
 - `inspect` → agent toolset + inspect-only DAP policy,
 - `local-debug` → agent toolset + standard DAP policy,
-- `advanced` → full toolset + standard DAP policy.
+- `advanced` → forensics toolset + standard DAP policy.
 
 Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override only their corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent.
 
-The rr integration is not a general command runner. rr discovery/probing uses fixed executable names/paths and `shell=false`; recording executes only the explicit program and literal argv supplied to `debug_time_travel`. Replay setup is emitted as a loopback-only plan and actual debugger attachment continues through the existing validated GDB remote endpoint path.
+The rr integration is not a general command runner. rr discovery/probing uses fixed executable names/paths and `shell=false`; recording executes only the explicit program and literal argv supplied to `debug_time_travel`. Managed replay starts one fixed `rr replay -s PORT TRACE` process per routed DAP connection, keeps the endpoint on loopback, bounds captured output, and optionally attaches through the existing validated GDB remote endpoint path.
+
+
+Captured DAP reverse `startDebugging` requests remain rejected by the transport. The optional `debug_adopt_child` workflow requires `QWEN_DAP_MCP_CHILD_DEBUG=1`, explicit request selection and adapter choice, copies only a bounded local launch/attach field subset, and creates a separate isolated session. It does not forward arbitrary adapter commands, remote target syntax, terminal requests, or unknown configuration fields.
 
 Symbol resolution remains non-fetching by default. `debug_symbol_doctor` may inspect local files and invoke fixed local identity tools such as readelf/llvm-readobj/llvm-pdbutil/dwarfdump when available, but configured symbol servers are returned as explicit candidates instead of being contacted automatically.
 
