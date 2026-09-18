@@ -149,6 +149,15 @@ function stableFrameKey(snapshot: RuntimeSnapshot): string {
   return frames.join('>');
 }
 
+function fingerprintFrameKey(snapshot: RuntimeSnapshot): string {
+  return snapshot.stack.slice(0, 6).map((frame) => {
+    const path = frame.source?.path;
+    const basename = path ? (path.split(/[\\/]/).pop() ?? path) : undefined;
+    const source = frame.source?.name ?? basename ?? '';
+    return `${frame.name}|${source}|${frame.line}`;
+  }).join('>');
+}
+
 function exceptionKey(snapshot: RuntimeSnapshot): string {
   const exception = snapshot.exception as { exceptionId?: unknown; description?: unknown } | undefined;
   return [
@@ -202,7 +211,7 @@ export function buildCrashReport(
           'Prefer a symbol-complete representative reproduction before making source-level causal claims.',
         ],
   };
-  const fingerprint = fnv1a64(`${rawExceptionKey}\n${rawFrameKey}`);
+  const fingerprint = fnv1a64(`${rawExceptionKey}\n${fingerprintFrameKey(snapshot)}`);
   const redactedFrameKey = options.redactPaths
     ? rawFrameKey.replace(/([A-Za-z]:)?[\\/][^|>]+/g, '<path>')
     : rawFrameKey;
