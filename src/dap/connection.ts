@@ -80,6 +80,7 @@ export class DapConnection extends EventEmitter {
   private transportGeneration = 0;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly eventHistory: DapEventRecord[] = [];
+  private readonly reverseRequestHistory: Array<{ receivedAt: string; command: string; arguments?: unknown }> = [];
   private readonly stderrLines: string[] = [];
   private requestPolicy: DapRequestPolicy;
 
@@ -106,6 +107,10 @@ export class DapConnection extends EventEmitter {
     return this.transportGeneration;
   }
 
+  get recentReverseRequests(): readonly { receivedAt: string; command: string; arguments?: unknown }[] {
+    return this.reverseRequestHistory;
+  }
+
   get recentEvents(): readonly DapEventRecord[] {
     return this.eventHistory;
   }
@@ -130,6 +135,7 @@ export class DapConnection extends EventEmitter {
     this.buffer = Buffer.alloc(0);
     this.nextSeq = 1;
     this.eventHistory.length = 0;
+    this.reverseRequestHistory.length = 0;
     this.stderrLines.length = 0;
 
     const child = spawn(options.command, options.args ?? [], {
@@ -527,6 +533,14 @@ export class DapConnection extends EventEmitter {
 
     if (message.type === 'request') {
       const request = message as DebugProtocol.Request;
+      this.reverseRequestHistory.push({
+        receivedAt: new Date().toISOString(),
+        command: request.command,
+        ...(request.arguments === undefined ? {} : { arguments: request.arguments }),
+      });
+      if (this.reverseRequestHistory.length > 50) {
+        this.reverseRequestHistory.splice(0, this.reverseRequestHistory.length - 50);
+      }
       this.emit('reverseRequest', request);
       this.sendUnsupportedReverseRequest(request);
     }
