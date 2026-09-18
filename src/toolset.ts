@@ -53,6 +53,8 @@ const LOCAL_EXECUTION_TOOLS = new Set([
   'debug_start_codelldb',
   'debug_launch',
   'debug_launch_codelldb',
+  'debug_attach',
+  'debug_attach_codelldb',
 ]);
 
 const SESSION_CONTROL_TOOLS = new Set([
