@@ -60,7 +60,7 @@ function safeEnv(value: unknown): Record<string, string> | undefined {
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
-function sanitizeStartConfiguration(
+export function sanitizeStartConfiguration(
   request: { arguments?: unknown },
   overrides: { program?: string },
 ) {
