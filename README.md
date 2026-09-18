@@ -159,6 +159,7 @@ Set `QWEN_DAP_MCP_TOOLSET=forensics` when deeper investigation is needed. It kee
 | `debug_cluster_crashes` | Cluster normalized crash reports |
 | `debug_regression_oracle` | Classify original/changed/inconclusive reproductions |
 | `debug_child_requests` | Inspect fail-closed child/fork reverse requests |
+| `debug_adopt_child` | Explicitly adopt one reviewed `startDebugging` child into an isolated session when `QWEN_DAP_MCP_CHILD_DEBUG=1` |
 | `debug_time_travel` | Bounded rr recording/replay planning and reverse workflows |
 | `debug_thread_timeline` | Multi-thread progress and explicit-owner lock graph |
 | `debug_symbol_doctor` | Binary identity, local symbols, and PDB/DWARF mismatch diagnosis |
