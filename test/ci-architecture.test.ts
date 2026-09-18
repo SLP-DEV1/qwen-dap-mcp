@@ -34,6 +34,8 @@ test('native real-adapter coverage is consolidated and path-selected on PRs', as
   assert.match(native, /runtime-v2-gdb-real-smoke/);
   assert.match(native, /QWEN_DAP_MCP_LLVM_READOBJ/);
   assert.match(native, /QWEN_DAP_MCP_LLVM_PDBUTIL/);
+  assert.match(native, /GITHUB_TOKEN: \${\{ github\.token \}\}/);
+  assert.match(native, /Authorization' = "Bearer \$env:GITHUB_TOKEN"/);
 
   for (const job of ['codelldb', 'dump', 'gdb', 'lldb', 'differential', 'multi']) {
     assert.match(native, new RegExp(`^\\s{2}${job}:`, 'm'), `missing consolidated ${job} smoke job`);
