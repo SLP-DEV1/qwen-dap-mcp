@@ -1,7 +1,7 @@
 {
   "name": "@slp-dev1/qwen-dap-mcp",
-  "version": "0.17.2",
-  "description": "Native crash, hang, dump and differential debugging for coding agents through a local DAP-to-MCP bridge.",
+  "version": "0.18.0",
+  "description": "Agentic native runtime debugging for coding agents through a hardened local DAP-to-MCP bridge, including crash/hang diagnosis, record/replay, lifetime tracing, symbols, dumps and differential evidence.",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
@@ -63,7 +63,13 @@
     "coding-agent",
     "agentic-debugging",
     "hol-guard",
-    "agent-security"
+    "agent-security",
+    "record-replay",
+    "rr-debugger",
+    "symbol-debugging",
+    "use-after-free",
+    "runtime-forensics",
+    "sarif"
   ],
   "license": "Apache-2.0",
   "mcpName": "io.github.SLP-DEV1/qwen-dap-mcp",
