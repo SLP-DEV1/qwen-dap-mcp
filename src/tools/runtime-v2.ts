@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { DebugProtocol } from '@vscode/debugprotocol';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod/v4';
@@ -109,8 +110,8 @@ async function captureTimeline(session: GuardedDapSession, options: { samples: n
     for (let sample = 1; sample <= options.samples; sample += 1) {
       const threads = (await session.threads()).slice(0, options.maxThreads);
       for (const thread of threads) {
-        let stack = [];
-        let variables = [];
+        let stack: DebugProtocol.StackFrame[] = [];
+        let variables: DebugProtocol.Variable[] = [];
         try {
           stack = await session.stackTrace(thread.id, 0, options.stackLevels);
           const frame = stack[0];
