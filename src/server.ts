@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 
 import { DapSessionRegistry } from './dap/session-registry.js';
 import { registerAgentDiagnosticTools } from './tools/agent-diagnostics.js';
+import { registerAdvancedRuntimeTools } from './tools/advanced-runtime.js';
 import { registerDifferentialTools } from './tools/register-differential-tools.js';
 import { registerHangDiagnosticTool } from './tools/hang-diagnostics.js';
 import { registerDebugTools } from './tools/register-debug-tools.js';
@@ -41,6 +42,7 @@ export function createServer(): McpServer {
   registerGdbDapTools(registrationServer, session);
   registerRunToStopTool(registrationServer, session);
   registerAgentDiagnosticTools(registrationServer, session);
+  registerAdvancedRuntimeTools(registrationServer, session);
   registerHangDiagnosticTool(registrationServer, session);
   registerFindWriterTool(registrationServer, session);
   registerValueTracingTool(registrationServer, session);
