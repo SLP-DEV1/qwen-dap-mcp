@@ -22,6 +22,7 @@ This is the default required feedback loop. It intentionally does not install na
 Expensive integration checks run only when their relevant paths change:
 
 - `native-smoke.yml` selects CodeLLDB, Windows minidump, GDB/gdbserver, lldb-dap/lldb-server, differential-runtime, multi-session remote, Runtime-v2 GDB/core-batch, and rr record/replay suites from the PR diff.
+- The rr suite installs the current pinned rr release and attempts a real recording/replay lifecycle. GitHub-hosted runners may not expose the hardware performance counters rr requires; that specific host-capability failure is reported as a capability skip, while unexpected rr failures still fail the job. Managed replay process behavior is always covered by a deterministic unit test.
 - `hol-guard-compat.yml` runs only for HOL Guard / policy-boundary changes, plus its weekly compatibility schedule.
 - `extension-package-smoke.yml` runs for Qwen extension/package integration changes.
 - `container-smoke.yml` runs for Docker/server/container-facing changes.
