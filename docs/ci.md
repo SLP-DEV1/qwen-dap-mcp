@@ -42,7 +42,8 @@ All targeted workflows use `concurrency` with `cancel-in-progress`, so an update
 2. HOL Guard compatibility,
 3. Qwen extension archive installation,
 4. container build,
-5. only then the existing build, GitHub release verification, published-extension install check, and npm/MCP Registry publication handoff.
+5. CodeQL + production dependency audit,
+6. only then the existing build, GitHub release verification, published-extension install check, and npm/MCP Registry publication handoff.
 
 A path-selected PR therefore does not need to execute every native adapter on every edit, while a release still cannot proceed without the complete real-integration gate.
 
