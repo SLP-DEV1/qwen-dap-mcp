@@ -30,7 +30,11 @@ All targeted workflows use `concurrency` with `cancel-in-progress`, so an update
 
 `native-smoke.yml` also runs the complete native suite on its weekly schedule and when started manually.
 
-## 3. Release gate
+## 3. Security analysis
+
+`.github/workflows/security-analysis.yml` runs CodeQL for JavaScript/TypeScript on pull requests, `main`, and a weekly schedule. Pull requests also run GitHub dependency review so newly introduced dependency risk is visible before merge.
+
+## 4. Release gate
 
 `release-extension.yml` calls all reusable integration workflows before the release job can publish:
 
