@@ -273,7 +273,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
     'debug_symbol_doctor',
     {
       title: 'Diagnose Symbols and Binary Identity',
-      description: 'Diagnose missing or mismatched native debug symbols using current DAP module evidence, bounded local symbol-cache search, optional PE/PDB GUID-age comparison, ELF Build-ID or Mach-O UUID probing, and explicit configured symbol-server candidates. Use it before source-level root-cause claims when symbols are partial or suspicious. Do not treat filename-only cache matches as proof, and this tool never downloads remote symbols automatically.',
+      description: 'Diagnose missing or mismatched native debug symbols using current DAP module evidence, bounded local symbol-cache search, optional PE/PDB GUID-age comparison, ELF Build-ID or Mach-O UUID probing, and explicit configured symbol-server candidates. Use it before source-level root-cause claims when symbols are partial or suspicious. Do not use filename-only cache matches as proof of identity, and this tool never downloads remote symbols automatically.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
@@ -307,7 +307,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
     'debug_dump_batch',
     {
       title: 'Analyze Crash Dump Batch',
-      description: 'Open a bounded set of native dump/core files from one local directory through the existing hardened postmortem adapter flow, generate runtime reports for each, and cluster them with v2 crash families. Use it for recurring crash fleets and support bundles. Do not point it at untrusted enormous directories or assume one family fingerprint proves one root cause.',
+      description: 'Open a bounded set of native dump/core files from one local directory through the existing hardened postmortem adapter flow, generate runtime reports for each, and cluster them with v2 crash families. Use it for recurring crash fleets and support bundles. Do not use it on untrusted enormous directories or assume one family fingerprint proves one root cause.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
@@ -411,7 +411,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
     'debug_crash_families',
     {
       title: 'Compare Crash Families',
-      description: 'Compare supplied runtime reports using exact, semantic, and broad family fingerprints so superficially different crashes can be grouped while retaining concrete variants. Use it after debug_runtime_report or debug_dump_batch has produced v2 fingerprints. Do not interpret shared family membership as proof of one root cause; it is a triage relationship.',
+      description: 'Compare supplied runtime reports using exact, semantic, and broad family fingerprints so superficially different crashes can be grouped while retaining concrete variants. Use it after debug_runtime_report or debug_dump_batch has produced v2 fingerprints. Do not use shared family membership as proof of one root cause; it is a triage relationship.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
@@ -431,7 +431,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
     'debug_cpp_object',
     {
       title: 'Inspect C++ Object and VTable',
-      description: 'Read a bounded object header from a debugger-visible pointer, decode the probable first-word vtable pointer, correlate it with loaded modules, and return surrounding bytes plus ABI context. Use it for suspected stale C++ objects, invalid virtual dispatch, or overwritten object headers. Do not treat any first word as a proven vtable without module/symbol/source corroboration, and this tool never writes target memory.',
+      description: 'Read a bounded object header from a debugger-visible pointer, decode the probable first-word vtable pointer, correlate it with loaded modules, and return surrounding bytes plus ABI context. Use it for suspected stale C++ objects, invalid virtual dispatch, or overwritten object headers. Do not use a first-word pointer as proven vtable evidence without module/symbol/source corroboration, and this tool never writes target memory.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
@@ -498,7 +498,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
     'debug_adapter_doctor',
     {
       title: 'Audit Debugger Adapter Capabilities',
-      description: 'Audit the active DAP session and locally installed debugger adapters, report capability support relevant to qwen-dap-mcp workflows, inspect the resolved security profile, and identify missing prerequisites such as rr. Use it during setup or when an agent workflow is unexpectedly unavailable. Do not interpret discovery as permission to attach to or execute arbitrary targets.',
+      description: 'Audit the active DAP session and locally installed debugger adapters, report capability support relevant to qwen-dap-mcp workflows, inspect the resolved security profile, and identify missing prerequisites such as rr. Use it during setup or when an agent workflow is unexpectedly unavailable. Do not use adapter discovery as permission to attach to or execute arbitrary targets.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
       outputSchema: debugAdvancedOutputSchema,
       inputSchema: z.object({
