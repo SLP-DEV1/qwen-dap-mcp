@@ -377,6 +377,8 @@ export const debugThreadTimelineOutputSchema = z.object({
     evidenceKind: z.string(),
     limitations: z.array(z.string()),
   }).catchall(z.unknown()),
+  stopReason: z.enum(['sample-budget', 'target-exited', 'target-terminated', 'no-threads']),
+  completeSampleBudget: z.boolean(),
   status: sessionStatusOutputSchema,
 }).catchall(z.unknown());
 
