@@ -4,6 +4,8 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.18.0 - 2026-09-18
+
 ### Added — runtime debugging v2
 
 - Added composable security profiles through `QWEN_DAP_MCP_PROFILE=inspect|local-debug|advanced`, while preserving explicit toolset/DAP-policy overrides and independent remote/HOL Guard gates.
@@ -46,6 +48,14 @@ All notable prototype milestones are documented here.
 - Child/fork reverse requests are captured for visibility but continue to be rejected by the DAP transport; adapters cannot silently spawn or authorize new debug targets.
 - Crash fingerprints, poison patterns, ABI mappings, sanitizer text, and progress classifications are explicitly treated as bounded evidence rather than standalone causal proof.
 
+### Hardening / release readiness
+
+- Split the high-level surface into an 18-tool default `agent` toolset and a 32-tool `forensics` toolset; `full` remains the explicit raw-DAP surface.
+- Changed `QWEN_DAP_MCP_PROFILE=advanced` to select `forensics` instead of exposing the full manual DAP catalog by default.
+- Added concrete structured-output schemas for advanced and runtime-v2 workflows instead of catch-all top-level schemas.
+- Added managed `rr replay` lifecycle operations with fixed argv, `shell=false`, bounded output, loopback-only endpoints, optional hardened GDB DAP attach, and explicit stop/status handling.
+- Added opt-in `debug_adopt_child` for validated `startDebugging` adoption into an isolated session when `QWEN_DAP_MCP_CHILD_DEBUG=1`; raw reverse requests remain fail-closed.
+- Added dedicated real Runtime-v2 GDB live, core-batch, and rr record/replay smoke suites and fixed native-smoke path selection for runtime-v2 changes.
 
 ## 0.17.2 - 2026-09-07
 
