@@ -130,11 +130,19 @@ jobs:
         shell: pwsh
         run: |
           $llvm = 'C:\Program Files\LLVM\bin'
-          if (Test-Path "$llvm\llvm-readobj.exe") {
-            $llvm | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
-          if (-not (Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-readobj.exe")) { throw 'llvm-readobj.exe not found' }
-          if (-not (Get-Command llvm-pdbutil.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "$llvm\llvm-pdbutil.exe")) { throw 'llvm-pdbutil.exe not found' }
+          $readobj = (Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+          $pdbutil = (Get-Command llvm-pdbutil.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+
+          if (-not $readobj -and (Test-Path "$llvm\llvm-readobj.exe")) { $readobj = "$llvm\llvm-readobj.exe" }
+          if (-not $pdbutil -and (Test-Path "$llvm\llvm-pdbutil.exe")) { $pdbutil = "$llvm\llvm-pdbutil.exe" }
+
+          if (-not $readobj) { throw 'llvm-readobj.exe not found' }
+          if (-not $pdbutil) { throw 'llvm-pdbutil.exe not found' }
+
+          "QWEN_DAP_MCP_LLVM_READOBJ=$readobj" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "QWEN_DAP_MCP_LLVM_PDBUTIL=$pdbutil" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "llvm-readobj: $readobj"
+          Write-Host "llvm-pdbutil: $pdbutil"
       - name: Run PE/PDB identity smoke
         shell: pwsh
         run: |
