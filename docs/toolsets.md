@@ -4,7 +4,7 @@ qwen-dap-mcp exposes two MCP tool surfaces. The debugger implementation undernea
 
 ## `agent` — default
 
-`agent` is optimized for coding agents. It keeps the MCP schema/context surface compact and exposes twenty-one high-level workflows and session-management tools:
+`agent` is optimized for coding agents. It keeps the MCP schema/context surface compact and exposes thirty-one high-level workflows and session-management tools:
 
 - `debug_this_crash` — high-level crash diagnosis, verification, and bounded autonomous workflow
 - `debug_this_hang` — bounded all-thread hang/deadlock triage with wait heuristics and Pointer-Provenance v2
@@ -17,6 +17,16 @@ qwen-dap-mcp exposes two MCP tool surfaces. The debugger implementation undernea
 - `debug_cluster_crashes` — group previously produced runtime reports by normalized crash fingerprint
 - `debug_regression_oracle` — classify terminal reproductions against an original fingerprint without calling changed failures good
 - `debug_child_requests` — inspect bounded startDebugging/child reverse requests while auto-accept remains fail-closed
+- `debug_time_travel` — rr record/replay planning and capability-gated reverse execution
+- `debug_trace_lifetime` — bounded object/pointer lifetime provenance
+- `debug_thread_timeline` — multi-thread timeline and explicit-owner lock graph
+- `debug_symbol_doctor` — binary identity, symbol mismatch and local resolver analysis
+- `debug_dump_batch` — bounded postmortem batch triage
+- `debug_adaptive_evidence` — progressive evidence budgets
+- `debug_crash_families` — exact/semantic/family crash comparison
+- `debug_cpp_object` — bounded object/vtable inspection
+- `debug_evidence_bundle` — JSON/Markdown/SARIF evidence handoff
+- `debug_adapter_doctor` — adapter capability and security-profile audit
 - `debug_diagnose_stop` — intelligent analysis of an already stopped crash
 - `debug_source_disassembly` — source/instruction/register correlation
 - `debug_find_writer` — one-shot data-breakpoint/watchpoint workflow for a suspicious value
@@ -81,7 +91,7 @@ The full toolset remains backwards compatible with the pre-v0.12 public tool sur
 
 `debug_trace_value` is different: it installs a temporary data breakpoint/watchpoint and resumes the target to collect a bounded writer timeline. It is therefore target-control behavior, is invalid for frozen postmortem sessions, and remains subject to the normal DAP policy and optional HOL Guard checks.
 
-See [differential-debugging.md](differential-debugging.md) for differential workflows and [advanced-runtime-debugging.md](advanced-runtime-debugging.md) for causal tracing, progress probes, reverse execution, reporting, clustering, regression oracles, and child-request visibility.
+See [differential-debugging.md](differential-debugging.md), [advanced-runtime-debugging.md](advanced-runtime-debugging.md), and [runtime-debugging-v2.md](runtime-debugging-v2.md) for the high-level evidence workflows.
 
 ## Remote debugging safety
 
