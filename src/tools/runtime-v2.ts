@@ -119,6 +119,8 @@ async function captureTimeline(session: GuardedDapSession, options: { samples: n
   if (session.isPostmortem()) throw new DapError('Thread timeline sampling requires a live target.');
   return session.runExclusiveLifecycle('thread timeline', async () => {
     const observations: ReturnType<typeof classifyThreadObservation>[] = [];
+    let stopReason: 'sample-budget' | 'target-exited' | 'target-terminated' | 'no-threads' = 'sample-budget';
+
     for (let sample = 1; sample <= options.samples; sample += 1) {
       const threads = (await session.threads()).slice(0, options.maxThreads);
       for (const thread of threads) {
@@ -140,13 +142,52 @@ async function captureTimeline(session: GuardedDapSession, options: { samples: n
         }
         observations.push(classifyThreadObservation(sample, thread, stack, variables));
       }
+
       if (sample === options.samples) break;
       const resumeThread = threads[0];
-      if (!resumeThread) break;
+      if (!resumeThread) {
+        stopReason = 'no-threads';
+        break;
+      }
+
+      const eventCountBeforeResume = session.snapshot().recentEvents.length;
       await session.continueExecution(resumeThread.id, false, Math.max(5000, options.intervalMs * 4));
       await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
-      await session.pause(resumeThread.id, true, Math.max(5000, options.intervalMs * 4));
+
+      const eventsAfterResume = session.snapshot().recentEvents.slice(eventCountBeforeResume);
+      const terminal = [...eventsAfterResume].reverse().find((record) => {
+        const event = (record as { event?: unknown }).event;
+        return event === 'exited' || event === 'terminated';
+      }) as { event?: 'exited' | 'terminated' } | undefined;
+      if (terminal?.event === 'exited') {
+        stopReason = 'target-exited';
+        break;
+      }
+      if (terminal?.event === 'terminated') {
+        stopReason = 'target-terminated';
+        break;
+      }
+
+      try {
+        await session.pause(resumeThread.id, true, Math.max(5000, options.intervalMs * 4));
+      } catch (error) {
+        const recent = session.snapshot().recentEvents.slice(eventCountBeforeResume);
+        const lateTerminal = [...recent].reverse().find((record) => {
+          const event = (record as { event?: unknown }).event;
+          return event === 'exited' || event === 'terminated';
+        }) as { event?: 'exited' | 'terminated' } | undefined;
+        if (lateTerminal?.event === 'exited') {
+          stopReason = 'target-exited';
+          break;
+        }
+        if (lateTerminal?.event === 'terminated') {
+          stopReason = 'target-terminated';
+          break;
+        }
+        throw error;
+      }
     }
+
     const lockGraph = buildLockOwnerGraph(observations);
     const byThread = new Map<number, typeof observations>();
     for (const observation of observations) {
@@ -160,7 +201,14 @@ async function captureTimeline(session: GuardedDapSession, options: { samples: n
       uniqueLocations: new Set(entries.map((entry) => [entry.topFrame, entry.source, entry.line, entry.instructionPointerReference].join('|'))).size,
       waitKinds: [...new Set(entries.map((entry) => entry.waitKind))],
     }));
-    return { observations, progression, lockGraph, status: session.snapshot() };
+    return {
+      observations,
+      progression,
+      lockGraph,
+      stopReason,
+      completeSampleBudget: stopReason === 'sample-budget',
+      status: session.snapshot(),
+    };
   });
 }
 
