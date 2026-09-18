@@ -380,10 +380,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install rr
+      - name: Install rr 5.9.0
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends rr
+          sudo apt-get install --yes --no-install-recommends curl
+          curl -fL --retry 3             https://github.com/rr-debugger/rr/releases/download/5.9.0/rr-5.9.0-Linux-x86_64.deb             -o "$RUNNER_TEMP/rr.deb"
+          sudo apt-get install --yes "$RUNNER_TEMP/rr.deb"
+          rr --version
           sudo sysctl -w kernel.perf_event_paranoid=1 || true
       - run: npm ci --ignore-scripts
       - run: npm run build
