@@ -88,6 +88,7 @@ jobs:
           select_suite lldb '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
           select_suite differential '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
           select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite rr '^(src/adapters/rr(-replay)?\.ts|src/tools/runtime-v2\.ts|src/tools/agent-output\.ts|test/rr.*\.ts|\.github/workflows/native-smoke\.yml)'
 
   codelldb:
     name: CodeLLDB / Windows
