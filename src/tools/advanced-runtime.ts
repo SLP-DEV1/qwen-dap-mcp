@@ -244,7 +244,7 @@ export async function progressProbe(
   if (session.isPostmortem()) throw new Error('debug_progress_probe requires a live target; frozen dumps cannot demonstrate forward progress.');
   const samples = options.samples ?? 4;
   const intervalMs = options.intervalMs ?? 250;
-  const captures: Array<{ index: number; signature: ReturnType<typeof sampleSignature>; snapshot: RuntimeSnapshot }> = [];
+  const captures: Array<{ index: number; signature: ReturnType<typeof sampleSignature>; topFrames: Array<{ name: string; source?: string; line: number }> }> = [];
 
   for (let index = 0; index < samples; index += 1) {
     const snapshot = await session.runtimeSnapshot({
@@ -255,7 +255,15 @@ export async function progressProbe(
       includeModules: false,
       includeExceptionInfo: false,
     });
-    captures.push({ index: index + 1, signature: sampleSignature(snapshot), snapshot });
+    captures.push({
+      index: index + 1,
+      signature: sampleSignature(snapshot),
+      topFrames: snapshot.stack.slice(0, 5).map((frame) => ({
+        name: frame.name,
+        ...(frame.source?.path || frame.source?.name ? { source: frame.source?.path ?? frame.source?.name } : {}),
+        line: frame.line,
+      })),
+    });
     if (index === samples - 1) break;
 
     await session.continueExecution(snapshot.thread.id, false, Math.max(1000, intervalMs * 4));
