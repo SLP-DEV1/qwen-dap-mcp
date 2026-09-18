@@ -24,6 +24,12 @@ export type BinaryIdentity = {
   probes: ToolProbe[];
 };
 
+export function resolveSymbolInspectionTool(name: string, envName: string): string | undefined {
+  const configured = process.env[envName]?.trim();
+  if (configured) return resolveExistingFile(configured, `${name} executable`);
+  return commandOnPath(name);
+}
+
 function commandOnPath(name: string): string | undefined {
   const locator = process.platform === 'win32' ? 'where.exe' : 'which';
   const result = spawnSync(locator, [name], {
@@ -76,7 +82,7 @@ export function inspectBinaryIdentity(input: string): BinaryIdentity {
     if (buildId) return { path, format: 'elf', buildId: buildId.toLowerCase(), probes };
   }
 
-  const llvmReadobj = commandOnPath('llvm-readobj');
+  const llvmReadobj = resolveSymbolInspectionTool('llvm-readobj', 'QWEN_DAP_MCP_LLVM_READOBJ');
   if (llvmReadobj) {
     const probe = run(llvmReadobj, ['--coff-debug-directory', path]);
     probes.push(probe);
@@ -111,7 +117,7 @@ export function inspectBinaryIdentity(input: string): BinaryIdentity {
 
 export function inspectPdbIdentity(input: string) {
   const path = resolveExistingFile(input, 'PDB file');
-  const command = commandOnPath('llvm-pdbutil');
+  const command = resolveSymbolInspectionTool('llvm-pdbutil', 'QWEN_DAP_MCP_LLVM_PDBUTIL');
   const probe = run(command, ['dump', '-summary', path]);
   const text = probe.output ?? '';
   const guid = text.match(/(?:Guid|GUID):\s*([0-9a-f{}-]{16,})/i)?.[1];
