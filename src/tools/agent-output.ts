@@ -1,6 +1,7 @@
 import * as z from 'zod/v4';
 import {
   debugAdapterDoctorOutputSchema,
+  debugAdoptChildOutputSchema,
   debugAdaptiveEvidenceOutputSchema,
   debugCausalTraceOutputSchema,
   debugChildRequestsOutputSchema,
@@ -21,6 +22,7 @@ import {
 
 export {
   debugAdapterDoctorOutputSchema,
+  debugAdoptChildOutputSchema,
   debugAdaptiveEvidenceOutputSchema,
   debugCausalTraceOutputSchema,
   debugChildRequestsOutputSchema,
@@ -303,7 +305,7 @@ export const debugTraceValueOutputSchema = z.object({
 
 export const debugAdvancedOutputSchema = z.object({}).catchall(z.unknown());
 
-export const AGENT_OUTPUT_SCHEMAS = {
+export const FORENSICS_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
   debug_compare_runs: debugCompareRunsOutputSchema,
@@ -315,6 +317,7 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_cluster_crashes: debugClusterCrashesOutputSchema,
   debug_regression_oracle: debugRegressionOracleOutputSchema,
   debug_child_requests: debugChildRequestsOutputSchema,
+  debug_adopt_child: debugAdoptChildOutputSchema,
   debug_time_travel: debugTimeTravelOutputSchema,
   debug_trace_lifetime: debugTraceLifetimeOutputSchema,
   debug_thread_timeline: debugThreadTimelineOutputSchema,
@@ -324,6 +327,27 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_crash_families: debugCrashFamiliesOutputSchema,
   debug_cpp_object: debugCppObjectOutputSchema,
   debug_evidence_bundle: debugEvidenceBundleOutputSchema,
+  debug_adapter_doctor: debugAdapterDoctorOutputSchema,
+  debug_diagnose_stop: debugDiagnoseStopOutputSchema,
+  debug_source_disassembly: debugSourceDisassemblyOutputSchema,
+  debug_find_writer: debugFindWriterOutputSchema,
+  debug_run_to_stop: debugRunToStopOutputSchema,
+  debug_open_dump: debugOpenDumpOutputSchema,
+  debug_snapshot: debugSnapshotOutputSchema,
+  debug_status: debugStatusOutputSchema,
+  debug_continue: debugContinueOutputSchema,
+  debug_disconnect: debugDisconnectOutputSchema,
+  debug_sessions: debugSessionsOutputSchema,
+} as const;
+
+export const AGENT_OUTPUT_SCHEMAS = {
+  debug_this_crash: debugThisCrashOutputSchema,
+  debug_this_hang: debugThisHangOutputSchema,
+  debug_compare_runs: debugCompareRunsOutputSchema,
+  debug_trace_value: debugTraceValueOutputSchema,
+  debug_causal_trace: debugCausalTraceOutputSchema,
+  debug_progress_probe: debugProgressProbeOutputSchema,
+  debug_runtime_report: debugRuntimeReportOutputSchema,
   debug_adapter_doctor: debugAdapterDoctorOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
