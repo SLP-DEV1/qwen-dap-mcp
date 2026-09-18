@@ -57,7 +57,18 @@ try {
   );
   await stoppedPromise;
 
-  const cpp = await handlers.get('debug_cpp_object')!({ name: 'ptr', bytes: 32 });
+  const initial = await session.runtimeSnapshot({
+    stackLevels: 12,
+    maxVariablesPerScope: 100,
+    includeDisassembly: false,
+    includeModules: true,
+    includeExceptionInfo: false,
+  });
+  const ptrEvaluation = await session.evaluate('ptr', initial.frame.id, 'watch');
+  const pointerMatch = ptrEvaluation.result.match(/0x[0-9a-f]+/i);
+  assert.ok(pointerMatch, 'GDB did not return a hexadecimal ptr value: ' + ptrEvaluation.result);
+
+  const cpp = await handlers.get('debug_cpp_object')!({ pointer: pointerMatch[0], bytes: 32 });
   assert.equal(cpp.isError, undefined, JSON.stringify(cpp));
   assert.match(cpp.structuredContent?.pointer ?? '', /^0x/i);
   assert.match(cpp.structuredContent?.probableVtable ?? '', /^0x/i);
@@ -69,7 +80,7 @@ try {
   assert.ok(adaptive.structuredContent?.report?.fingerprintsV2?.semantic);
 
   const lifetime = await handlers.get('debug_trace_lifetime')!({
-    name: 'ptr',
+    name: 'local_progress',
     direction: 'forward',
     maxStops: 1,
     reverseSteps: 1,
