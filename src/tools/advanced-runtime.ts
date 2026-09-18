@@ -393,6 +393,31 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
   );
 
   server.registerTool(
+    'debug_reverse_execution',
+    {
+      title: 'Reverse Debugger Execution',
+      description: 'Move a stopped live target backward using DAP reverseContinue or stepBack when the active adapter advertises reverse-execution support. Use it with record/replay-capable debuggers to inspect state before a failure without waiting for a future writer. Do not use it on ordinary adapters that lack supportsStepBack, on frozen dumps, or as a substitute for reproducible verification.',
+      annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
+      outputSchema: debugAdvancedOutputSchema,
+      inputSchema: z.object({
+        action: z.enum(['reverseContinue', 'stepBack']).describe('Reverse execution operation to request from the active DAP adapter.'),
+        threadId: z.number().int().positive().describe('Stopped DAP thread identifier that should be moved backward.'),
+        waitForStop: z.boolean().default(true).describe('Wait for the next stopped event after the reverse request before returning.'),
+        timeoutMs: z.number().int().min(1000).max(120_000).default(15_000).describe('Maximum time to wait for the reverse operation and resulting stopped event.'),
+      }),
+    },
+    async ({ action, threadId, waitForStop, timeoutMs }) => {
+      try {
+        if (session.isPostmortem()) throw new Error('debug_reverse_execution requires a live record/replay-capable target.');
+        const result = action === 'stepBack'
+          ? await session.stepBack(threadId, waitForStop, timeoutMs)
+          : await session.reverseContinue(threadId, waitForStop, timeoutMs);
+        return structuredResult({ action, result, status: session.snapshot() });
+      } catch (error) { return errorResult(error); }
+    },
+  );
+
+  server.registerTool(
     'debug_runtime_report',
     {
       title: 'Build Runtime Debug Report',
