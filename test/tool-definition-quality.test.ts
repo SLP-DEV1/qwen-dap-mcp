@@ -113,7 +113,6 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_trace_lifetime',
     'debug_find_writer',
     'debug_run_to_stop',
-    'debug_continue',
     'debug_disconnect',
     'debug_sessions',
   ]) {
@@ -133,7 +132,6 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_trace_lifetime',
     'debug_find_writer',
     'debug_run_to_stop',
-    'debug_continue',
   ]) {
     assert.equal(
       definitions.get(name)?.annotations?.destructiveHint,
