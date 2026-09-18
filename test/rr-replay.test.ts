@@ -23,7 +23,7 @@ test('managed rr replay starts, reports and stops a fixed-argv replay process', 
     "  setInterval(() => {}, 1000);",
     "}",
     '',
-  ].join('\\n');
+  ].join('\n');
   writeFileSync(fakeRr, script, 'utf8');
   chmodSync(fakeRr, 0o755);
 
