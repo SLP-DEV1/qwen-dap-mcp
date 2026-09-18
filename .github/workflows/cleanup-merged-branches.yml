@@ -109,6 +109,7 @@ jobs:
               ['feat/hol-guard-hardening', '188e754a303f3d66480e1bb626bc6afef98e6bda'],
               ['feature/v0.12-agent-demo', '8118cebfd140bddec6a80c7775491d1dd588896b'],
               ['feat/managed-rr-replay', '10335025c69709f11756da3b6cbc681c67e0fed2'],
+              ['chore/cleanup-stale-branches', 'ba51654865fcb9e48d4ff48e87096be1be813303'],
             ]);
 
             for (const [branch, expectedSha] of staleExactBranches) {
