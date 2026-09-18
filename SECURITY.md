@@ -35,6 +35,22 @@ Useful non-sensitive context includes:
 
 These boundaries are security properties. Changes that weaken them should receive explicit review and regression coverage.
 
+## Runtime v2 profile, record/replay, and evidence boundaries
+
+`QWEN_DAP_MCP_PROFILE` provides composed defaults without bypassing existing gates:
+
+- `inspect` → agent toolset + inspect-only DAP policy,
+- `local-debug` → agent toolset + standard DAP policy,
+- `advanced` → full toolset + standard DAP policy.
+
+Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override only their corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent.
+
+The rr integration is not a general command runner. rr discovery/probing uses fixed executable names/paths and `shell=false`; recording executes only the explicit program and literal argv supplied to `debug_time_travel`. Replay setup is emitted as a loopback-only plan and actual debugger attachment continues through the existing validated GDB remote endpoint path.
+
+Symbol resolution remains non-fetching by default. `debug_symbol_doctor` may inspect local files and invoke fixed local identity tools such as readelf/llvm-readobj/llvm-pdbutil/dwarfdump when available, but configured symbol servers are returned as explicit candidates instead of being contacted automatically.
+
+Evidence export is bounded to dedicated `.qwen-dap.json`, `.qwen-dap.md`, or `.qwen-dap.sarif` artifact names, rejects symbolic-link targets, refuses overwrite unless explicitly requested, and caps output size. This keeps evidence handoff from becoming a general source/config writing primitive. Imported evidence is offline/read-only context and has no authority over the original target.
+
 ## DAP request policy boundary
 
 Outgoing DAP requests pass through an enforceable transport policy in `DapConnection.sendRequest()` before sequence allocation, pending-request state, or the adapter transport write occurs. A denied request therefore cannot reach the debug adapter through the normal request path.
