@@ -32,7 +32,7 @@ All targeted workflows use `concurrency` with `cancel-in-progress`, so an update
 
 ## 3. Security analysis
 
-`.github/workflows/security-analysis.yml` runs CodeQL for JavaScript/TypeScript on pull requests, `main`, and a weekly schedule. Pull requests also run GitHub dependency review so newly introduced dependency risk is visible before merge.
+`.github/workflows/security-analysis.yml` runs CodeQL for JavaScript/TypeScript on pull requests, `main`, and a weekly schedule. A separate production dependency audit runs `npm audit --omit=dev --audit-level=high`, avoiding reliance on repository-level Dependency Graph configuration.
 
 ## 4. Release gate
 
