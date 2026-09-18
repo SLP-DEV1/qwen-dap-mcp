@@ -17,9 +17,18 @@ function assertBounded(value: unknown): void {
   }
 }
 
-function writableTarget(input: string, overwrite: boolean): string {
+function writableTarget(input: string, overwrite: boolean, format: 'json' | 'markdown' | 'sarif'): string {
   if (!input.trim()) throw new DapError('Evidence output path must not be empty.');
   const target = resolve(input);
+  const lowered = target.toLowerCase();
+  const validSuffix = format === 'json'
+    ? lowered.endsWith('.qwen-dap.json')
+    : format === 'markdown'
+      ? lowered.endsWith('.qwen-dap.md') || lowered.endsWith('.qwen-dap.markdown')
+      : lowered.endsWith('.qwen-dap.sarif') || lowered.endsWith('.qwen-dap.sarif.json');
+  if (!validSuffix) {
+    throw new DapError('Evidence exports must use a dedicated .qwen-dap.json, .qwen-dap.md, or .qwen-dap.sarif filename so this feature cannot act as a general-purpose file writer.');
+  }
   resolveExistingDirectory(dirname(target), 'Evidence output directory');
   if (existsSync(target)) {
     const stat = lstatSync(target);
@@ -113,7 +122,7 @@ export function exportEvidenceBundle(options: {
 }) {
   assertBounded(options.evidence);
   const format = options.format ?? 'json';
-  const target = writableTarget(options.path, options.overwrite ?? false);
+  const target = writableTarget(options.path, options.overwrite ?? false, format);
   const content = format === 'markdown'
     ? renderEvidenceMarkdown(options.evidence)
     : JSON.stringify(format === 'sarif' ? buildSarif(options.evidence) : options.evidence, null, 2);
