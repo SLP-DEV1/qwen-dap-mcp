@@ -73,6 +73,6 @@ test('security analysis covers source and dependency changes', async () => {
   const security = await text('security-analysis.yml');
   assert.match(security, /github\/codeql-action\/init@v4/);
   assert.match(security, /github\/codeql-action\/analyze@v4/);
-  assert.match(security, /actions\/dependency-review-action@v4/);
+  assert.match(security, /npm audit --omit=dev --audit-level=high/);
   assert.match(security, /^\s{2}schedule:/m);
 });
