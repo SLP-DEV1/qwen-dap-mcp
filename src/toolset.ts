@@ -7,7 +7,7 @@ import {
   SESSION_TEARDOWN_ANNOTATIONS,
 } from './tools/tool-annotations.js';
 
-export type ToolsetMode = 'agent' | 'full';
+export type ToolsetMode = 'agent' | 'forensics' | 'full';
 
 export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
@@ -16,21 +16,9 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_trace_value',
   'debug_causal_trace',
   'debug_progress_probe',
-  'debug_reverse_execution',
   'debug_runtime_report',
-  'debug_cluster_crashes',
-  'debug_regression_oracle',
-  'debug_child_requests',
-  'debug_time_travel',
   'debug_trace_lifetime',
-  'debug_thread_timeline',
-  'debug_symbol_doctor',
-  'debug_dump_batch',
   'debug_adaptive_evidence',
-  'debug_crash_families',
-  'debug_cpp_object',
-  'debug_evidence_bundle',
-  'debug_adapter_doctor',
   'debug_diagnose_stop',
   'debug_source_disassembly',
   'debug_find_writer',
@@ -38,9 +26,24 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_open_dump',
   'debug_snapshot',
   'debug_status',
-  'debug_continue',
   'debug_disconnect',
   'debug_sessions',
+]);
+
+export const FORENSICS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...AGENT_TOOL_NAMES,
+  'debug_reverse_execution',
+  'debug_cluster_crashes',
+  'debug_regression_oracle',
+  'debug_child_requests',
+  'debug_time_travel',
+  'debug_thread_timeline',
+  'debug_symbol_doctor',
+  'debug_dump_batch',
+  'debug_crash_families',
+  'debug_cpp_object',
+  'debug_evidence_bundle',
+  'debug_adapter_doctor',
 ]);
 
 const LOCAL_EXECUTION_TOOLS = new Set([
@@ -114,20 +117,17 @@ export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): To
     return securityProfileDefaults(resolveSecurityProfile()).toolset;
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'agent' || normalized === 'full') return normalized;
+  if (normalized === 'agent' || normalized === 'forensics' || normalized === 'full') return normalized;
   logger.warn('Invalid QWEN_DAP_MCP_TOOLSET; falling back to the safe agent toolset', { value });
   return 'agent';
 }
 
 export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
-  return mode === 'full' || AGENT_TOOL_NAMES.has(toolName);
+  if (mode === 'full') return true;
+  if (mode === 'forensics') return FORENSICS_TOOL_NAMES.has(toolName);
+  return AGENT_TOOL_NAMES.has(toolName);
 }
 
-/**
- * Add explicit MCP behavior metadata to legacy/manual tool registrations.
- * This is intentionally separate from toolset filtering so callers that use
- * filterToolRegistrar(..., 'full') retain the historical identity/no-op path.
- */
 export function annotateToolRegistrar<T extends ToolRegistrar>(registrar: T): T {
   return new Proxy(registrar, {
     get(target, property, receiver) {
