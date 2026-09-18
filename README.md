@@ -2,7 +2,7 @@
 
 **Give coding agents a real native debugger.**
 
-`qwen-dap-mcp` is a local **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native crash debugging, hang/deadlock triage, crash dumps, differential runtime analysis, remote targets, and bounded fix/verify workflows.
+`qwen-dap-mcp` is a local **Debug Adapter Protocol (DAP) → Model Context Protocol (MCP)** bridge for native crash debugging, hang/deadlock triage, crash dumps, differential runtime analysis, record/replay, runtime forensics, remote targets, and bounded fix/verify workflows.
 
 Built for **Qwen Code**, usable from any stdio MCP client, and designed to expose debugger evidence without turning MCP into a general-purpose shell.
 
@@ -26,7 +26,7 @@ Coding agents can read source and propose patches, but native failures often can
 - **Evidence first** — inspect the actual failing process instead of guessing from source.
 - **High-level workflows** — crash, hang, differential, causal tracing, progress probing, runtime-report, dump, and verification tools are designed for agents rather than humans driving a debugger console.
 - **Bounded automation** — autonomous fix/verify state is explicit, serializable, iteration-limited, and re-checks the original reproduction.
-- **Small default surface** — the normal agent toolset stays compact while advanced low-level DAP tools remain opt-in.
+- **Small default surface** — the normal 18-tool agent surface stays compact; specialized runtime forensics are opt-in through `forensics`, and raw DAP remains opt-in through `full`.
 - **Local by default** — the MCP server communicates over stdio and debugger adapters run locally unless you explicitly configure a validated remote target.
 
 ## Quick start
@@ -114,9 +114,9 @@ The MCP server supplies debugger evidence and bounded workflow state. Source edi
 | Suspicious value | Trace real writers with data breakpoints/watchpoints and bounded temporal tracing |
 | Runtime causality | Build a bounded suspicious-value consumer → writer/producer chain with `debug_causal_trace` |
 | Suspected busy loop | Resume/pause sample a live target with `debug_progress_probe` to distinguish repeated state from observed execution movement |
-| Record/replay target | Move backward with capability-gated `debug_reverse_execution` using DAP `stepBack` / `reverseContinue` |
+| Record/replay target | Record with `rr`, manage loopback replay lifecycle, optionally attach hardened GDB DAP, and move backward with DAP reverse execution |
 | Crash fleet triage | Build `debug_runtime_report` fingerprints, cluster them with `debug_cluster_crashes`, and classify regression reproductions with `debug_regression_oracle` |
-| Child/fork signal | Inspect fail-closed adapter `startDebugging` requests with `debug_child_requests` without auto-spawning child sessions |
+| Child/fork signal | Inspect fail-closed `startDebugging` requests and explicitly adopt a validated child into an isolated session only when `QWEN_DAP_MCP_CHILD_DEBUG=1` |
 | Crash dump | Inspect Windows minidumps and supported LLDB/GDB postmortem targets without launching the failed program |
 | Remote native target | Attach through validated `gdbserver` / `lldb-server gdbserver` endpoints with loopback-first policy |
 | Multiple targets | Keep isolated DAP sessions and route requests by `sessionId` |
@@ -128,7 +128,7 @@ The MCP server supplies debugger evidence and bounded workflow state. Source edi
 
 ### Default agent tool surface
 
-The default toolset intentionally exposes 31 high-signal tools:
+The default `agent` toolset intentionally exposes **18 high-signal tools**:
 
 | Tool | Purpose |
 | --- | --- |
@@ -136,23 +136,10 @@ The default toolset intentionally exposes 31 high-signal tools:
 | `debug_this_hang` | High-level hang/deadlock triage |
 | `debug_compare_runs` | Semantic comparison of baseline and failing stopped sessions |
 | `debug_trace_value` | Bounded temporal tracing of a suspicious value |
-| `debug_causal_trace` | Build a bounded consumer-to-writer producer chain for a suspicious runtime value |
-| `debug_progress_probe` | Sample live execution to distinguish no observed progress, same-frame movement, and probable busy loops |
-| `debug_reverse_execution` | Capability-gated reverseContinue / stepBack for record/replay-capable DAP targets |
-| `debug_runtime_report` | Create a crash fingerprint report with symbols, sanitizer output, memory hazards, ABI arguments, and output correlation |
-| `debug_cluster_crashes` | Group multiple runtime reports by normalized crash fingerprint |
-| `debug_regression_oracle` | Classify a terminal reproduction as original-crash, changed-crash, or inconclusive |
-| `debug_child_requests` | Inspect bounded child/fork startDebugging reverse requests while keeping auto-accept fail-closed |
-| `debug_time_travel` | Bounded rr recording/replay planning plus DAP reverse execution |
-| `debug_trace_lifetime` | Combine writer tracing, sanitizer provenance, and optional reverse stepping for object lifetime analysis |
-| `debug_thread_timeline` | Multi-thread execution timeline with conservative lock-owner cycle evidence |
-| `debug_symbol_doctor` | Diagnose module symbols, local symbol candidates, and binary/PDB identity mismatches |
-| `debug_dump_batch` | Analyze a bounded directory of native dumps and group crash families |
-| `debug_adaptive_evidence` | Expand debugger evidence only when cheaper phases are insufficient |
-| `debug_crash_families` | Compare exact, semantic, and broad crash-family fingerprints |
-| `debug_cpp_object` | Inspect a C++ object header and probable vtable pointer without memory writes |
-| `debug_evidence_bundle` | Export/import bounded JSON, Markdown, or SARIF debug evidence |
-| `debug_adapter_doctor` | Audit active DAP capabilities, installed adapters, rr, and security profile |
+| `debug_causal_trace` | Build a bounded consumer-to-writer producer chain |
+| `debug_progress_probe` | Sample live execution for no-progress / busy-loop triage |
+| `debug_runtime_report` | Structured crash fingerprint, symbols, sanitizer, ABI and hypothesis evidence |
+| `debug_adapter_doctor` | Audit current capabilities and local debugger prerequisites |
 | `debug_diagnose_stop` | Diagnose the current debugger stop |
 | `debug_source_disassembly` | Correlate source with nearby native instructions |
 | `debug_find_writer` | Stop at the code that writes a watched value |
@@ -164,7 +151,13 @@ The default toolset intentionally exposes 31 high-signal tools:
 | `debug_disconnect` | Cleanly end a debugger session |
 | `debug_sessions` | Create, inspect, and remove isolated sessions |
 
-Need raw stacks, scopes, variables, memory, modules, breakpoints, evaluation, stepping, or adapter-specific controls? See the opt-in **full toolset** in [docs/toolsets.md](docs/toolsets.md).
+For specialized record/replay, lifetime, symbol, crash-family, C++ object, evidence-export, regression, and child-adoption workflows, opt into the **32-tool `forensics` surface**:
+
+```bash
+QWEN_DAP_MCP_TOOLSET=forensics npx -y @slp-dev1/qwen-dap-mcp
+```
+
+Need raw stacks, scopes, variables, memory, manual breakpoints, evaluation, stepping, or adapter-specific controls? Use the explicit **`full` toolset**. See [docs/toolsets.md](docs/toolsets.md).
 
 ## Debugger support
 
