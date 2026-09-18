@@ -3,6 +3,7 @@ import test from 'node:test';
 import { z } from 'zod';
 import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
+import { registerAdvancedRuntimeTools } from '../src/tools/advanced-runtime.js';
 import { registerDebugTools } from '../src/tools/register-debug-tools.js';
 import { registerDifferentialTools } from '../src/tools/register-differential-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
@@ -41,6 +42,7 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
   registerDumpTools(agentServer as never, session);
   registerRunToStopTool(agentServer as never, session);
   registerAgentDiagnosticTools(agentServer as never, session);
+  registerAdvancedRuntimeTools(agentServer as never, session);
   registerHangDiagnosticTool(agentServer as never, session);
   registerFindWriterTool(agentServer as never, session);
   registerValueTracingTool(agentServer as never, session);
@@ -86,6 +88,10 @@ test('agent tool annotations distinguish inspection from target execution', () =
 
   for (const name of [
     'debug_compare_runs',
+    'debug_runtime_report',
+    'debug_cluster_crashes',
+    'debug_regression_oracle',
+    'debug_child_requests',
     'debug_diagnose_stop',
     'debug_source_disassembly',
     'debug_open_dump',
@@ -102,6 +108,9 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_this_crash',
     'debug_this_hang',
     'debug_trace_value',
+    'debug_causal_trace',
+    'debug_progress_probe',
+    'debug_reverse_execution',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
@@ -119,6 +128,9 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_this_crash',
     'debug_this_hang',
     'debug_trace_value',
+    'debug_causal_trace',
+    'debug_progress_probe',
+    'debug_reverse_execution',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
