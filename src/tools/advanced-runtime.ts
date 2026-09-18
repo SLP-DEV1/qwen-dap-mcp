@@ -457,6 +457,33 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
   );
 
   server.registerTool(
+    'debug_child_requests',
+    {
+      title: 'Inspect Child Debug Requests',
+      description: 'Inspect bounded DAP reverse requests such as startDebugging emitted by an adapter when a child, fork, worker, or subprocess wants a debugger session. Use it to discover child-debug opportunities without silently granting adapter-controlled process execution. This tool is read-only: qwen-dap-mcp continues to reject reverse requests by default, so do not expect it to auto-launch child sessions.',
+      annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
+      outputSchema: debugAdvancedOutputSchema,
+      inputSchema: z.object({
+        command: z.string().min(1).optional().describe('Optional reverse-request command filter, for example startDebugging; omit to return the bounded recent history.'),
+      }),
+    },
+    async ({ command }) => {
+      const requests = session.connection.recentReverseRequests
+        .filter((request) => !command || request.command === command)
+        .slice(-50);
+      return structuredResult({
+        requests,
+        autoAccepted: false,
+        policy: 'fail-closed',
+        guidance: [
+          'startDebugging requests are captured for visibility but still rejected by the DAP transport.',
+          'Create and authorize a separate debugger session explicitly before taking control of a child target.',
+        ],
+      });
+    },
+  );
+
+  server.registerTool(
     'debug_regression_oracle',
     {
       title: 'Classify Regression Reproduction',
