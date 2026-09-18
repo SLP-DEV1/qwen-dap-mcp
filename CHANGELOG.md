@@ -4,6 +4,12 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added managed rr replay lifecycle actions to `debug_time_travel`: `replay-start`, `replay-status`, and `replay-stop`, with optional loopback-only hardened GDB DAP attach.
+- Added a real Linux rr record/replay smoke plus a fake-rr lifecycle unit test.
+
+
 ## 0.18.1 - 2026-09-18
 
 ### Fixed / release hardening
