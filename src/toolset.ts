@@ -1,4 +1,5 @@
 import { logger } from './logger.js';
+import { resolveSecurityProfile, securityProfileDefaults } from './security-profile.js';
 import {
   DEBUG_SESSION_CONTROL_ANNOTATIONS,
   LOCAL_TARGET_EXECUTION_ANNOTATIONS,
@@ -99,7 +100,9 @@ function withBehaviorAnnotations(name: string, args: any[]): any[] {
 }
 
 export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): ToolsetMode {
-  if (value === undefined || value.trim() === '') return 'agent';
+  if (value === undefined || value.trim() === '') {
+    return securityProfileDefaults(resolveSecurityProfile()).toolset;
+  }
   const normalized = value.trim().toLowerCase();
   if (normalized === 'agent' || normalized === 'full') return normalized;
   logger.warn('Invalid QWEN_DAP_MCP_TOOLSET; falling back to the safe agent toolset', { value });
