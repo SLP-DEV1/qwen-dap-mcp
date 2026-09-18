@@ -45,7 +45,7 @@ These boundaries are security properties. Changes that weaken them should receiv
 
 Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override only their corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent.
 
-The rr integration is not a general command runner. rr discovery/probing uses fixed executable names/paths and `shell=false`; recording executes only the explicit program and literal argv supplied to `debug_time_travel`. Replay setup is emitted as a loopback-only plan and actual debugger attachment continues through the existing validated GDB remote endpoint path.
+The rr integration is not a general command runner. rr discovery/probing uses fixed executable names/paths and `shell=false`; recording executes only the explicit program and literal argv supplied to `debug_time_travel`. Managed replay uses the fixed `rr replay -s PORT TRACE` argv, binds debugger attachment to loopback through the existing validated GDB remote endpoint path, and cleans up the rr process if managed attach fails.
 
 Symbol resolution remains non-fetching by default. `debug_symbol_doctor` may inspect local files and invoke fixed local identity tools such as readelf/llvm-readobj/llvm-pdbutil/dwarfdump when available, but configured symbol servers are returned as explicit candidates instead of being contacted automatically.
 
