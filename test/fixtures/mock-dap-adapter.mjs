@@ -45,6 +45,7 @@ function handle(request) {
         supportsFunctionBreakpoints: true,
         supportsInstructionBreakpoints: true,
         supportsDataBreakpoints: true,
+        supportsStepBack: true,
         exceptionBreakpointFilters: [
           { filter: 'mock_throw', label: 'Mock throw', default: false, supportsCondition: true },
         ],
@@ -179,6 +180,8 @@ function handle(request) {
       setTimeout(() => event('stopped', { reason: 'pause', threadId: request.arguments?.threadId ?? 1, allThreadsStopped: true }), 5);
       break;
     case 'continue':
+    case 'reverseContinue':
+    case 'stepBack':
     case 'next':
     case 'stepIn':
     case 'stepOut':
@@ -186,9 +189,12 @@ function handle(request) {
         failure(request, `Mock ${request.command} rejected`);
         break;
       }
-      response(request, request.command === 'continue' ? { allThreadsContinued: true } : {});
+      response(request, request.command === 'continue' || request.command === 'reverseContinue' ? { allThreadsContinued: true } : {});
       setTimeout(() => event('stopped', {
-        reason: request.command === 'continue' ? 'breakpoint' : 'step',
+        reason: request.command === 'continue' ? 'breakpoint'
+          : request.command === 'reverseContinue' ? 'reverse'
+            : request.command === 'stepBack' ? 'step'
+              : 'step',
         threadId: 1,
         allThreadsStopped: true,
       }), 5);
