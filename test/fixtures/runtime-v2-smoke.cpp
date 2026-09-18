@@ -22,14 +22,18 @@ void replace_object(RuntimeObject*& object) {
   object = nullptr;
 }
 
+int exercise_object(RuntimeObject*& object) {
+  int marker = object->score();
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // RUNTIME_V2_BREAKPOINT
+  replace_object(object);
+  return marker;
+}
+
 int main() {
   RuntimeObject* object = new RuntimeObject();
   std::thread worker(worker_loop);
 
-  int marker = object->score();
-  std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // RUNTIME_V2_BREAKPOINT
-
-  replace_object(object);
+  int marker = exercise_object(object);
   keep_worker = false;
   worker.join();
 
