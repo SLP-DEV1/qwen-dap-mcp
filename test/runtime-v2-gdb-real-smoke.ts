@@ -34,8 +34,7 @@ if (!programArg || !sourceArg) {
 const program = resolve(programArg);
 const source = resolve(sourceArg);
 const sourceText = readFileSync(source, 'utf8');
-const breakpointLine = sourceText.split(/?
-/).findIndex((line) => line.includes('RUNTIME_V2_BREAKPOINT')) + 1;
+const breakpointLine = sourceText.split(/\\r?\\n/).findIndex((line) => line.includes('RUNTIME_V2_BREAKPOINT')) + 1;
 assert.ok(breakpointLine > 0, 'runtime v2 breakpoint marker not found');
 
 const handlers = new Map<string, ToolHandler>();
