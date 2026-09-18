@@ -33,7 +33,19 @@ import {
   detectMemoryHazards,
   parseSanitizerEvidence,
 } from './advanced-runtime.js';
-import { debugAdvancedOutputSchema, structuredResult } from './agent-output.js';
+import {
+  debugAdapterDoctorOutputSchema,
+  debugAdaptiveEvidenceOutputSchema,
+  debugCppObjectOutputSchema,
+  debugCrashFamiliesOutputSchema,
+  debugDumpBatchOutputSchema,
+  debugEvidenceBundleOutputSchema,
+  debugLifetimeTraceOutputSchema,
+  debugSymbolDoctorOutputSchema,
+  debugThreadTimelineOutputSchema,
+  debugTimeTravelOutputSchema,
+  structuredResult,
+} from './agent-output.js';
 import { openDump, type DumpAdapterKind } from './register-dump-tools.js';
 import { findObservedValue, traceValue } from './value-tracing.js';
 import {
@@ -164,7 +176,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Record and Time-Travel Debugging',
       description: 'Coordinate bounded record/replay debugging with rr and DAP reverse execution. Use doctor to inspect rr availability, record to execute one explicitly supplied program under rr, replay-plan to generate a loopback-only rr/GDB handoff, or reverse to move an already record/replay-capable DAP target backward. Do not use record on untrusted targets outside an isolation boundary or assume ordinary debuggers support reverse execution.',
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugTimeTravelOutputSchema,
       inputSchema: z.object({
         action: z.enum(['doctor', 'record', 'replay-plan', 'reverse']).describe('Time-travel action: inspect rr, create a bounded rr recording, build a loopback replay plan, or issue DAP reverse execution.'),
         program: z.string().min(1).optional().describe('Executable used only for action=record.'),
@@ -206,7 +218,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Trace Object Lifetime',
       description: 'Trace lifetime evidence for one debugger-visible pointer or object handle using the current snapshot, sanitizer/runtime output, bounded forward writer tracing, and optional reverse stepping when supported. Use this for suspected use-after-free, stale ownership, or unexpected pointer replacement. Do not use forward tracing on a frozen dump or when resuming the target is unsafe.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugLifetimeTraceOutputSchema,
       inputSchema: z.object({
         name: z.string().min(1).max(512).describe('Debugger-visible pointer/object expression whose lifetime should be investigated.'),
         direction: z.enum(['forward', 'reverse', 'hybrid']).default('forward').describe('Forward uses writer watchpoints, reverse uses stepBack, and hybrid collects both when supported.'),
@@ -255,7 +267,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Capture Multi-Thread Timeline',
       description: 'Capture bounded all-thread stack/variable samples across short resume-pause intervals, classify waits, measure per-thread execution movement, and build a conservative lock-owner graph only from explicit debugger-visible owner thread IDs. Use this for starvation, livelock, lock contention, and deadlock investigation. Do not use it when target resumption is unsafe because sampling perturbs scheduling.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugThreadTimelineOutputSchema,
       inputSchema: z.object({
         samples: z.number().int().min(2).max(8).default(4).describe('Number of process-wide samples to capture.'),
         intervalMs: z.number().int().min(25).max(5000).default(250).describe('Approximate live execution interval between samples.'),
@@ -275,7 +287,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Diagnose Symbols and Binary Identity',
       description: 'Diagnose missing or mismatched native debug symbols using current DAP module evidence, bounded local symbol-cache search, optional PE/PDB GUID-age comparison, ELF Build-ID or Mach-O UUID probing, and explicit configured symbol-server candidates. Use it before source-level root-cause claims when symbols are partial or suspicious. Do not use filename-only cache matches as proof of identity, and this tool never downloads remote symbols automatically.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugSymbolDoctorOutputSchema,
       inputSchema: z.object({
         program: z.string().min(1).optional().describe('Optional executable image for local PE/ELF/Mach-O identity probing.'),
         pdb: z.string().min(1).optional().describe('Optional PDB path for GUID/age comparison when llvm-pdbutil is locally available.'),
@@ -309,7 +321,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Analyze Crash Dump Batch',
       description: 'Open a bounded set of native dump/core files from one local directory through the existing hardened postmortem adapter flow, generate runtime reports for each, and cluster them with v2 crash families. Use it for recurring crash fleets and support bundles. Do not use it on untrusted enormous directories or assume one family fingerprint proves one root cause.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugDumpBatchOutputSchema,
       inputSchema: z.object({
         directory: z.string().min(1).describe('Local directory containing native dump/core files.'),
         program: z.string().min(1).optional().describe('Optional matching executable image reused for each dump.'),
@@ -364,7 +376,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Collect Adaptive Runtime Evidence',
       description: 'Collect runtime evidence in progressively richer bounded phases instead of immediately requesting a maximal snapshot. Use it when token/DAP cost matters or the amount of evidence needed is unknown: it starts with stack and small locals, expands only when symbols, exception state, or variables are insufficient, and finishes with a full runtime report when needed. Do not use it to replace deliberate deep inspection when the required evidence is already known.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugAdaptiveEvidenceOutputSchema,
       inputSchema: z.object({
         forceFull: z.boolean().default(false).describe('Force the full evidence phase even if the cheap snapshot already looks sufficient.'),
         maxVariables: z.number().int().min(10).max(200).default(80).describe('Maximum locals/registers per scope in the richest phase.'),
@@ -413,7 +425,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Compare Crash Families',
       description: 'Compare supplied runtime reports using exact, semantic, and broad family fingerprints so superficially different crashes can be grouped while retaining concrete variants. Use it after debug_runtime_report or debug_dump_batch has produced v2 fingerprints. Do not use shared family membership as proof of one root cause; it is a triage relationship.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugCrashFamiliesOutputSchema,
       inputSchema: z.object({
         reports: z.array(z.object({
           label: z.string().optional(),
@@ -433,7 +445,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Inspect C++ Object and VTable',
       description: 'Read a bounded object header from a debugger-visible pointer, decode the probable first-word vtable pointer, correlate it with loaded modules, and return surrounding bytes plus ABI context. Use it for suspected stale C++ objects, invalid virtual dispatch, or overwritten object headers. Do not use a first-word pointer as proven vtable evidence without module/symbol/source corroboration, and this tool never writes target memory.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugCppObjectOutputSchema,
       inputSchema: z.object({
         pointer: z.string().min(1).optional().describe('Literal pointer/memory reference such as 0x1234; omit when name identifies a debugger-visible local/register.'),
         name: z.string().min(1).optional().describe('Debugger-visible local/register whose value contains the object pointer.'),
@@ -476,7 +488,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Export or Import Debug Evidence',
       description: 'Export bounded structured debugger evidence as JSON, Markdown, or SARIF, or import a JSON/SARIF bundle for offline analysis after the original process is gone. Use it for reproducible bug reports, CI handoff, or evidence replay between sessions. Do not use imported evidence as if it were live state, and exports refuse accidental overwrite by default.',
       annotations: LOCAL_ARTIFACT_WRITE_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugEvidenceBundleOutputSchema,
       inputSchema: z.object({
         action: z.enum(['export', 'import']).describe('Export supplied structured evidence to a local artifact or import a bounded JSON/SARIF artifact for offline use.'),
         path: z.string().min(1).describe('Local evidence file path to create or read.'),
@@ -500,7 +512,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       title: 'Audit Debugger Adapter Capabilities',
       description: 'Audit the active DAP session and locally installed debugger adapters, report capability support relevant to qwen-dap-mcp workflows, inspect the resolved security profile, and identify missing prerequisites such as rr. Use it during setup or when an agent workflow is unexpectedly unavailable. Do not use adapter discovery as permission to attach to or execute arbitrary targets.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugAdapterDoctorOutputSchema,
       inputSchema: z.object({
         mode: z.enum(['current', 'installed', 'all']).default('all').describe('Audit the current initialized DAP session, local adapter installations, or both.'),
       }),
