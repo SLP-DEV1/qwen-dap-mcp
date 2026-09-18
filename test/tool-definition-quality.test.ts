@@ -11,9 +11,10 @@ import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
 import { registerRuntimeV2Tools } from '../src/tools/runtime-v2.js';
+import { registerChildDebugTools } from '../src/tools/child-debug.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
 import { registerValueTracingTool } from '../src/tools/value-tracing.js';
-import { AGENT_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
+import { AGENT_TOOL_NAMES, FORENSICS_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
 
 type ToolDefinition = {
   description?: string;
@@ -26,14 +27,14 @@ type ToolDefinition = {
   inputSchema?: z.ZodTypeAny;
 };
 
-function collectToolDefinitions(): Map<string, ToolDefinition> {
+function collectToolDefinitions(mode: 'agent' | 'forensics' = 'agent'): Map<string, ToolDefinition> {
   const definitions = new Map<string, ToolDefinition>();
   const server = {
     registerTool(name: string, config: ToolDefinition) {
       definitions.set(name, config);
     },
   };
-  const agentServer = filterToolRegistrar(server as never, 'agent');
+  const agentServer = filterToolRegistrar(server as never, mode);
   const session = {} as never;
   const registry = new DapSessionRegistry();
 
@@ -45,6 +46,7 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
   registerAgentDiagnosticTools(agentServer as never, session);
   registerAdvancedRuntimeTools(agentServer as never, session);
   registerRuntimeV2Tools(agentServer as never, session);
+  registerChildDebugTools(agentServer as never, session, registry);
   registerHangDiagnosticTool(agentServer as never, session);
   registerFindWriterTool(agentServer as never, session);
   registerValueTracingTool(agentServer as never, session);
@@ -85,8 +87,23 @@ test('every default agent tool has complete selection and behavior metadata', ()
   }
 });
 
+test('every forensics tool has complete selection and behavior metadata', () => {
+  const definitions = collectToolDefinitions('forensics');
+  assert.deepEqual([...definitions.keys()].sort(), [...FORENSICS_TOOL_NAMES].sort());
+
+  for (const name of FORENSICS_TOOL_NAMES) {
+    const definition = definitions.get(name);
+    assert.ok(definition, `${name} must be registered in forensics mode`);
+    const description = definition.description?.trim() ?? '';
+    assert.ok(description.length >= 120, `${name} description should contain enough operational context`);
+    assert.match(description, /\buse\b/i, `${name} description should explain when to use it`);
+    assert.match(description, /\bdo not use\b|\binstead\b|\bonly\b/i, `${name} description should bound misuse or alternatives`);
+    assert.ok(definition.annotations, `${name} must advertise MCP behavior annotations`);
+  }
+});
+
 test('agent tool annotations distinguish inspection from target execution', () => {
-  const definitions = collectToolDefinitions();
+  const definitions = collectToolDefinitions('forensics');
 
   for (const name of [
     'debug_compare_runs',
@@ -94,6 +111,12 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_cluster_crashes',
     'debug_regression_oracle',
     'debug_child_requests',
+    'debug_symbol_doctor',
+    'debug_dump_batch',
+    'debug_adaptive_evidence',
+    'debug_crash_families',
+    'debug_cpp_object',
+    'debug_adapter_doctor',
     'debug_diagnose_stop',
     'debug_source_disassembly',
     'debug_open_dump',
@@ -113,6 +136,10 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_causal_trace',
     'debug_progress_probe',
     'debug_reverse_execution',
+    'debug_trace_lifetime',
+    'debug_thread_timeline',
+    'debug_time_travel',
+    'debug_adopt_child',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
@@ -133,6 +160,10 @@ test('agent tool annotations distinguish inspection from target execution', () =
     'debug_causal_trace',
     'debug_progress_probe',
     'debug_reverse_execution',
+    'debug_trace_lifetime',
+    'debug_thread_timeline',
+    'debug_time_travel',
+    'debug_adopt_child',
     'debug_find_writer',
     'debug_run_to_stop',
     'debug_continue',
