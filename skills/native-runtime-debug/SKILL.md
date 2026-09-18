@@ -17,9 +17,11 @@ Do not use a crash-only interpretation for a hang snapshot and do not turn a han
 
 ## Runtime debugging v2
 
+The default `agent` toolset intentionally hides specialist forensic schemas. If a runtime-v2 tool below is unavailable, use `QWEN_DAP_MCP_TOOLSET=forensics` (or the `advanced` security profile); reserve `full` for raw/manual DAP control.
+
 Prefer `debug_adaptive_evidence` when the required evidence depth is unknown and a cheap first pass may be sufficient. Use the richer `debug_runtime_report` directly when you already need modules, disassembly, crash-family fingerprints, API argument analysis, stack-integrity evidence, competing hypotheses, and the breakpoint plan.
 
-Use `debug_time_travel` for record/replay work. `record` executes only the explicit program under rr with literal argv and no shell; `replay-plan` returns a loopback GDB handoff rather than silently starting an open debug server. Reverse execution still requires an adapter that advertises reverse support.
+Use `debug_time_travel` for record/replay work. `record` executes only the explicit program under rr with literal argv and no shell; `replay-plan` returns a loopback GDB handoff; `replay-start` can manage one fixed-argv loopback rr replay process and optionally attach hardened GDB DAP, with `replay-status` / `replay-stop` for lifecycle control. Reverse execution still requires an adapter that advertises reverse support.
 
 Use `debug_trace_lifetime` for suspected stale object ownership or use-after-free. Prefer sanitizer allocation/free provenance over poison patterns, and remember that an observed writer can propagate an already-invalid pointer.
 
@@ -47,7 +49,7 @@ Use `debug_reverse_execution` only when the adapter advertises reverse execution
 
 Use `debug_runtime_report` to produce a shareable normalized crash fingerprint plus Symbol Doctor state, sanitizer-output correlation, poison-pattern memory hazards, ABI argument-register mapping, and recent debugger output. Use `debug_cluster_crashes` to group several such reports. Use `debug_regression_oracle` for bisect-style reproduction classification; a changed crash is not automatically a good revision.
 
-Use `debug_child_requests` to inspect bounded DAP reverse requests such as `startDebugging`. The bridge intentionally keeps those requests fail-closed and does not silently create or authorize child sessions.
+Use `debug_child_requests` to inspect bounded DAP reverse requests such as `startDebugging`. The bridge keeps those requests fail-closed. If the child is explicitly authorized, `debug_adopt_child` can adopt one validated request into an isolated session only when `QWEN_DAP_MCP_CHILD_DEBUG=1`; arbitrary reverse configuration is not forwarded.
 
 See `docs/advanced-runtime-debugging.md` for the complete evidence and safety model.
 
