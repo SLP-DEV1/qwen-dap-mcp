@@ -55,6 +55,7 @@ The MCP server is local stdio only. It does not expose a general shell primitive
 ## Documentation
 
 - README.md: overview, installation, tools, architecture and examples
+- docs/advanced-runtime-debugging.md: Causal tracing, progress probes, reverse execution, runtime reports, crash clustering, regression oracles, and child-debug request visibility.
 - docs/differential-debugging.md: v0.17 good/bad comparison, value tracing, evidence budgets, and cancellation semantics
 - docs/hang-debugging.md: all-thread hang/deadlock triage and Pointer-Provenance v2
 - docs/remote-debugging.md: multi-session gdbserver/lldb-server workflows and host policy
