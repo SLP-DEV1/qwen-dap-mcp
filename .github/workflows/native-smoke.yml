@@ -17,6 +17,8 @@ on:
       - 'test/operation-context.test.ts'
       - 'test/runtime-diff.test.ts'
       - 'test/value-tracing.test.ts'
+      - 'test/runtime-v2*.ts'
+      - 'test/rr*.ts'
       - 'test/fixtures/*.cpp'
       - '.github/workflows/native-smoke.yml'
   schedule:
@@ -42,6 +44,8 @@ jobs:
       lldb: ${{ steps.select.outputs.lldb }}
       differential: ${{ steps.select.outputs.differential }}
       multi: ${{ steps.select.outputs.multi }}
+      runtimev2: ${{ steps.select.outputs.runtimev2 }}
+      rr: ${{ steps.select.outputs.rr }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,7 +62,7 @@ jobs:
           set -euo pipefail
 
           set_all() {
-            for suite in codelldb dump gdb lldb differential multi; do
+            for suite in codelldb dump gdb lldb differential multi runtimev2 rr; do
               echo "$suite=true" >> "$GITHUB_OUTPUT"
             done
           }
@@ -86,6 +90,8 @@ jobs:
           select_suite lldb '^(src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
           select_suite differential '^(src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
           select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite runtimev2 '^(src/adapters/rr(-replay)?\.ts|src/diagnostics/(runtime-v2|symbol-doctor)\.ts|src/security-profile\.ts|src/tools/(advanced-runtime|runtime-v2|runtime-output-schemas|child-debug)\.ts|test/runtime-v2|test/fixtures/runtime-v2-smoke\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite rr '^(src/adapters/rr(-replay)?\.ts|src/tools/runtime-v2\.ts|test/rr-real-smoke\.ts|\.github/workflows/native-smoke\.yml)'
 
   codelldb:
     name: CodeLLDB / Windows
@@ -325,3 +331,63 @@ jobs:
             --lldb-dap "$LLDB_DAP_PATH" --lldb-server "$LLDB_SERVER_PATH" \
             --gdb-program build/multi-session/gdb-smoke --gdb-source test/fixtures/gdb-dap-smoke.cpp \
             --lldb-program build/multi-session/lldb-smoke --lldb-source test/fixtures/native-smoke.cpp
+
+
+  runtimev2:
+    name: Runtime v2 / GDB real workflows
+    needs: changes
+    if: needs.changes.outputs.runtimev2 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install native debugger and symbol tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gdb g++ binutils
+      - run: npm ci --ignore-scripts
+      - name: Build project and runtime v2 fixture
+        run: |
+          npm run build
+          mkdir -p build/runtime-v2
+          g++ -std=c++17 -g3 -O0 -fno-omit-frame-pointer -pthread test/fixtures/runtime-v2-smoke.cpp -o build/runtime-v2/runtime-v2-smoke
+      - name: Run real runtime v2 live workflows
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME \
+            npx tsx test/runtime-v2-gdb-real-smoke.ts \
+            --program build/runtime-v2/runtime-v2-smoke \
+            --source test/fixtures/runtime-v2-smoke.cpp
+      - name: Run real dump-batch workflow
+        run: |
+          env -u GDB_DAP_PATH -u GDB_PATH -u GDB_HOME \
+            npx tsx test/runtime-v2-dump-batch-real-smoke.ts \
+            --program build/runtime-v2/runtime-v2-smoke \
+            --output-dir build/runtime-v2/cores
+
+  rr:
+    name: rr record/replay / Linux
+    needs: changes
+    if: needs.changes.outputs.rr == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install rr
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rr
+          sudo sysctl -w kernel.perf_event_paranoid=1 || true
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Run real rr recording and managed replay smoke
+        env:
+          RR_ALLOW_UNKNOWN_CPUS: '1'
+        run: npx tsx test/rr-real-smoke.ts
