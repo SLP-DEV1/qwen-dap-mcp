@@ -4,6 +4,31 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added — runtime debugging v2
+
+- Added composable security profiles through `QWEN_DAP_MCP_PROFILE=inspect|local-debug|advanced`, while preserving explicit toolset/DAP-policy overrides and independent remote/HOL Guard gates.
+- Added bounded Linux `rr` discovery and recording plus validated loopback replay planning and existing DAP reverse execution.
+- Added `debug_trace_lifetime` for forward writer timelines, sanitizer/free-allocation hints, and optional reverse lifetime stepping.
+- Added `debug_thread_timeline` for multi-sample process-wide progress/wait analysis and conservative explicit-owner lock-cycle evidence.
+- Added `debug_symbol_doctor` with DAP symbol health, bounded local cache search, ELF Build-ID, Mach-O UUID, PE CodeView/PDB GUID-age probing when local tooling is available, and explicit non-fetching symbol resolver candidates.
+- Added `debug_dump_batch`, `debug_adaptive_evidence`, and `debug_crash_families` for bounded crash-fleet triage.
+- Added crash fingerprint v2 with exact, semantic, and broad family identities.
+- Enriched `debug_runtime_report` with known native API ABI-argument analysis, stack-integrity analysis, evidence-weighted competing hypotheses, and reviewable breakpoint planning.
+- Added `debug_cpp_object` for bounded object-header/vtable inspection without target memory writes.
+- Added `debug_evidence_bundle` for bounded JSON/Markdown/SARIF export and JSON/SARIF offline import.
+- Added `debug_adapter_doctor` for capability, adapter, rr, and security-profile setup diagnostics.
+- Expanded the default high-level agent surface from 21 to 31 tools.
+
+### Safety / semantics — runtime debugging v2
+
+- rr execution uses literal argv and `shell=false`; no general command runner was added.
+- Replay planning is loopback-only and relies on the existing hardened GDB remote-attach path for actual debugger control.
+- Symbol-server candidates are reported but never downloaded automatically.
+- Evidence exports are size-bounded, reject symlink targets, and refuse accidental overwrite by default.
+- Lock cycles are marked proven only when debugger-visible owner thread IDs establish every graph edge.
+- Evidence scores rank support/contradiction; they are not probabilities or root-cause proof.
+
+
 ### Added
 
 - Added `debug_causal_trace` to build a bounded consumer-to-writer producer chain from the current stopped value through confirmed watchpoint/data-breakpoint writer evidence.
