@@ -5,9 +5,13 @@ import { join } from 'node:path';
 import * as z from 'zod/v4';
 
 import { discoverCodeLldb } from '../adapters/codelldb.js';
-import { discoverGdbDap } from '../adapters/gdb-dap.js';
+import {
+  buildGdbDapRemoteAttachConfiguration,
+  discoverGdbDap,
+} from '../adapters/gdb-dap.js';
 import { discoverLldbDap } from '../adapters/lldb-dap.js';
 import { buildRrReplayPlan, discoverRr, recordWithRr } from '../adapters/rr.js';
+import { ManagedRrReplay } from '../adapters/rr-replay.js';
 import { DapError } from '../dap/errors.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
 import type { RuntimeSnapshot } from '../dap/session.js';
@@ -53,6 +57,18 @@ import {
   LOCAL_TARGET_EXECUTION_ANNOTATIONS,
   READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
 } from './tool-annotations.js';
+
+const RR_REPLAY_BY_CONNECTION = new WeakMap<object, ManagedRrReplay>();
+
+function replayManagerFor(session: GuardedDapSession): ManagedRrReplay {
+  const key = session.connection as unknown as object;
+  let manager = RR_REPLAY_BY_CONNECTION.get(key);
+  if (!manager) {
+    manager = new ManagedRrReplay();
+    RR_REPLAY_BY_CONNECTION.set(key, manager);
+  }
+  return manager;
+}
 
 const LOCAL_ARTIFACT_WRITE_ANNOTATIONS = {
   readOnlyHint: false,
@@ -178,7 +194,7 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
       annotations: LOCAL_TARGET_EXECUTION_ANNOTATIONS,
       outputSchema: debugTimeTravelOutputSchema,
       inputSchema: z.object({
-        action: z.enum(['doctor', 'record', 'replay-plan', 'reverse']).describe('Time-travel action: inspect rr, create a bounded rr recording, build a loopback replay plan, or issue DAP reverse execution.'),
+        action: z.enum(['doctor', 'record', 'replay-plan', 'replay-start', 'replay-status', 'replay-stop', 'reverse']).describe('Time-travel action: inspect rr, record, plan/start/status/stop a managed loopback replay, or issue DAP reverse execution.'),
         program: z.string().min(1).optional().describe('Executable used only for action=record.'),
         args: z.array(z.string()).max(128).optional().describe('Literal argv entries for rr record; arguments are passed without a shell.'),
         cwd: z.string().optional().describe('Optional working directory for rr record.'),
@@ -186,7 +202,11 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
         traceDir: z.string().min(1).optional().describe('New trace output path for record, or existing trace directory for replay-plan.'),
         rrPath: z.string().min(1).optional().describe('Optional explicit rr executable path; otherwise RR_PATH/PATH discovery is used.'),
         timeoutMs: z.number().int().min(1000).max(600000).default(120000).describe('Bound for rr record or reverse debugger wait operations.'),
-        port: z.number().int().min(1).max(65535).default(50505).describe('Loopback TCP port used only in replay-plan output.'),
+        port: z.number().int().min(1).max(65535).default(50505).describe('Loopback TCP port used by replay-plan or managed replay-start.'),
+        gdbAdapterPath: z.string().min(1).optional().describe('Optional explicit GDB executable for managed replay attach; omit to use normal GDB discovery.'),
+        attachReplay: z.boolean().default(true).describe('For replay-start, initialize GDB DAP and attach it to the managed rr loopback endpoint after rr starts.'),
+        disconnectDebugger: z.boolean().default(true).describe('For replay-stop, disconnect an attached GDB DAP session before terminating rr.'),
+        requestTimeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('DAP request timeout used when replay-start performs the optional GDB attach.'),
         reverseAction: z.enum(['reverseContinue', 'stepBack']).default('stepBack').describe('DAP reverse operation used only for action=reverse.'),
         threadId: z.number().int().positive().optional().describe('Stopped thread required for action=reverse.'),
       }),
@@ -200,7 +220,63 @@ export function registerRuntimeV2Tools(server: McpServer, session: GuardedDapSes
         }
         if (args.action === 'replay-plan') {
           if (!args.traceDir) throw new DapError('debug_time_travel action=replay-plan requires traceDir.');
-          return structuredResult(buildRrReplayPlan({ traceDir: args.traceDir, port: args.port, rrPath: args.rrPath }));
+          return structuredResult(buildRrReplayPlan({
+            traceDir: args.traceDir,
+            port: args.port,
+            ...(args.rrPath ? { rrPath: args.rrPath } : {}),
+          }));
+        }
+        const replay = replayManagerFor(session);
+        if (args.action === 'replay-status') {
+          return structuredResult({ action: 'replay-status', replay: replay.status(), status: session.snapshot() });
+        }
+        if (args.action === 'replay-stop') {
+          if (args.disconnectDebugger && session.snapshot().adapterRunning && session.snapshot().adapterId === 'gdb') {
+            await session.disconnect(false);
+          }
+          return structuredResult({ action: 'replay-stop', replay: await replay.stop(), status: session.snapshot() });
+        }
+        if (args.action === 'replay-start') {
+          if (!args.traceDir) throw new DapError('debug_time_travel action=replay-start requires traceDir.');
+          const replayStatus = await replay.start({
+            traceDir: args.traceDir,
+            port: args.port,
+            ...(args.rrPath ? { rrPath: args.rrPath } : {}),
+            readyTimeoutMs: Math.min(args.requestTimeoutMs, 15_000),
+          });
+          if (!args.attachReplay) {
+            return structuredResult({ action: 'replay-start', replay: replayStatus, attached: false, status: session.snapshot() });
+          }
+
+          try {
+            const adapter = discoverGdbDap({
+              ...(args.gdbAdapterPath ? { explicitPath: args.gdbAdapterPath } : {}),
+            });
+            const capabilities = await session.start({
+              command: adapter.command,
+              args: adapter.args,
+              adapterId: 'gdb',
+              requestTimeoutMs: args.requestTimeoutMs,
+            });
+            const attach = await session.attach(buildGdbDapRemoteAttachConfiguration({
+              host: '127.0.0.1',
+              port: args.port,
+              ...(args.program ? { program: args.program } : {}),
+            }));
+            return structuredResult({
+              action: 'replay-start',
+              replay: replay.status(),
+              attached: true,
+              adapter,
+              capabilities,
+              attach,
+              status: session.snapshot(),
+            });
+          } catch (error) {
+            await replay.stop();
+            await session.reset().catch(() => undefined);
+            throw error;
+          }
         }
         if (!args.threadId) throw new DapError('debug_time_travel action=reverse requires threadId.');
         if (session.isPostmortem()) throw new DapError('Reverse execution requires a live record/replay-capable target.');
