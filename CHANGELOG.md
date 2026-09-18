@@ -4,6 +4,8 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.18.0 - 2026-09-18
+
 ### Hardening / pre-release
 
 - Reduced the default MCP `agent` surface from 31 tools to 18 core workflows and added a separate `forensics` surface for specialized record/replay, symbol, crash-fleet, C++ object, evidence-export, and adapter-diagnostic workflows.
