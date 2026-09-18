@@ -9,7 +9,7 @@ test('security profiles expose conservative composed defaults', () => {
   assert.equal(resolveSecurityProfile('inspect'), 'inspect');
   assert.equal(securityProfileDefaults('inspect').dapPolicy, 'inspect-only');
   assert.equal(securityProfileDefaults('inspect').toolset, 'agent');
-  assert.equal(securityProfileDefaults('advanced').toolset, 'full');
+  assert.equal(securityProfileDefaults('advanced').toolset, 'forensics');
   assert.equal(securityProfileDefaults('local-debug').dapPolicy, 'standard');
 });
 
