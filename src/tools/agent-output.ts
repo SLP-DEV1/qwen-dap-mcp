@@ -264,28 +264,206 @@ export const debugTraceValueOutputSchema = z.object({
 
 export const debugAdvancedOutputSchema = z.object({}).catchall(z.unknown());
 
+export const debugCausalTraceOutputSchema = z.object({
+  query: z.object({ name: z.string(), maxDepth: z.number().int().positive() }).catchall(z.unknown()),
+  consumer: z.object({ frame: dapFrameSchema, observedValue: z.unknown().optional(), disassembly: z.unknown().optional() }).catchall(z.unknown()),
+  producerChain: z.array(z.object({ depth: z.number().int().positive() }).catchall(z.unknown())),
+  trace: debugTraceValueOutputSchema,
+  conclusion: z.string(),
+  limitations: z.array(z.string()),
+}).catchall(z.unknown());
+
+export const debugProgressProbeOutputSchema = z.object({
+  classification: z.enum(['no-observed-progress', 'probable-busy-loop', 'same-frame-progress', 'forward-progress-observed']),
+  samples: z.number().int().positive(),
+  intervalMs: z.number().int().positive(),
+  captures: z.array(z.object({
+    index: z.number().int().positive(),
+    signature: z.object({ threadId: z.number().int(), frame: z.string(), source: z.string().optional(), line: z.number().int(), instruction: z.string().optional() }).catchall(z.unknown()),
+    topFrames: z.array(z.object({ name: z.string(), source: z.string().optional(), line: z.number().int() }).catchall(z.unknown())),
+  }).catchall(z.unknown())),
+  evidence: z.object({
+    uniqueSampleSignatures: z.number().int().nonnegative(),
+    sameSourceFrameAcrossSamples: z.boolean(),
+    uniqueInstructionPointers: z.number().int().nonnegative(),
+  }),
+  limitations: z.array(z.string()),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
+const fingerprintV2Schema = z.object({
+  version: z.literal(2),
+  exact: z.string(),
+  semantic: z.string(),
+  family: z.string(),
+  materials: z.unknown(),
+  note: z.string(),
+}).catchall(z.unknown());
+
+export const debugRuntimeReportOutputSchema = z.object({
+  fingerprint: z.string(),
+  frameKey: z.string(),
+  exceptionKey: z.string(),
+  symbolStatus: z.string(),
+  sanitizer: z.array(z.unknown()),
+  memoryHazards: z.array(z.unknown()),
+  abi: z.unknown(),
+  symbolDoctor: z.unknown(),
+  fingerprintsV2: fingerprintV2Schema,
+  apiAnalysis: z.unknown(),
+  stackIntegrity: z.unknown(),
+  hypotheses: z.array(z.unknown()),
+  breakpointPlan: z.unknown(),
+  outputTail: z.array(z.string()),
+  snapshot: runtimeSnapshotOutputSchema,
+  limitations: z.array(z.string()),
+}).catchall(z.unknown());
+
+export const debugClusterCrashesOutputSchema = z.object({
+  totalReports: z.number().int().nonnegative(),
+  clusters: z.array(z.object({
+    fingerprint: z.string(),
+    count: z.number().int().positive(),
+    representative: z.unknown().optional(),
+  }).catchall(z.unknown())),
+  note: z.string(),
+}).catchall(z.unknown());
+
+export const debugRegressionOracleOutputSchema = z.object({
+  verdict: z.enum(['original-crash', 'changed-crash', 'inconclusive']),
+  baselineFingerprint: z.string(),
+  currentFingerprint: z.string(),
+  terminal: z.boolean(),
+  suitableForBisect: z.boolean(),
+  note: z.string(),
+}).catchall(z.unknown());
+
+export const debugChildRequestsOutputSchema = z.object({
+  requests: z.array(z.unknown()),
+  autoAccepted: z.literal(false),
+  policy: z.literal('fail-closed'),
+  guidance: z.array(z.string()),
+}).catchall(z.unknown());
+
+export const debugReverseExecutionOutputSchema = z.object({
+  action: z.enum(['reverseContinue', 'stepBack']),
+  result: z.unknown(),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
+export const debugLifetimeTraceOutputSchema = z.object({
+  query: z.string(),
+  initial: z.object({ frame: dapFrameSchema, observed: z.unknown().optional() }).catchall(z.unknown()),
+  sanitizer: z.array(z.unknown()),
+  memoryHazards: z.array(z.unknown()),
+  allocationDeallocationHints: z.array(z.string()),
+  reverseTimeline: z.array(z.unknown()).optional(),
+  forwardTimeline: debugTraceValueOutputSchema.optional(),
+  guidance: z.array(z.string()),
+}).catchall(z.unknown());
+
+export const debugThreadTimelineOutputSchema = z.object({
+  observations: z.array(z.unknown()),
+  progression: z.array(z.object({
+    threadId: z.number().int(),
+    samples: z.number().int().nonnegative(),
+    uniqueLocations: z.number().int().nonnegative(),
+    waitKinds: z.array(z.string()),
+  }).catchall(z.unknown())),
+  lockGraph: z.object({
+    edges: z.array(z.unknown()),
+    cycleProven: z.boolean(),
+    cycle: z.array(z.unknown()),
+    evidenceKind: z.string(),
+    limitations: z.array(z.string()),
+  }).catchall(z.unknown()),
+  status: sessionStatusOutputSchema,
+}).catchall(z.unknown());
+
+export const debugSymbolDoctorOutputSchema = z.object({
+  symbolHealth: symbolHealthSchema,
+  binaryIdentity: z.unknown().optional(),
+  pdbIdentity: z.unknown().optional(),
+  mismatch: z.unknown(),
+  localSearch: z.unknown().optional(),
+  resolver: z.object({
+    configured: z.boolean(),
+    servers: z.array(z.string()),
+    candidates: z.array(z.unknown()),
+    networkFetchPerformed: z.literal(false),
+    note: z.string(),
+  }).catchall(z.unknown()),
+}).catchall(z.unknown());
+
+export const debugDumpBatchOutputSchema = z.object({
+  directory: z.string(),
+  selected: z.array(z.string()),
+  analyzed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  reports: z.array(z.unknown()),
+  errors: z.array(z.unknown()),
+  families: z.unknown(),
+}).catchall(z.unknown());
+
+export const debugAdaptiveEvidenceOutputSchema = z.object({
+  selectedPhase: z.enum(['cheap', 'medium', 'full']),
+  expansionReasons: z.array(z.string()),
+  evidenceBudget: z.unknown(),
+  snapshot: runtimeSnapshotOutputSchema.optional(),
+  report: debugRuntimeReportOutputSchema.optional(),
+}).catchall(z.unknown());
+
+export const debugCrashFamiliesOutputSchema = z.object({
+  totalReports: z.number().int().nonnegative(),
+  families: z.array(z.unknown()),
+  sharedFamilyCount: z.number().int().nonnegative(),
+  note: z.string(),
+}).catchall(z.unknown());
+
+export const debugCppObjectOutputSchema = z.object({
+  pointer: z.string(),
+  observed: z.unknown().optional(),
+  pointerSize: z.union([z.literal(4), z.literal(8)]),
+  bytesRead: z.number().int().nonnegative(),
+  hex: z.string(),
+  probableVtable: z.string().optional(),
+  vtableModule: z.unknown().optional(),
+  abi: z.unknown(),
+  hazards: z.array(z.unknown()),
+  guidance: z.string(),
+}).catchall(z.unknown());
+
+export const debugEvidenceBundleOutputSchema = z.object({
+  action: z.enum(['export', 'import']),
+  path: z.string(),
+  bytes: z.number().int().nonnegative(),
+  format: z.enum(['json', 'markdown', 'sarif']).optional(),
+  overwritten: z.boolean().optional(),
+  evidence: z.unknown().optional(),
+  offline: z.boolean().optional(),
+  note: z.string().optional(),
+}).catchall(z.unknown());
+
+export const debugAdapterDoctorOutputSchema = z.object({
+  security: z.unknown(),
+  current: z.unknown().optional(),
+  installed: z.array(z.unknown()).optional(),
+}).catchall(z.unknown());
+
+export const debugTimeTravelOutputSchema = z.object({
+  action: z.enum(['doctor', 'record', 'replay-plan', 'reverse']).optional(),
+}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
   debug_compare_runs: debugCompareRunsOutputSchema,
   debug_trace_value: debugTraceValueOutputSchema,
-  debug_causal_trace: debugAdvancedOutputSchema,
-  debug_progress_probe: debugAdvancedOutputSchema,
-  debug_reverse_execution: debugAdvancedOutputSchema,
-  debug_runtime_report: debugAdvancedOutputSchema,
-  debug_cluster_crashes: debugAdvancedOutputSchema,
-  debug_regression_oracle: debugAdvancedOutputSchema,
-  debug_child_requests: debugAdvancedOutputSchema,
-  debug_time_travel: debugAdvancedOutputSchema,
-  debug_trace_lifetime: debugAdvancedOutputSchema,
-  debug_thread_timeline: debugAdvancedOutputSchema,
-  debug_symbol_doctor: debugAdvancedOutputSchema,
-  debug_dump_batch: debugAdvancedOutputSchema,
-  debug_adaptive_evidence: debugAdvancedOutputSchema,
-  debug_crash_families: debugAdvancedOutputSchema,
-  debug_cpp_object: debugAdvancedOutputSchema,
-  debug_evidence_bundle: debugAdvancedOutputSchema,
-  debug_adapter_doctor: debugAdvancedOutputSchema,
+  debug_causal_trace: debugCausalTraceOutputSchema,
+  debug_progress_probe: debugProgressProbeOutputSchema,
+  debug_runtime_report: debugRuntimeReportOutputSchema,
+  debug_trace_lifetime: debugLifetimeTraceOutputSchema,
+  debug_adaptive_evidence: debugAdaptiveEvidenceOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,
@@ -293,7 +471,6 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_open_dump: debugOpenDumpOutputSchema,
   debug_snapshot: debugSnapshotOutputSchema,
   debug_status: debugStatusOutputSchema,
-  debug_continue: debugContinueOutputSchema,
   debug_disconnect: debugDisconnectOutputSchema,
   debug_sessions: debugSessionsOutputSchema,
 } as const;
