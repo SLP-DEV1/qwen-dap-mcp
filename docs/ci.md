@@ -21,7 +21,7 @@ This is the default required feedback loop. It intentionally does not install na
 
 Expensive integration checks run only when their relevant paths change:
 
-- `native-smoke.yml` selects CodeLLDB, Windows minidump, GDB/gdbserver, lldb-dap/lldb-server, differential-runtime, and multi-session remote suites from the PR diff.
+- `native-smoke.yml` selects CodeLLDB, Windows minidump, GDB/gdbserver, lldb-dap/lldb-server, differential-runtime, multi-session remote, Runtime-v2 GDB/core-batch, and rr record/replay suites from the PR diff.
 - `hol-guard-compat.yml` runs only for HOL Guard / policy-boundary changes, plus its weekly compatibility schedule.
 - `extension-package-smoke.yml` runs for Qwen extension/package integration changes.
 - `container-smoke.yml` runs for Docker/server/container-facing changes.
@@ -44,7 +44,7 @@ A path-selected PR therefore does not need to execute every native adapter on ev
 
 ## Rerunning failures
 
-Each native suite remains a separately named job inside `Native Debugger Smoke`, so a failed CodeLLDB, GDB, LLDB, dump, differential, or multi-session job is visible and can be rerun independently from the Actions UI.
+Each native suite remains a separately named job inside `Native Debugger Smoke`, so a failed CodeLLDB, GDB, LLDB, dump, differential, multi-session, Runtime-v2, or rr job is visible and can be rerun independently from the Actions UI.
 
 For local validation, run:
 
