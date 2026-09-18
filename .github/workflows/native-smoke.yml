@@ -104,7 +104,7 @@ jobs:
       - run: npm run build
       - name: Build native smoke target
         shell: pwsh
-        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fd:test\fixtures\native-smoke.pdb /Fe:test\fixtures\native-smoke.exe test\fixtures\native-smoke.cpp /link /DEBUG:FULL
       - name: Download latest CodeLLDB
         shell: pwsh
         run: |
@@ -159,7 +159,7 @@ jobs:
       - run: npm run build
       - name: Build native dump fixture
         shell: pwsh
-        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fe:test\fixtures\native-dump.exe test\fixtures\native-dump.cpp /link /DEBUG:FULL dbghelp.lib
+        run: cl /nologo /EHsc /Zi /Od /std:c++17 /Fd:test\fixtures\native-dump.pdb /Fe:test\fixtures\native-dump.exe test\fixtures\native-dump.cpp /link /DEBUG:FULL dbghelp.lib
       - name: Generate Windows minidump
         shell: pwsh
         run: |
