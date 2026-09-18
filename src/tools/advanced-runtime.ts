@@ -16,7 +16,13 @@ import {
   READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
 } from './tool-annotations.js';
 import {
-  debugAdvancedOutputSchema,
+  debugCausalTraceOutputSchema,
+  debugChildRequestsOutputSchema,
+  debugClusterCrashesOutputSchema,
+  debugProgressProbeOutputSchema,
+  debugRegressionOracleOutputSchema,
+  debugReverseExecutionOutputSchema,
+  debugRuntimeReportOutputSchema,
   structuredResult,
 } from './agent-output.js';
 
@@ -445,7 +451,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Trace Runtime Causality',
       description: 'Build a bounded consumer-to-writer evidence chain for one suspicious debugger-visible value. Use it after crash or differential evidence identifies a value whose runtime producers matter. It combines the current stopped snapshot with repeated watchpoint writer tracing. Do not use it for frozen dumps or unsafe-to-resume targets, and do not treat an observed writer as automatic proof of root cause.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugCausalTraceOutputSchema,
       inputSchema: z.object({
         name: z.string().min(1).max(512).describe('Debugger-visible variable or expression whose producer chain should be traced.'),
         maxDepth: z.number().int().min(1).max(8).default(4).describe('Maximum number of confirmed writer events promoted into the causal producer chain.'),
@@ -464,7 +470,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Probe Runtime Progress',
       description: 'Sample a live target across short resume/pause intervals to distinguish no observed progress, same-frame execution movement, and probable busy loops. Use it when a process appears hung but a single thread snapshot cannot distinguish blocking from spinning. Do not use it when resuming the target is unsafe; sampling perturbs scheduling and is not proof of application-level progress.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugProgressProbeOutputSchema,
       inputSchema: z.object({
         samples: z.number().int().min(2).max(8).default(4).describe('Number of stopped runtime samples to collect across resume/pause intervals.'),
         intervalMs: z.number().int().min(25).max(5000).default(250).describe('Approximate execution interval between debugger samples.'),
@@ -482,7 +488,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Reverse Debugger Execution',
       description: 'Move a stopped live target backward using DAP reverseContinue or stepBack when the active adapter advertises reverse-execution support. Use it with record/replay-capable debuggers to inspect state before a failure without waiting for a future writer. Do not use it on ordinary adapters that lack supportsStepBack, on frozen dumps, or as a substitute for reproducible verification.',
       annotations: DEBUG_SESSION_CONTROL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugReverseExecutionOutputSchema,
       inputSchema: z.object({
         action: z.enum(['reverseContinue', 'stepBack']).describe('Reverse execution operation to request from the active DAP adapter.'),
         threadId: z.number().int().positive().describe('Stopped DAP thread identifier that should be moved backward.'),
@@ -507,7 +513,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Build Runtime Debug Report',
       description: 'Create a shareable structured report from the current stopped target with normalized crash fingerprinting, Symbol Doctor status, sanitizer stderr correlation, poison-pattern memory hazard detection, ABI register-to-argument mapping, and recent debugger output. Use it only for evidence-driven triage and issue handoff. Do not treat heuristic poison patterns, ABI mappings, or sanitizer text correlation as standalone proof.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugRuntimeReportOutputSchema,
       inputSchema: z.object({
         redactPaths: z.boolean().default(true).describe('Replace path-like portions of the report fingerprint frame key with a generic marker.'),
         includeOutputTail: z.boolean().default(true).describe('Include the bounded recent adapter stderr tail used for sanitizer correlation.'),
@@ -528,7 +534,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Cluster Crash Reports',
       description: 'Group multiple previously produced qwen-dap-mcp runtime reports by their normalized crash fingerprint. Use it after opening and reporting several dumps or reproductions to identify dominant failure families without comparing unstable raw addresses. This tool only clusters supplied report identities; do not use cluster membership as proof that every crash has the same root cause.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugClusterCrashesOutputSchema,
       inputSchema: z.object({
         reports: z.array(z.object({
           fingerprint: z.string().min(1),
@@ -546,7 +552,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Inspect Child Debug Requests',
       description: 'Inspect bounded DAP reverse requests such as startDebugging emitted by an adapter when a child, fork, worker, or subprocess wants a debugger session. Use it to discover child-debug opportunities without silently granting adapter-controlled process execution. This tool is read-only: qwen-dap-mcp continues to reject reverse requests by default, so do not expect it to auto-launch child sessions.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugChildRequestsOutputSchema,
       inputSchema: z.object({
         command: z.string().min(1).optional().describe('Optional reverse-request command filter, for example startDebugging; omit to return the bounded recent history.'),
       }),
@@ -573,7 +579,7 @@ export function registerAdvancedRuntimeTools(server: McpServer, session: Guarded
       title: 'Classify Regression Reproduction',
       description: 'Classify a completed reproduction against an original crash fingerprint for git-bisect-style workflows. Use it only after debug_runtime_report or crash verification has produced stable fingerprints. It reports original-crash, changed-crash, or inconclusive; it intentionally does not label a changed crash as good, because a different downstream failure can still be a regression.',
       annotations: READ_ONLY_LOCAL_TOOL_ANNOTATIONS,
-      outputSchema: debugAdvancedOutputSchema,
+      outputSchema: debugRegressionOracleOutputSchema,
       inputSchema: z.object({
         baselineFingerprint: z.string().min(1).describe('Fingerprint of the original failure being tracked through the regression search.'),
         currentFingerprint: z.string().min(1).describe('Fingerprint produced by the current reproduction or runtime report.'),
