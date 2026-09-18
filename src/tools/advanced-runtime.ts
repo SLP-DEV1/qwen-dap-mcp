@@ -3,6 +3,13 @@ import * as z from 'zod/v4';
 
 import type { RuntimeSnapshot } from '../dap/session.js';
 import { GuardedDapSession } from '../dap/guarded-session.js';
+import {
+  analyzeKnownApiCall,
+  analyzeStackIntegrity,
+  buildBreakpointPlan,
+  buildFailureHypotheses,
+  crashFingerprintsV2,
+} from '../diagnostics/runtime-v2.js';
 import { traceValue, findObservedValue } from './value-tracing.js';
 import {
   DEBUG_SESSION_CONTROL_ANNOTATIONS,
@@ -24,6 +31,11 @@ type CrashReport = {
   memoryHazards: Array<Record<string, unknown>>;
   abi: Record<string, unknown>;
   symbolDoctor: Record<string, unknown>;
+  fingerprintsV2: ReturnType<typeof crashFingerprintsV2>;
+  apiAnalysis: ReturnType<typeof analyzeKnownApiCall>;
+  stackIntegrity: ReturnType<typeof analyzeStackIntegrity>;
+  hypotheses: ReturnType<typeof buildFailureHypotheses>;
+  breakpointPlan: ReturnType<typeof buildBreakpointPlan>;
   outputTail: string[];
   snapshot: RuntimeSnapshot;
   limitations: string[];
@@ -217,6 +229,20 @@ export function buildCrashReport(
         ],
   };
   const fingerprint = fnv1a64(`${rawExceptionKey}\n${fingerprintFrameKey(snapshot)}`);
+  const fingerprintsV2 = crashFingerprintsV2(snapshot, outputTail);
+  const apiAnalysis = analyzeKnownApiCall(
+    snapshot,
+    (abi.arguments as Array<{ index: number; register: string; value?: string }>),
+  );
+  const stackIntegrity = analyzeStackIntegrity(snapshot, outputTail);
+  const hypotheses = buildFailureHypotheses({
+    snapshot,
+    outputLines: outputTail,
+    memoryHazards,
+    apiAnalysis: apiAnalysis as Record<string, unknown>,
+    stackIntegrity,
+  });
+  const breakpointPlan = buildBreakpointPlan(hypotheses, snapshot);
   const redactedFrameKey = options.redactPaths
     ? rawFrameKey.replace(/([A-Za-z]:)?[\\/][^|>]+/g, '<path>')
     : rawFrameKey;
@@ -230,6 +256,11 @@ export function buildCrashReport(
     memoryHazards,
     abi,
     symbolDoctor,
+    fingerprintsV2,
+    apiAnalysis,
+    stackIntegrity,
+    hypotheses,
+    breakpointPlan,
     outputTail,
     snapshot,
     limitations: [

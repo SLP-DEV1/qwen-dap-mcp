@@ -10,6 +10,7 @@ import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
+import { registerRuntimeV2Tools } from '../src/tools/runtime-v2.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
 import { registerValueTracingTool } from '../src/tools/value-tracing.js';
 import { AGENT_TOOL_NAMES, filterToolRegistrar } from '../src/toolset.js';
@@ -43,6 +44,7 @@ function collectToolDefinitions(): Map<string, ToolDefinition> {
   registerRunToStopTool(agentServer as never, session);
   registerAgentDiagnosticTools(agentServer as never, session);
   registerAdvancedRuntimeTools(agentServer as never, session);
+  registerRuntimeV2Tools(agentServer as never, session);
   registerHangDiagnosticTool(agentServer as never, session);
   registerFindWriterTool(agentServer as never, session);
   registerValueTracingTool(agentServer as never, session);

@@ -1,4 +1,5 @@
 import { logger } from './logger.js';
+import { resolveSecurityProfile, securityProfileDefaults } from './security-profile.js';
 import {
   DEBUG_SESSION_CONTROL_ANNOTATIONS,
   LOCAL_TARGET_EXECUTION_ANNOTATIONS,
@@ -20,6 +21,16 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_cluster_crashes',
   'debug_regression_oracle',
   'debug_child_requests',
+  'debug_time_travel',
+  'debug_trace_lifetime',
+  'debug_thread_timeline',
+  'debug_symbol_doctor',
+  'debug_dump_batch',
+  'debug_adaptive_evidence',
+  'debug_crash_families',
+  'debug_cpp_object',
+  'debug_evidence_bundle',
+  'debug_adapter_doctor',
   'debug_diagnose_stop',
   'debug_source_disassembly',
   'debug_find_writer',
@@ -99,7 +110,9 @@ function withBehaviorAnnotations(name: string, args: any[]): any[] {
 }
 
 export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): ToolsetMode {
-  if (value === undefined || value.trim() === '') return 'agent';
+  if (value === undefined || value.trim() === '') {
+    return securityProfileDefaults(resolveSecurityProfile()).toolset;
+  }
   const normalized = value.trim().toLowerCase();
   if (normalized === 'agent' || normalized === 'full') return normalized;
   logger.warn('Invalid QWEN_DAP_MCP_TOOLSET; falling back to the safe agent toolset', { value });

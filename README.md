@@ -120,11 +120,15 @@ The MCP server supplies debugger evidence and bounded workflow state. Source edi
 | Crash dump | Inspect Windows minidumps and supported LLDB/GDB postmortem targets without launching the failed program |
 | Remote native target | Attach through validated `gdbserver` / `lldb-server gdbserver` endpoints with loopback-first policy |
 | Multiple targets | Keep isolated DAP sessions and route requests by `sessionId` |
-| Agent safety | Keep the default surface compact and optionally gate executable/mutating DAP actions with HOL Guard |
+| Agent safety | Keep the default surface high-level and optionally gate executable/mutating DAP actions with HOL Guard |
+| Object lifetime / UAF | Correlate pointer writers, sanitizer evidence, reverse stepping, and allocation/free hints |
+| Symbol mismatch | Compare adapter symbol state with bounded local binary/PDB identity evidence |
+| Crash fleets | Batch postmortem analysis plus exact/semantic/family grouping |
+| Offline handoff | Export structured evidence and SARIF without keeping the target alive |
 
 ### Default agent tool surface
 
-The default toolset intentionally exposes 21 high-signal tools:
+The default toolset intentionally exposes 31 high-signal tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -139,6 +143,16 @@ The default toolset intentionally exposes 21 high-signal tools:
 | `debug_cluster_crashes` | Group multiple runtime reports by normalized crash fingerprint |
 | `debug_regression_oracle` | Classify a terminal reproduction as original-crash, changed-crash, or inconclusive |
 | `debug_child_requests` | Inspect bounded child/fork startDebugging reverse requests while keeping auto-accept fail-closed |
+| `debug_time_travel` | Bounded rr recording/replay planning plus DAP reverse execution |
+| `debug_trace_lifetime` | Combine writer tracing, sanitizer provenance, and optional reverse stepping for object lifetime analysis |
+| `debug_thread_timeline` | Multi-thread execution timeline with conservative lock-owner cycle evidence |
+| `debug_symbol_doctor` | Diagnose module symbols, local symbol candidates, and binary/PDB identity mismatches |
+| `debug_dump_batch` | Analyze a bounded directory of native dumps and group crash families |
+| `debug_adaptive_evidence` | Expand debugger evidence only when cheaper phases are insufficient |
+| `debug_crash_families` | Compare exact, semantic, and broad crash-family fingerprints |
+| `debug_cpp_object` | Inspect a C++ object header and probable vtable pointer without memory writes |
+| `debug_evidence_bundle` | Export/import bounded JSON, Markdown, or SARIF debug evidence |
+| `debug_adapter_doctor` | Audit active DAP capabilities, installed adapters, rr, and security profile |
 | `debug_diagnose_stop` | Diagnose the current debugger stop |
 | `debug_source_disassembly` | Correlate source with nearby native instructions |
 | `debug_find_writer` | Stop at the code that writes a watched value |
@@ -217,6 +231,7 @@ Start with the [documentation index](docs/README.md).
 | Remote debugging | [docs/remote-debugging.md](docs/remote-debugging.md) |
 | Hang/deadlock analysis | [docs/hang-debugging.md](docs/hang-debugging.md) |
 | Differential debugging | [docs/differential-debugging.md](docs/differential-debugging.md) |
+| Runtime debugging v2 | [docs/runtime-debugging-v2.md](docs/runtime-debugging-v2.md) |
 | Agent vs full toolsets | [docs/toolsets.md](docs/toolsets.md) |
 | HOL Guard integration | [docs/hol-guard.md](docs/hol-guard.md) |
 | Publishing / releases | [docs/publishing.md](docs/publishing.md) |

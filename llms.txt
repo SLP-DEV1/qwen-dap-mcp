@@ -67,3 +67,5 @@ The MCP server is local stdio only. It does not expose a general shell primitive
 - docs/publishing.md: GitHub/npm/MCP Registry release process
 - CONTRIBUTING.md: development and contribution guidance
 - SECURITY.md: current security model and reporting
+
+- docs/runtime-debugging-v2.md: Record/replay, lifetime provenance, thread timelines, symbol identity, adaptive evidence, crash families, C++ object inspection, evidence bundles, and adapter diagnostics.

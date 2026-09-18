@@ -19,7 +19,7 @@ test('public tool docs track the compact agent surface', async () => {
     text('docs/toolsets.md'),
   ]);
 
-  assert.equal(AGENT_TOOL_NAMES.size, 21);
+  assert.equal(AGENT_TOOL_NAMES.size, 31);
   for (const toolName of AGENT_TOOL_NAMES) {
     assert.match(readme, new RegExp(`\\b${toolName}\\b`), `README.md is missing ${toolName}`);
     assert.match(toolsets, new RegExp(`\\b${toolName}\\b`), `docs/toolsets.md is missing ${toolName}`);

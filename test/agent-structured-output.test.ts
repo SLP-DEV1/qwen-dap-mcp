@@ -11,6 +11,7 @@ import { registerDebugTools } from '../src/tools/register-debug-tools.js';
 import { registerDifferentialTools } from '../src/tools/register-differential-tools.js';
 import { registerDumpTools } from '../src/tools/register-dump-tools.js';
 import { registerRunToStopTool } from '../src/tools/run-to-stop.js';
+import { registerRuntimeV2Tools } from '../src/tools/runtime-v2.js';
 import { registerSessionTools } from '../src/tools/register-session-tools.js';
 import { registerValueTracingTool } from '../src/tools/value-tracing.js';
 import { AGENT_TOOL_NAMES } from '../src/toolset.js';
@@ -37,6 +38,7 @@ function captureRegistrations() {
   registerDifferentialTools(server as never, registry);
   registerAgentDiagnosticTools(server as never, session as never);
   registerAdvancedRuntimeTools(server as never, session as never);
+  registerRuntimeV2Tools(server as never, session as never);
   registerHangDiagnosticTool(server as never, session as never);
   registerFindWriterTool(server as never, session as never);
   registerValueTracingTool(server as never, session as never);
