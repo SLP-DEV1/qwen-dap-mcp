@@ -32,6 +32,9 @@ test('native real-adapter coverage is consolidated and path-selected on PRs', as
   assert.match(native, /symbol-doctor/);
   assert.match(native, /adapters\/rr\\\.ts/);
   assert.match(native, /runtime-v2-gdb-real-smoke/);
+  assert.match(native, /select_suite rr/);
+  assert.match(native, /rr record\/replay \/ Linux/);
+  assert.match(native, /test\/rr-real-smoke\.ts/);
   assert.match(native, /QWEN_DAP_MCP_LLVM_READOBJ/);
   assert.match(native, /QWEN_DAP_MCP_LLVM_PDBUTIL/);
   assert.match(native, /GITHUB_TOKEN: \${\{ github\.token \}\}/);

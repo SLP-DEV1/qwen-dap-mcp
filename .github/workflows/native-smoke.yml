@@ -17,6 +17,7 @@ on:
       - 'test/operation-context.test.ts'
       - 'test/runtime-diff.test.ts'
       - 'test/value-tracing.test.ts'
+      - 'test/rr*.ts'
       - 'test/fixtures/*.cpp'
       - '.github/workflows/native-smoke.yml'
   schedule:
@@ -42,6 +43,7 @@ jobs:
       lldb: ${{ steps.select.outputs.lldb }}
       differential: ${{ steps.select.outputs.differential }}
       multi: ${{ steps.select.outputs.multi }}
+      rr: ${{ steps.select.outputs.rr }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,7 +60,7 @@ jobs:
           set -euo pipefail
 
           set_all() {
-            for suite in codelldb dump gdb lldb differential multi; do
+            for suite in codelldb dump gdb lldb differential multi rr; do
               echo "$suite=true" >> "$GITHUB_OUTPUT"
             done
           }
@@ -86,6 +88,7 @@ jobs:
           select_suite lldb '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/adapters/lldb-dap\.ts|src/tools/(agent-diagnostics|register-lldb-dap-tools)\.ts|test/lldb|test/fixtures/(native-smoke|lldb-dap-crash)\.cpp|\.github/workflows/native-smoke\.yml)'
           select_suite differential '^(src/(adapters/rr\.ts|diagnostics/(runtime-v2|symbol-doctor)\.ts|tools/(advanced-runtime|runtime-v2)\.ts)|src/diagnostics/runtime-diff\.ts|src/dap/operation-context\.ts|src/tools/(register-differential-tools|value-tracing)\.ts|test/(differential-gdb-real-smoke|runtime-diff\.test|operation-context\.test|value-tracing\.test)\.ts|test/fixtures/differential-smoke\.cpp|\.github/workflows/native-smoke\.yml)$'
           select_suite multi '^(src/remote-endpoint\.ts|src/dap/session-registry\.ts|src/tools/(register-session-tools|session-routing)\.ts|test/multi-session|test/fixtures/(gdb-dap-smoke|native-smoke)\.cpp|\.github/workflows/native-smoke\.yml)'
+          select_suite rr '^(src/adapters/rr(-replay)?\.ts|src/tools/runtime-v2\.ts|src/tools/agent-output\.ts|test/rr.*\.ts|\.github/workflows/native-smoke\.yml)'
 
   codelldb:
     name: CodeLLDB / Windows
@@ -376,3 +379,34 @@ jobs:
             --lldb-dap "$LLDB_DAP_PATH" --lldb-server "$LLDB_SERVER_PATH" \
             --gdb-program build/multi-session/gdb-smoke --gdb-source test/fixtures/gdb-dap-smoke.cpp \
             --lldb-program build/multi-session/lldb-smoke --lldb-source test/fixtures/native-smoke.cpp
+
+  rr:
+    name: rr record/replay / Linux
+    needs: changes
+    if: needs.changes.outputs.rr == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install rr 5.9.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends curl
+          curl -fL --retry 3 \
+            https://github.com/rr-debugger/rr/releases/download/5.9.0/rr-5.9.0-Linux-x86_64.deb \
+            -o "$RUNNER_TEMP/rr.deb"
+          sudo apt-get install --yes "$RUNNER_TEMP/rr.deb"
+          rr --version
+          sudo sysctl -w kernel.perf_event_paranoid=1 || true
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Run real rr recording and managed replay smoke
+        env:
+          RR_ALLOW_UNKNOWN_CPUS: '1'
+        run: npx tsx test/rr-real-smoke.ts

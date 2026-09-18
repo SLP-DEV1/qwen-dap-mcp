@@ -8,6 +8,8 @@ All notable prototype milestones are documented here.
 
 - Added opt-in `debug_adopt_child` for explicit adoption of one captured DAP `startDebugging` request into an isolated debugger session.
 - Child adoption requires `QWEN_DAP_MCP_CHILD_DEBUG=1`, is forensics-only, sanitizes to a bounded local launch/PID-attach subset, and keeps raw reverse requests fail-closed.
+- Added managed rr replay lifecycle actions to `debug_time_travel`: `replay-start`, `replay-status`, and `replay-stop`, with optional loopback-only hardened GDB DAP attach.
+- Added a real Linux rr record/replay smoke plus a fake-rr lifecycle unit test.
 
 
 ## 0.18.1 - 2026-09-18

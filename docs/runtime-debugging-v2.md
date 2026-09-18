@@ -18,10 +18,12 @@ Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override th
 
 - `doctor` — discover local rr and report its version.
 - `record` — execute one explicit local program under rr with literal argv, `shell=false`, and a hard timeout.
-- `replay-plan` — validate an existing trace and produce a loopback-only `rr replay -s PORT` plan for the existing hardened GDB remote-attach path.
+- `replay-plan` — validate an existing trace and produce a loopback-only `rr replay -s PORT` plan.
+- `replay-start` — start that fixed-argv loopback replay under MCP lifecycle management and optionally attach through the existing hardened GDB remote path.
+- `replay-status` / `replay-stop` — inspect or terminate only the managed replay process for the current debugger session.
 - `reverse` — issue `stepBack` or `reverseContinue` on a DAP adapter that advertises reverse execution.
 
-The MCP does not expose a general command runner.
+The MCP does not expose a general command runner. Managed replay uses fixed rr argv, `shell=false`, loopback-only GDB attach, bounded readiness waiting, and terminates rr when managed attach setup fails.
 
 ## Lifetime provenance
 
