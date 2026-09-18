@@ -11,6 +11,7 @@ import { registerFindWriterTool } from './tools/find-writer.js';
 import { registerGdbDapTools } from './tools/register-gdb-dap-tools.js';
 import { registerLldbDapTools } from './tools/register-lldb-dap-tools.js';
 import { registerRunToStopTool } from './tools/run-to-stop.js';
+import { registerRuntimeV2Tools } from './tools/runtime-v2.js';
 import { registerSessionTools } from './tools/register-session-tools.js';
 import { routeSessionToolRegistrar } from './tools/session-routing.js';
 import { registerValueTracingTool } from './tools/value-tracing.js';
@@ -43,6 +44,7 @@ export function createServer(): McpServer {
   registerRunToStopTool(registrationServer, session);
   registerAgentDiagnosticTools(registrationServer, session);
   registerAdvancedRuntimeTools(registrationServer, session);
+  registerRuntimeV2Tools(registrationServer, session);
   registerHangDiagnosticTool(registrationServer, session);
   registerFindWriterTool(registrationServer, session);
   registerValueTracingTool(registrationServer, session);
