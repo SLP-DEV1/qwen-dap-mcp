@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   actions: write
+  security-events: write
 
 env:
   QWEN_CODE_SMOKE_VERSION: '0.22.0'
@@ -34,12 +35,17 @@ jobs:
     name: Container gate
     uses: ./.github/workflows/container-smoke.yml
 
+  security-analysis:
+    name: Security analysis gate
+    uses: ./.github/workflows/security-analysis.yml
+
   release:
     needs:
       - native-smoke
       - hol-guard
       - extension-smoke
       - container-smoke
+      - security-analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
