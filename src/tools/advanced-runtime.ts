@@ -23,6 +23,7 @@ type CrashReport = {
   sanitizer: Array<Record<string, unknown>>;
   memoryHazards: Array<Record<string, unknown>>;
   abi: Record<string, unknown>;
+  symbolDoctor: Record<string, unknown>;
   outputTail: string[];
   snapshot: RuntimeSnapshot;
   limitations: string[];
@@ -174,10 +175,33 @@ export function buildCrashReport(
 ): CrashReport {
   const rawFrameKey = stableFrameKey(snapshot);
   const rawExceptionKey = exceptionKey(snapshot);
-  const outputTail = options.includeOutputTail === false ? [] : status.recentAdapterStderr.slice(-40);
+  const dapOutput = options.includeOutputTail === false ? [] : status.recentEvents
+    .filter((record) => (record as { event?: unknown }).event === 'output')
+    .map((record) => {
+      const body = (record as { body?: { output?: unknown } }).body;
+      return typeof body?.output === 'string' ? body.output.trim() : '';
+    })
+    .filter(Boolean);
+  const outputTail = options.includeOutputTail === false
+    ? []
+    : [...status.recentAdapterStderr.slice(-30), ...dapOutput.slice(-30)].slice(-60);
   const sanitizer = parseSanitizerEvidence(outputTail);
   const memoryHazards = detectMemoryHazards(snapshot);
   const abi = analyzeAbiArguments(snapshot, options.abi ?? 'auto');
+  const symbolDoctor = {
+    status: snapshot.symbolHealth.status,
+    summary: snapshot.symbolHealth.summary,
+    stack: snapshot.symbolHealth.stack,
+    modules: snapshot.symbolHealth.modules,
+    limitations: snapshot.symbolHealth.limitations,
+    nextActions: snapshot.symbolHealth.status === 'good'
+      ? []
+      : [
+          'Verify that debug symbols match the exact executable/module build being inspected.',
+          'Check source-map/source-path configuration when frames have symbols but no source locations.',
+          'Prefer a symbol-complete representative reproduction before making source-level causal claims.',
+        ],
+  };
   const fingerprint = fnv1a64(`${rawExceptionKey}\n${rawFrameKey}`);
   const redactedFrameKey = options.redactPaths
     ? rawFrameKey.replace(/([A-Za-z]:)?[\\/][^|>]+/g, '<path>')
@@ -191,6 +215,7 @@ export function buildCrashReport(
     sanitizer,
     memoryHazards,
     abi,
+    symbolDoctor,
     outputTail,
     snapshot,
     limitations: [
