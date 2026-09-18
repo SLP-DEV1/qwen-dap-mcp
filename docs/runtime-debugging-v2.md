@@ -86,6 +86,7 @@ Evidence scores are ranking weights, not probabilities.
 `debug_evidence_bundle` exports bounded evidence as JSON, Markdown, or SARIF and imports JSON/SARIF as offline read-only context.
 
 Exports:
+- require dedicated `.qwen-dap.json`, `.qwen-dap.md`, or `.qwen-dap.sarif` artifact names so export cannot act as a general-purpose source/config writer.
 - refuse symlink targets.
 - refuse accidental overwrite by default.
 - are capped at 8 MiB.
