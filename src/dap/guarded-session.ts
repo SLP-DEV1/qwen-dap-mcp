@@ -204,6 +204,16 @@ export class GuardedDapSession extends DapSession {
     return super.step(action, threadId, waitForStop, timeoutMs);
   }
 
+  override async reverseContinue(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
+    this.assertLiveOperation('reverseContinue');
+    return super.reverseContinue(threadId, waitForStop, timeoutMs);
+  }
+
+  override async stepBack(threadId: number, waitForStop = true, timeoutMs = 15_000): Promise<unknown> {
+    this.assertLiveOperation('stepBack');
+    return super.stepBack(threadId, waitForStop, timeoutMs);
+  }
+
   override async dataBreakpointInfo(
     name: string,
     variablesReference?: number,

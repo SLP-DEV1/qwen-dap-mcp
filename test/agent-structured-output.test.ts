@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { DapSessionRegistry } from '../src/dap/session-registry.js';
 import { registerAgentDiagnosticTools } from '../src/tools/agent-diagnostics.js';
+import { registerAdvancedRuntimeTools } from '../src/tools/advanced-runtime.js';
 import { AGENT_OUTPUT_SCHEMAS, structuredResult } from '../src/tools/agent-output.js';
 import { registerFindWriterTool } from '../src/tools/find-writer.js';
 import { registerHangDiagnosticTool } from '../src/tools/hang-diagnostics.js';
@@ -35,6 +36,7 @@ function captureRegistrations() {
   registerSessionTools(server as never, registry);
   registerDifferentialTools(server as never, registry);
   registerAgentDiagnosticTools(server as never, session as never);
+  registerAdvancedRuntimeTools(server as never, session as never);
   registerHangDiagnosticTool(server as never, session as never);
   registerFindWriterTool(server as never, session as never);
   registerValueTracingTool(server as never, session as never);

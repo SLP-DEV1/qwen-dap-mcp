@@ -30,6 +30,7 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
   assert.equal(capabilities.supportsFunctionBreakpoints, true);
   assert.equal(capabilities.supportsInstructionBreakpoints, true);
   assert.equal(capabilities.supportsDataBreakpoints, true);
+  assert.equal(capabilities.supportsStepBack, true);
 
   const exceptionBreakpoints = await session.setExceptionBreakpoints(
     ['mock_throw'],
@@ -121,6 +122,12 @@ test('runs a rich DAP debug workflow end-to-end', async (t) => {
 
   const stepped = await session.step('next', 1, true, 1_000) as { stopped: { reason: string } };
   assert.equal(stepped.stopped.reason, 'step');
+
+  const reversed = await session.reverseContinue(1, true, 1_000) as { stopped: { reason: string } };
+  assert.equal(reversed.stopped.reason, 'reverse');
+
+  const steppedBack = await session.stepBack(1, true, 1_000) as { stopped: { reason: string } };
+  assert.equal(steppedBack.stopped.reason, 'step');
 
   await session.disconnect(true);
   assert.equal(session.snapshot().adapterRunning, false);

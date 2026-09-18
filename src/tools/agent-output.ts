@@ -262,11 +262,20 @@ export const debugTraceValueOutputSchema = z.object({
   status: sessionStatusOutputSchema,
 }).catchall(z.unknown());
 
+export const debugAdvancedOutputSchema = z.object({}).catchall(z.unknown());
+
 export const AGENT_OUTPUT_SCHEMAS = {
   debug_this_crash: debugThisCrashOutputSchema,
   debug_this_hang: debugThisHangOutputSchema,
   debug_compare_runs: debugCompareRunsOutputSchema,
   debug_trace_value: debugTraceValueOutputSchema,
+  debug_causal_trace: debugAdvancedOutputSchema,
+  debug_progress_probe: debugAdvancedOutputSchema,
+  debug_reverse_execution: debugAdvancedOutputSchema,
+  debug_runtime_report: debugAdvancedOutputSchema,
+  debug_cluster_crashes: debugAdvancedOutputSchema,
+  debug_regression_oracle: debugAdvancedOutputSchema,
+  debug_child_requests: debugAdvancedOutputSchema,
   debug_diagnose_stop: debugDiagnoseStopOutputSchema,
   debug_source_disassembly: debugSourceDisassemblyOutputSchema,
   debug_find_writer: debugFindWriterOutputSchema,

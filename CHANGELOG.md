@@ -4,6 +4,24 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added `debug_causal_trace` to build a bounded consumer-to-writer producer chain from the current stopped value through confirmed watchpoint/data-breakpoint writer evidence.
+- Added `debug_progress_probe` for bounded resume/pause sampling that distinguishes no observed progress, same-frame movement, probable busy loops, and broader execution movement.
+- Added capability-gated DAP reverse execution through `stepBack` and `reverseContinue`, exposed as `debug_reverse_execution` and protected by the existing inspect-only/HOL Guard policy boundaries.
+- Added `debug_runtime_report` with normalized crash fingerprints, Symbol Doctor output, sanitizer correlation, poison/debug fill-pattern memory hazards, ABI register-to-argument mapping, and bounded debugger output correlation.
+- Added `debug_cluster_crashes` for grouping multiple runtime reports by normalized crash fingerprint.
+- Added `debug_regression_oracle` for bisect-style original-crash / changed-crash / inconclusive reproduction classification without incorrectly treating changed failures as good.
+- Added bounded reverse-request history and `debug_child_requests` so adapter `startDebugging` child/fork requests are visible while automatic reverse-request execution remains fail-closed.
+- Expanded the default agent surface from 14 to 21 high-level tools and added the advanced runtime debugging guide.
+
+### Safety / semantics
+
+- Causal tracing, progress probing, and reverse execution reject frozen postmortem sessions and remain live target-control operations.
+- Child/fork reverse requests are captured for visibility but continue to be rejected by the DAP transport; adapters cannot silently spawn or authorize new debug targets.
+- Crash fingerprints, poison patterns, ABI mappings, sanitizer text, and progress classifications are explicitly treated as bounded evidence rather than standalone causal proof.
+
+
 ## 0.17.2 - 2026-09-07
 
 ### Fixed / packaging

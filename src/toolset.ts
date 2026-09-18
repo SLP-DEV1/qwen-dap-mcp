@@ -13,6 +13,13 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_hang',
   'debug_compare_runs',
   'debug_trace_value',
+  'debug_causal_trace',
+  'debug_progress_probe',
+  'debug_reverse_execution',
+  'debug_runtime_report',
+  'debug_cluster_crashes',
+  'debug_regression_oracle',
+  'debug_child_requests',
   'debug_diagnose_stop',
   'debug_source_disassembly',
   'debug_find_writer',
@@ -75,7 +82,8 @@ const FILTERED_TOOL_HANDLE = Object.freeze({
 function defaultAnnotationsForTool(name: string) {
   if (name === 'debug_disconnect' || name === 'debug_sessions') return SESSION_TEARDOWN_ANNOTATIONS;
   if (name === 'debug_compare_runs') return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
-  if (name === 'debug_trace_value') return DEBUG_SESSION_CONTROL_ANNOTATIONS;
+  if (name === 'debug_trace_value' || name === 'debug_causal_trace' || name === 'debug_progress_probe' || name === 'debug_reverse_execution') return DEBUG_SESSION_CONTROL_ANNOTATIONS;
+  if (name === 'debug_runtime_report' || name === 'debug_cluster_crashes' || name === 'debug_regression_oracle' || name === 'debug_child_requests') return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
   if (LOCAL_EXECUTION_TOOLS.has(name)) return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
   if (SESSION_CONTROL_TOOLS.has(name)) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
   if (READ_ONLY_FULL_TOOLS.has(name)) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
