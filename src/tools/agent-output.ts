@@ -271,6 +271,7 @@ export const AGENT_OUTPUT_SCHEMAS = {
   debug_trace_value: debugTraceValueOutputSchema,
   debug_causal_trace: debugAdvancedOutputSchema,
   debug_progress_probe: debugAdvancedOutputSchema,
+  debug_reverse_execution: debugAdvancedOutputSchema,
   debug_runtime_report: debugAdvancedOutputSchema,
   debug_cluster_crashes: debugAdvancedOutputSchema,
   debug_regression_oracle: debugAdvancedOutputSchema,
