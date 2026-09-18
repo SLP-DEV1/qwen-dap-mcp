@@ -8,6 +8,12 @@ on:
     paths:
       - 'package.json'
       - '.github/workflows/release-extension.yml'
+      - '.github/workflows/native-smoke.yml'
+      - '.github/workflows/hol-guard-compat.yml'
+      - '.github/workflows/extension-package-smoke.yml'
+      - '.github/workflows/container-smoke.yml'
+      - '.github/workflows/security-analysis.yml'
+      - '.github/workflows/publish-registries.yml'
       - 'test/release-workflow.test.ts'
 
 permissions:
