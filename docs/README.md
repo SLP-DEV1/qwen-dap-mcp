@@ -5,7 +5,7 @@ Use this page as the map for `qwen-dap-mcp`. The root [README](../README.md) is 
 ## Start here
 
 - [Root README](../README.md) — what the project does, quick install, debugger support, safety model, and development entry point.
-- [Toolsets](toolsets.md) — the compact 21-tool agent surface versus the opt-in full DAP toolset.
+- [Toolsets](toolsets.md) — the high-level 31-tool agent surface versus the opt-in full DAP toolset.
 - [Security policy](../SECURITY.md) — supported versions, trust boundaries, and vulnerability reporting.
 - [Contributing](../CONTRIBUTING.md) — local development and contribution expectations.
 
@@ -18,6 +18,7 @@ Use this page as the map for `qwen-dap-mcp`. The root [README](../README.md) is 
 
 ## Agent workflows
 
+- [Runtime debugging v2](runtime-debugging-v2.md) — record/replay, lifetime provenance, thread timelines, symbol identity, crash families, SARIF, and adapter diagnostics.
 - [Advanced runtime debugging](advanced-runtime-debugging.md) — causal tracing, progress sampling, reverse execution, reports, clustering, regression oracles, and child-request visibility.
 - [Differential debugging](differential-debugging.md) — compare known-good and failing stopped sessions while suppressing raw address noise.
 - [Hang and deadlock debugging](hang-debugging.md) — bounded observation, all-thread evidence, wait classification, and conservative deadlock heuristics.
