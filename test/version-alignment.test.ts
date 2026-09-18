@@ -29,6 +29,12 @@ test('package, lockfile, Qwen extension, MCP Registry and runtime versions stay 
   assert.equal(extensionManifest.version, packageJson.version);
   assert.equal(registryManifest.version, packageJson.version);
   assert.equal(registryManifest.name, packageJson.mcpName);
+  assert.equal(typeof registryManifest.description, 'string');
+  assert.ok(registryManifest.description.length > 0, 'server.json description must not be empty');
+  assert.ok(
+    registryManifest.description.length <= 100,
+    `server.json description must stay within the MCP Registry 100-character limit; got ${registryManifest.description.length}`,
+  );
   assert.ok(registryPackage, `server.json must contain npm package ${packageJson.name}`);
   assert.equal(registryPackage.version, packageJson.version);
 });
