@@ -102,6 +102,19 @@ jobs:
               await deleteExactBranch(branch, pr.head.sha, `merged PR #${pr.number}`);
             }
 
+            // Explicit stale branches from superseded development lines. Each
+            // deletion is SHA-bound so a later branch reuse is never removed.
+            const staleExactBranches = new Map([
+              ['feat/v0.18-hardening-release', '7854cdf2afb7d761101794ba149e6c03b08226d6'],
+              ['feat/hol-guard-hardening', '188e754a303f3d66480e1bb626bc6afef98e6bda'],
+              ['feature/v0.12-agent-demo', '8118cebfd140bddec6a80c7775491d1dd588896b'],
+              ['feat/managed-rr-replay', '10335025c69709f11756da3b6cbc681c67e0fed2'],
+            ]);
+
+            for (const [branch, expectedSha] of staleExactBranches) {
+              await deleteExactBranch(branch, expectedSha, 'superseded exact-SHA development branch');
+            }
+
             // Historical one-off branches are removed only when their current
             // commit is already a clean ancestor of the default branch.
             const legacyAncestorBranches = [
