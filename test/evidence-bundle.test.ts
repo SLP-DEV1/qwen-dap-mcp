@@ -8,7 +8,7 @@ import { buildSarif, exportEvidenceBundle, importEvidenceBundle } from '../src/e
 
 test('evidence bundle exports and imports bounded JSON without accidental overwrite', () => {
   const dir = mkdtempSync(join(tmpdir(), 'qwen-dap-evidence-'));
-  const path = join(dir, 'evidence.json');
+  const path = join(dir, 'evidence.qwen-dap.json');
   const evidence = {
     fingerprint: 'abc',
     hypotheses: [{ id: 'uaf', title: 'Use after free', evidenceScore: 80, supporting: [] }],
@@ -20,6 +20,10 @@ test('evidence bundle exports and imports bounded JSON without accidental overwr
   const imported = importEvidenceBundle(path);
   assert.deepEqual(imported.evidence, evidence);
   assert.throws(() => exportEvidenceBundle({ path, evidence }), /already exists/i);
+  assert.throws(
+    () => exportEvidenceBundle({ path: join(dir, 'package.json'), evidence }),
+    /general-purpose file writer/i,
+  );
 });
 
 test('SARIF export produces native-runtime results with source location', () => {
