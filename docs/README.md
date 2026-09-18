@@ -5,7 +5,7 @@ Use this page as the map for `qwen-dap-mcp`. The root [README](../README.md) is 
 ## Start here
 
 - [Root README](../README.md) — what the project does, quick install, debugger support, safety model, and development entry point.
-- [Toolsets](toolsets.md) — the high-level 31-tool agent surface versus the opt-in full DAP toolset.
+- [Toolsets](toolsets.md) — the compact 18-tool agent surface, 32-tool forensics surface, and opt-in full DAP toolset.
 - [Security policy](../SECURITY.md) — supported versions, trust boundaries, and vulnerability reporting.
 - [Contributing](../CONTRIBUTING.md) — local development and contribution expectations.
 
@@ -23,7 +23,7 @@ Use this page as the map for `qwen-dap-mcp`. The root [README](../README.md) is 
 - [Differential debugging](differential-debugging.md) — compare known-good and failing stopped sessions while suppressing raw address noise.
 - [Hang and deadlock debugging](hang-debugging.md) — bounded observation, all-thread evidence, wait classification, and conservative deadlock heuristics.
 - [HOL Guard integration](hol-guard.md) — optional fail-closed policy gating for protected debugger side effects.
-- [Toolsets](toolsets.md) — when to use the high-level agent tools and when the full low-level DAP surface is appropriate.
+- [Toolsets](toolsets.md) — when to use agent, forensics, or the full low-level DAP surface.
 
 ## Reproducibility and testing
 
