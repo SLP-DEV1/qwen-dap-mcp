@@ -1,53 +1,29 @@
 # MCP toolsets
 
-qwen-dap-mcp exposes two MCP tool surfaces. The debugger implementation underneath is the same; the toolset only controls which tool schemas the MCP client sees.
+qwen-dap-mcp exposes three MCP schema surfaces. The debugger implementation underneath is the same; the toolset only controls which tool schemas the MCP client sees.
 
-## `agent` — default
+## `agent` — default, 18 core tools
 
-`agent` is optimized for coding agents. It keeps the MCP schema/context surface compact and exposes thirty-one high-level workflows and session-management tools:
+`agent` is optimized for coding agents and keeps the MCP context surface intentionally small:
 
-- `debug_this_crash` — high-level crash diagnosis, verification, and bounded autonomous workflow
-- `debug_this_hang` — bounded all-thread hang/deadlock triage with wait heuristics and Pointer-Provenance v2
-- `debug_compare_runs` — read-only semantic comparison of two explicit stopped sessions
-- `debug_trace_value` — bounded temporal writer timeline for a suspicious value in one live session
-- `debug_causal_trace` — bounded consumer-to-writer producer chain for suspicious runtime state
-- `debug_progress_probe` — resume/pause sampling for no-progress, same-frame progress, and probable busy-loop triage
-- `debug_reverse_execution` — capability-gated reverseContinue/stepBack for record/replay-capable DAP targets
-- `debug_runtime_report` — normalized crash report with Symbol Doctor, sanitizer correlation, poison-pattern memory hazards, ABI argument mapping, and output tail
-- `debug_cluster_crashes` — group previously produced runtime reports by normalized crash fingerprint
-- `debug_regression_oracle` — classify terminal reproductions against an original fingerprint without calling changed failures good
-- `debug_child_requests` — inspect bounded startDebugging/child reverse requests while auto-accept remains fail-closed
-- `debug_time_travel` — rr record/replay planning and capability-gated reverse execution
-- `debug_trace_lifetime` — bounded object/pointer lifetime provenance
-- `debug_thread_timeline` — multi-thread timeline and explicit-owner lock graph
-- `debug_symbol_doctor` — binary identity, symbol mismatch and local resolver analysis
-- `debug_dump_batch` — bounded postmortem batch triage
-- `debug_adaptive_evidence` — progressive evidence budgets
-- `debug_crash_families` — exact/semantic/family crash comparison
-- `debug_cpp_object` — bounded object/vtable inspection
-- `debug_evidence_bundle` — JSON/Markdown/SARIF evidence handoff
-- `debug_adapter_doctor` — adapter capability and security-profile audit
-- `debug_diagnose_stop` — intelligent analysis of an already stopped crash
-- `debug_source_disassembly` — source/instruction/register correlation
-- `debug_find_writer` — one-shot data-breakpoint/watchpoint workflow for a suspicious value
-- `debug_run_to_stop` — lower-level launch/attach until the next stop or exit
-- `debug_open_dump` — read-only core/minidump inspection
-- `debug_snapshot` — bounded raw stopped-state evidence
-- `debug_status` — current debugger/session status
-- `debug_continue` — resume an authorized live target
-- `debug_disconnect` — tear down the routed debugger session
-- `debug_sessions` — list, create, or close isolated DAP sessions
-
-Most routed `debug_*` tools accept an optional `sessionId`. Omitting it targets the backwards-compatible `default` session, and non-default sessions must be created first with `debug_sessions(action="create", sessionId=...)`.
-
-There are two important exceptions:
-
-- `debug_sessions` manages the registry itself rather than routing through one current session.
-- `debug_compare_runs` intentionally reads two sessions at once and therefore accepts `baselineSessionId` plus `candidateSessionId` instead of a single `sessionId`.
-
-`debug_trace_value` is a normal single-session routed tool and therefore uses `sessionId`.
-
-Session selection is request-local. qwen-dap-mcp uses `AsyncLocalStorage` rather than a process-global selected-session variable, so concurrent MCP calls can safely target different sessions. Each real session owns its own DAP connection, lifecycle guard, postmortem state, event history, breakpoint/watchpoint state, timeout state, operation state, and HOL Guard context. A session with an active routed request cannot be closed out from under that request.
+- `debug_this_crash`
+- `debug_this_hang`
+- `debug_compare_runs`
+- `debug_trace_value`
+- `debug_causal_trace`
+- `debug_progress_probe`
+- `debug_runtime_report`
+- `debug_trace_lifetime`
+- `debug_adaptive_evidence`
+- `debug_diagnose_stop`
+- `debug_source_disassembly`
+- `debug_find_writer`
+- `debug_run_to_stop`
+- `debug_open_dump`
+- `debug_snapshot`
+- `debug_status`
+- `debug_disconnect`
+- `debug_sessions`
 
 No environment variable is required:
 
@@ -55,35 +31,44 @@ No environment variable is required:
 npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-Or set it explicitly:
+Or set it explicitly with `QWEN_DAP_MCP_TOOLSET=agent`.
+
+## `forensics` — high-level deep-debugging surface
+
+Use `forensics` when the investigation needs specialized workflows but not raw manual DAP commands. It includes every `agent` tool plus:
+
+- `debug_reverse_execution`
+- `debug_cluster_crashes`
+- `debug_regression_oracle`
+- `debug_child_requests`
+- `debug_time_travel`
+- `debug_thread_timeline`
+- `debug_symbol_doctor`
+- `debug_dump_batch`
+- `debug_crash_families`
+- `debug_cpp_object`
+- `debug_evidence_bundle`
+- `debug_adapter_doctor`
 
 ```bash
-QWEN_DAP_MCP_TOOLSET=agent npx -y @slp-dev1/qwen-dap-mcp
+QWEN_DAP_MCP_TOOLSET=forensics npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-PowerShell:
-
-```powershell
-$env:QWEN_DAP_MCP_TOOLSET = 'agent'
-npx -y @slp-dev1/qwen-dap-mcp
-```
+The `advanced` security profile defaults to this surface. It does **not** automatically expose raw `evaluate`, breakpoint mutation, stepping, memory inspection, or adapter lifecycle commands.
 
 ## `full` — manual debugger surface
 
-Use `full` when the client or user intentionally needs low-level DAP operations such as manual breakpoint/watchpoint management, stepping, expression evaluation, direct memory reads, module inspection, raw thread/stack/scope traversal, or explicit remote-debug attach helpers.
+Use `full` only when the client or user intentionally needs low-level DAP operations such as manual breakpoint/watchpoint management, stepping, expression evaluation, direct memory reads, module inspection, raw thread/stack/scope traversal, or explicit remote-debug attach helpers.
 
 ```bash
 QWEN_DAP_MCP_TOOLSET=full npx -y @slp-dev1/qwen-dap-mcp
 ```
 
-PowerShell:
+The full toolset remains backwards compatible with the legacy manual surface. Hardened remote helpers remain hidden from `agent` and `forensics` unless a high-level workflow uses them internally.
 
-```powershell
-$env:QWEN_DAP_MCP_TOOLSET = 'full'
-npx -y @slp-dev1/qwen-dap-mcp
-```
+Most routed `debug_*` tools accept an optional `sessionId`. Omitting it targets the backwards-compatible `default` session. `debug_sessions` manages the registry itself, while `debug_compare_runs` intentionally reads two explicit sessions through `baselineSessionId` and `candidateSessionId`.
 
-The full toolset remains backwards compatible with the pre-v0.12 public tool surface. Hardened remote helpers such as `debug_attach_gdb_remote` and `debug_attach_lldb_dap_remote` remain hidden from the compact `agent` schema surface.
+Session selection is request-local via `AsyncLocalStorage`, so concurrent MCP calls can safely target different debugger sessions without a process-global selected-session variable.
 
 ## Differential and causal debugging
 
