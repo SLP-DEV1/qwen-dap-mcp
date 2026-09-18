@@ -7,7 +7,7 @@ import {
   SESSION_TEARDOWN_ANNOTATIONS,
 } from './tools/tool-annotations.js';
 
-export type ToolsetMode = 'agent' | 'full';
+export type ToolsetMode = 'agent' | 'forensics' | 'full';
 
 export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_this_crash',
@@ -16,20 +16,7 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_trace_value',
   'debug_causal_trace',
   'debug_progress_probe',
-  'debug_reverse_execution',
   'debug_runtime_report',
-  'debug_cluster_crashes',
-  'debug_regression_oracle',
-  'debug_child_requests',
-  'debug_time_travel',
-  'debug_trace_lifetime',
-  'debug_thread_timeline',
-  'debug_symbol_doctor',
-  'debug_dump_batch',
-  'debug_adaptive_evidence',
-  'debug_crash_families',
-  'debug_cpp_object',
-  'debug_evidence_bundle',
   'debug_adapter_doctor',
   'debug_diagnose_stop',
   'debug_source_disassembly',
@@ -43,13 +30,28 @@ export const AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'debug_sessions',
 ]);
 
+export const FORENSICS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...AGENT_TOOL_NAMES,
+  'debug_reverse_execution',
+  'debug_cluster_crashes',
+  'debug_regression_oracle',
+  'debug_child_requests',
+  'debug_time_travel',
+  'debug_trace_lifetime',
+  'debug_thread_timeline',
+  'debug_symbol_doctor',
+  'debug_dump_batch',
+  'debug_adaptive_evidence',
+  'debug_crash_families',
+  'debug_cpp_object',
+  'debug_evidence_bundle',
+]);
+
 const LOCAL_EXECUTION_TOOLS = new Set([
   'debug_start',
   'debug_start_codelldb',
   'debug_launch',
   'debug_launch_codelldb',
-  'debug_attach',
-  'debug_attach_codelldb',
 ]);
 
 const SESSION_CONTROL_TOOLS = new Set([
@@ -93,8 +95,27 @@ const FILTERED_TOOL_HANDLE = Object.freeze({
 function defaultAnnotationsForTool(name: string) {
   if (name === 'debug_disconnect' || name === 'debug_sessions') return SESSION_TEARDOWN_ANNOTATIONS;
   if (name === 'debug_compare_runs') return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
-  if (name === 'debug_trace_value' || name === 'debug_causal_trace' || name === 'debug_progress_probe' || name === 'debug_reverse_execution') return DEBUG_SESSION_CONTROL_ANNOTATIONS;
-  if (name === 'debug_runtime_report' || name === 'debug_cluster_crashes' || name === 'debug_regression_oracle' || name === 'debug_child_requests') return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
+  if (
+    name === 'debug_trace_value'
+    || name === 'debug_causal_trace'
+    || name === 'debug_progress_probe'
+    || name === 'debug_reverse_execution'
+    || name === 'debug_trace_lifetime'
+    || name === 'debug_thread_timeline'
+  ) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
+  if (
+    name === 'debug_runtime_report'
+    || name === 'debug_cluster_crashes'
+    || name === 'debug_regression_oracle'
+    || name === 'debug_child_requests'
+    || name === 'debug_symbol_doctor'
+    || name === 'debug_dump_batch'
+    || name === 'debug_adaptive_evidence'
+    || name === 'debug_crash_families'
+    || name === 'debug_cpp_object'
+    || name === 'debug_adapter_doctor'
+  ) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
+  if (name === 'debug_time_travel') return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
   if (LOCAL_EXECUTION_TOOLS.has(name)) return LOCAL_TARGET_EXECUTION_ANNOTATIONS;
   if (SESSION_CONTROL_TOOLS.has(name)) return DEBUG_SESSION_CONTROL_ANNOTATIONS;
   if (READ_ONLY_FULL_TOOLS.has(name)) return READ_ONLY_LOCAL_TOOL_ANNOTATIONS;
@@ -114,13 +135,15 @@ export function resolveToolsetMode(value = process.env.QWEN_DAP_MCP_TOOLSET): To
     return securityProfileDefaults(resolveSecurityProfile()).toolset;
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'agent' || normalized === 'full') return normalized;
+  if (normalized === 'agent' || normalized === 'forensics' || normalized === 'full') return normalized;
   logger.warn('Invalid QWEN_DAP_MCP_TOOLSET; falling back to the safe agent toolset', { value });
   return 'agent';
 }
 
 export function toolsetAllows(mode: ToolsetMode, toolName: string): boolean {
-  return mode === 'full' || AGENT_TOOL_NAMES.has(toolName);
+  if (mode === 'full') return true;
+  if (mode === 'forensics') return FORENSICS_TOOL_NAMES.has(toolName);
+  return AGENT_TOOL_NAMES.has(toolName);
 }
 
 /**
