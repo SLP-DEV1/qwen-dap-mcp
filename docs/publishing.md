@@ -46,7 +46,7 @@ The release workflow:
 5. builds the self-contained extension archive,
 6. installs Qwen Code for smoke validation,
 7. verifies that the archive installs as a Qwen extension,
-8. creates the GitHub Release/tag when it does not already exist,
+8. creates a CycloneDX SBOM plus archive SHA-256 and publishes them with the GitHub Release/tag when it does not already exist,
 9. verifies release metadata,
 10. installs the published GitHub Release and verifies the exact extension version,
 11. triggers the npm + MCP Registry publication workflow.
@@ -107,7 +107,7 @@ The capitalization intentionally matches the GitHub account namespace used for r
 After the workflows finish, verify all of the following against the same release commit:
 
 - GitHub tag/release exists and is not draft/prerelease unless intentionally requested,
-- the release archive exists and its digest is recorded,
+- the release archive exists, its SHA-256 is recorded, and the CycloneDX SBOM is attached,
 - the GitHub release install smoke verified the exact manifest version,
 - npm visibility verification succeeded for `@slp-dev1/qwen-dap-mcp@<version>`,
 - MCP Registry publication succeeded for `io.github.SLP-DEV1/qwen-dap-mcp` at the same version.
