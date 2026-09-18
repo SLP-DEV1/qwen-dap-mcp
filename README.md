@@ -24,7 +24,7 @@ Coding agents can read source and propose patches, but native failures often can
 `qwen-dap-mcp` makes that evidence available through MCP and adds agent-oriented workflows on top of raw debugger primitives:
 
 - **Evidence first** — inspect the actual failing process instead of guessing from source.
-- **High-level workflows** — crash, hang, differential, writer-tracing, dump, and verification tools are designed for agents rather than humans driving a debugger console.
+- **High-level workflows** — crash, hang, differential, causal tracing, progress probing, runtime-report, dump, and verification tools are designed for agents rather than humans driving a debugger console.
 - **Bounded automation** — autonomous fix/verify state is explicit, serializable, iteration-limited, and re-checks the original reproduction.
 - **Small default surface** — the normal agent toolset stays compact while advanced low-level DAP tools remain opt-in.
 - **Local by default** — the MCP server communicates over stdio and debugger adapters run locally unless you explicitly configure a validated remote target.
@@ -112,6 +112,11 @@ The MCP server supplies debugger evidence and bounded workflow state. Source edi
 | Hang or deadlock | Observe, pause when needed, capture all-thread stacks, classify waits, and surface conservative deadlock candidates |
 | Good run vs bad run | Compare stopped sessions semantically while suppressing raw ASLR/address noise |
 | Suspicious value | Trace real writers with data breakpoints/watchpoints and bounded temporal tracing |
+| Runtime causality | Build a bounded suspicious-value consumer → writer/producer chain with `debug_causal_trace` |
+| Suspected busy loop | Resume/pause sample a live target with `debug_progress_probe` to distinguish repeated state from observed execution movement |
+| Record/replay target | Move backward with capability-gated `debug_reverse_execution` using DAP `stepBack` / `reverseContinue` |
+| Crash fleet triage | Build `debug_runtime_report` fingerprints, cluster them with `debug_cluster_crashes`, and classify regression reproductions with `debug_regression_oracle` |
+| Child/fork signal | Inspect fail-closed adapter `startDebugging` requests with `debug_child_requests` without auto-spawning child sessions |
 | Crash dump | Inspect Windows minidumps and supported LLDB/GDB postmortem targets without launching the failed program |
 | Remote native target | Attach through validated `gdbserver` / `lldb-server gdbserver` endpoints with loopback-first policy |
 | Multiple targets | Keep isolated DAP sessions and route requests by `sessionId` |
@@ -119,7 +124,7 @@ The MCP server supplies debugger evidence and bounded workflow state. Source edi
 
 ### Default agent tool surface
 
-The default toolset intentionally exposes 14 high-signal tools:
+The default toolset intentionally exposes 21 high-signal tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -127,6 +132,13 @@ The default toolset intentionally exposes 14 high-signal tools:
 | `debug_this_hang` | High-level hang/deadlock triage |
 | `debug_compare_runs` | Semantic comparison of baseline and failing stopped sessions |
 | `debug_trace_value` | Bounded temporal tracing of a suspicious value |
+| `debug_causal_trace` | Build a bounded consumer-to-writer producer chain for a suspicious runtime value |
+| `debug_progress_probe` | Sample live execution to distinguish no observed progress, same-frame movement, and probable busy loops |
+| `debug_reverse_execution` | Capability-gated reverseContinue / stepBack for record/replay-capable DAP targets |
+| `debug_runtime_report` | Create a crash fingerprint report with symbols, sanitizer output, memory hazards, ABI arguments, and output correlation |
+| `debug_cluster_crashes` | Group multiple runtime reports by normalized crash fingerprint |
+| `debug_regression_oracle` | Classify a terminal reproduction as original-crash, changed-crash, or inconclusive |
+| `debug_child_requests` | Inspect bounded child/fork startDebugging reverse requests while keeping auto-accept fail-closed |
 | `debug_diagnose_stop` | Diagnose the current debugger stop |
 | `debug_source_disassembly` | Correlate source with nearby native instructions |
 | `debug_find_writer` | Stop at the code that writes a watched value |
@@ -162,6 +174,9 @@ Raw DAP is intentionally low level. `qwen-dap-mcp` keeps raw debugger access ava
 | Good-vs-bad semantic diff | — | manual | ✓ |
 | Explicit bounded fix/verify state | — | — | ✓ |
 | Verification fingerprinting | — | — | ✓ |
+| Causal writer chain | — | manual | ✓ |
+| Progress sampling / busy-loop triage | — | manual | ✓ |
+| Sanitizer + symbols + ABI report correlation | — | manual | ✓ |
 
 ## Safety by design
 
