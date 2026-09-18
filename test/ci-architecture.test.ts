@@ -32,6 +32,8 @@ test('native real-adapter coverage is consolidated and path-selected on PRs', as
   assert.match(native, /symbol-doctor/);
   assert.match(native, /adapters\/rr\\\.ts/);
   assert.match(native, /runtime-v2-gdb-real-smoke/);
+  assert.match(native, /QWEN_DAP_MCP_LLVM_READOBJ/);
+  assert.match(native, /QWEN_DAP_MCP_LLVM_PDBUTIL/);
 
   for (const job of ['codelldb', 'dump', 'gdb', 'lldb', 'differential', 'multi']) {
     assert.match(native, new RegExp(`^\\s{2}${job}:`, 'm'), `missing consolidated ${job} smoke job`);
