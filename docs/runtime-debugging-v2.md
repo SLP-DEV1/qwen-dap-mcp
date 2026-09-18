@@ -8,7 +8,7 @@ Set `QWEN_DAP_MCP_PROFILE` to one of:
 
 - `inspect` — agent toolset + inspect-only DAP policy.
 - `local-debug` — default compact agent toolset + normal authorized local debugger control.
-- `advanced` — full toolset + normal DAP policy.
+- `advanced` — forensics toolset + normal DAP policy.
 
 Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override the corresponding profile defaults. Remote-host allowlisting and HOL Guard remain independent gates.
 
@@ -18,10 +18,19 @@ Explicit `QWEN_DAP_MCP_TOOLSET` and `QWEN_DAP_MCP_DAP_POLICY` values override th
 
 - `doctor` — discover local rr and report its version.
 - `record` — execute one explicit local program under rr with literal argv, `shell=false`, and a hard timeout.
-- `replay-plan` — validate an existing trace and produce a loopback-only `rr replay -s PORT` plan for the existing hardened GDB remote-attach path.
+- `replay-plan` — validate an existing trace and produce a loopback-only `rr replay -s PORT` plan.
+- `replay-start` — start one managed replay process for the routed session and optionally initialize/attach hardened GDB DAP to `127.0.0.1:PORT`.
+- `replay-status` — inspect bounded replay process state/output.
+- `replay-stop` — disconnect the replay debugger when requested and terminate the managed rr process.
 - `reverse` — issue `stepBack` or `reverseContinue` on a DAP adapter that advertises reverse execution.
 
-The MCP does not expose a general command runner.
+The MCP does not expose a general command runner. Managed replay uses fixed rr argv, `shell=false`, a loopback-only endpoint, and one replay process per routed DAP connection.
+
+## Child/fork adoption
+
+DAP adapters can emit reverse `startDebugging` requests for forked/child processes. The transport still rejects those requests by default and `debug_child_requests` remains inspection-only.
+
+The opt-in `debug_adopt_child` workflow is available in the `forensics` toolset. It requires `QWEN_DAP_MCP_CHILD_DEBUG=1`, selects one captured request explicitly, accepts only a small validated local `launch`/`attach` subset, chooses the debugger adapter explicitly rather than trusting adapter-supplied type fields, and creates a separate `DapSessionRegistry` session. Unknown/free-form adapter commands, remote targets, and terminal requests are never forwarded.
 
 ## Lifetime provenance
 
