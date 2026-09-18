@@ -62,6 +62,10 @@ test('registry publication is release-bound, idempotent, and verifies npm before
   assert.match(workflow, /a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc/);
   assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /secrets\.NPM_TOKEN/);
+  assert.match(workflow, /Cannot publish over previously staged version/);
+  assert.match(workflow, /already staged; continuing with registry visibility verification/);
+  assert.match(workflow, /for attempt in \{1\.\.60\}/);
+  assert.match(workflow, /sleep 5/);
 
   assert.match(workflow, /- name: Check whether MCP Registry version already exists/);
   assert.match(workflow, /registry\.modelcontextprotocol\.io\/v0\.1\/servers/);
