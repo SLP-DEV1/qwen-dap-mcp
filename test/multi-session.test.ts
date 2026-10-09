@@ -157,3 +157,44 @@ test('unknown session IDs fail before a routed tool handler can run', async () =
 test('debug_sessions is part of the compact agent toolset', () => {
   assert.equal(toolsetAllows('agent', 'debug_sessions'), true);
 });
+
+test('a closing session rejects new requests and concurrent closes', async () => {
+  const registry = new DapSessionRegistry({ maxSessions: 3 });
+  const session = registry.create('alpha').session;
+  const originalDisconnect = session.disconnect.bind(session);
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  session.disconnect = async (terminateDebuggee = true) => {
+    signalStarted();
+    await gate;
+    return originalDisconnect(terminateDebuggee);
+  };
+
+  const closing = registry.close('alpha');
+  await started;
+  assert.throws(() => registry.runWithSession('alpha', () => 'unexpected'), /session 'alpha' is closing/);
+  await assert.rejects(registry.close('alpha'), /already closing/);
+  assert.equal(registry.activeRequests('alpha'), 0);
+  release();
+  assert.deepEqual(await closing, { sessionId: 'alpha', removed: true });
+  assert.equal(registry.has('alpha'), false);
+});
+
+test('failed disconnect releases closing guard for a retry', async () => {
+  const registry = new DapSessionRegistry();
+  const session = registry.create('retry').session;
+  const originalDisconnect = session.disconnect.bind(session);
+  let failFirst = true;
+  session.disconnect = async (terminateDebuggee = true) => {
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('simulated disconnect failure');
+    }
+    return originalDisconnect(terminateDebuggee);
+  };
+  await assert.rejects(registry.close('retry'), /simulated disconnect failure/);
+  assert.equal(registry.runWithSession('retry', () => 'available'), 'available');
+  assert.deepEqual(await registry.close('retry'), { sessionId: 'retry', removed: true });
+});
