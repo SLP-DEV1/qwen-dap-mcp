@@ -100,3 +100,27 @@ test('transport generation advances across adapter replacement', async () => {
   assert.ok(connection.generation > stopped);
   await connection.stop();
 });
+
+test('nested operation inherits parent cancellation despite explicit child signal', async () => {
+  const parentSignal = new AbortController();
+  const childSignal = new AbortController();
+  await runWithDapOperationContext({ label: 'parent', signal: parentSignal.signal }, async () => {
+    await runWithDapOperationContext({ label: 'child', signal: childSignal.signal }, async (child) => {
+      parentSignal.abort('parent requested cancellation');
+      assert.throws(() => child.throwIfAborted(), /child cancelled: parent requested cancellation/);
+      assert.equal(childSignal.signal.aborted, false);
+    });
+  });
+});
+
+test('nested operation can abort locally without cancelling its parent', async () => {
+  const parentSignal = new AbortController();
+  const childSignal = new AbortController();
+  await runWithDapOperationContext({ label: 'parent', signal: parentSignal.signal }, async (parent) => {
+    await runWithDapOperationContext({ label: 'child', signal: childSignal.signal }, async (child) => {
+      childSignal.abort('child requested cancellation');
+      assert.throws(() => child.throwIfAborted(), /child cancelled: child requested cancellation/);
+      assert.equal(parent.signal.aborted, false);
+    });
+  });
+});
