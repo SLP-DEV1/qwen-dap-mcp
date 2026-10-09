@@ -43,6 +43,7 @@ export class DapSessionRegistry {
 
   private readonly sessions = new Map<string, GuardedDapSession>();
   private readonly activeRequestCounts = new Map<string, number>();
+  private readonly closingSessionIds = new Set<string>();
   private readonly sessionContext = new AsyncLocalStorage<string>();
   private readonly sessionFactory: () => GuardedDapSession;
   private generatedSessionCounter = 0;
@@ -106,6 +107,9 @@ export class DapSessionRegistry {
   runWithSession<T>(sessionId: string | undefined, action: () => T): T {
     const resolvedId = sessionId ?? this.defaultSessionId;
     this.get(resolvedId);
+    if (this.closingSessionIds.has(resolvedId)) {
+      throw new DapError(`Cannot start DAP request: session '${resolvedId}' is closing.`);
+    }
     this.incrementActiveRequests(resolvedId);
 
     let result: T;
@@ -137,6 +141,9 @@ export class DapSessionRegistry {
 
   async close(sessionId: string, terminateDebuggee = true): Promise<{ sessionId: string; removed: boolean }> {
     const session = this.get(sessionId);
+    if (this.closingSessionIds.has(sessionId)) {
+      throw new DapError(`DAP session '${sessionId}' is already closing.`);
+    }
     const activeRequests = this.activeRequestCounts.get(sessionId) ?? 0;
     if (activeRequests > 0) {
       throw new DapError(
@@ -144,15 +151,21 @@ export class DapSessionRegistry {
       );
     }
 
-    await session.disconnect(terminateDebuggee);
+    // Claim this session before awaiting the disconnect to prevent new routed requests.
+    this.closingSessionIds.add(sessionId);
+    try {
+      await session.disconnect(terminateDebuggee);
 
-    if (sessionId === this.defaultSessionId) {
-      return { sessionId, removed: false };
+      if (sessionId === this.defaultSessionId) {
+        return { sessionId, removed: false };
+      }
+
+      this.sessions.delete(sessionId);
+      this.activeRequestCounts.delete(sessionId);
+      return { sessionId, removed: true };
+    } finally {
+      this.closingSessionIds.delete(sessionId);
     }
-
-    this.sessions.delete(sessionId);
-    this.activeRequestCounts.delete(sessionId);
-    return { sessionId, removed: true };
   }
 
   /**
