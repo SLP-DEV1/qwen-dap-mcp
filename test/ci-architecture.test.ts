@@ -83,4 +83,7 @@ test('security analysis covers source and dependency changes', async () => {
   assert.match(security, /github\/codeql-action\/analyze@v4/);
   assert.match(security, /npm audit --omit=dev --audit-level=high/);
   assert.match(security, /^\s{2}schedule:/m);
+  // Reusable release gates and the main-branch security workflow run concurrently.
+  // Include the caller workflow in the key to avoid cancelling release gates.
+  assert.match(security, /group: security-analysis-\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/);
 });
