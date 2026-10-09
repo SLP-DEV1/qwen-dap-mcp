@@ -252,6 +252,16 @@ def main() -> int:
         workspace = _workspace(payload)
         tool_name, arguments, tool_schema, tool_description = _tool_shape(payload)
         guard_home = resolve_guard_home(os.environ.get("HOL_GUARD_HOME"))
+        # HOL Guard 3.x delegates MCP identities to its native resident. Keep
+        # every identity/approval digest in the same explicit Guard home as
+        # the policy store (especially important for HOL_GUARD_HOME overrides).
+        # HOL Guard 2.2 predates this ambient-context binding API.
+        try:
+            from codex_plugin_scanner.guard.native_context import bind_context_digest_home
+        except ImportError:
+            pass
+        else:
+            bind_context_digest_home(guard_home)
         store = GuardStore(guard_home)
         config_path = str(workspace / ".qwen-dap-mcp-hol-guard")
         server_fingerprint = _server_fingerprint(payload)
@@ -426,7 +436,26 @@ def main() -> int:
         print(json.dumps(response, separators=(",", ":")), flush=True)
         return 0
     except Exception as exc:  # noqa: BLE001 - policy boundary must fail closed
-        return _error(f"HOL Guard DAP policy evaluation failed: {exc}")
+        # Do not convert a missing native identity into an allow decision.
+        # Emit bounded, non-secret diagnostics so CI can distinguish runtime
+        # unavailability from an upstream protocol/identity rejection.
+        diagnostic = ""
+        if str(exc) == "native_mcp_tool_identity_unavailable":
+            try:
+                from codex_plugin_scanner.guard.native_context import native_context_failure_reason
+                from codex_plugin_scanner.guard.native_runtime import native_runtime_status
+
+                native_status = native_runtime_status()
+                failure_reason = native_context_failure_reason() or "unknown"
+                diagnostic = (
+                    f" [native_status={native_status.reason},"
+                    f" native_available={native_status.available},"
+                    f" native_compatible={native_status.compatible},"
+                    f" context_failure={failure_reason}]"
+                )
+            except Exception:  # diagnostic is best effort and never affects policy
+                diagnostic = " [native diagnostics unavailable]"
+        return _error(f"HOL Guard DAP policy evaluation failed: {exc}{diagnostic}")
 
 
 if __name__ == "__main__":

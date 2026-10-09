@@ -87,3 +87,14 @@ test('security analysis covers source and dependency changes', async () => {
   // Include the caller workflow in the key to avoid cancelling release gates.
   assert.match(security, /group: security-analysis-\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/);
 });
+
+test('HOL Guard integration securely installs native manifests without bypassing identity checks', async () => {
+  const workflow = await text('hol-guard-compat.yml');
+  assert.match(workflow, /umask 077/);
+  assert.match(workflow, /stat\.S_ISLNK/);
+  assert.match(workflow, /info\.st_uid not in/);
+  assert.match(workflow, /manifest\.chmod\(stat\.S_IMODE\(info\.st_mode\) & ~0o022\)/);
+  assert.match(workflow, /hol-guard==2\.2\.0/);
+  assert.match(workflow, /hol-guard'$/m);
+  assert.match(workflow, /node test\/hol-guard-real-smoke\.mjs/);
+});
