@@ -34,6 +34,7 @@ jobs:
       matrix:
         guard-spec:
           - 'hol-guard==2.2.0'
+          - 'hol-guard==3.36.1'
           - 'hol-guard'
     steps:
       - uses: actions/checkout@v7
@@ -63,6 +64,40 @@ jobs:
           )
           from codex_plugin_scanner.guard.approvals import queue_blocked_approvals
           print('hol-guard', importlib.metadata.version('hol-guard'))
+          PY
+      - name: Diagnose newest HOL Guard native runtime manifest
+        if: matrix.guard-spec == 'hol-guard'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import json
+          import os
+          import stat
+          from codex_plugin_scanner.guard.native_runtime import _bundled_runtime_candidate, native_runtime_status, _decode_runtime_manifest
+
+          runtime = _bundled_runtime_candidate()
+          manifest = runtime.with_name('runtime-manifest.json')
+          print('HOL Guard version:', importlib.metadata.version('hol-guard'))
+          print('Native runtime status:', native_runtime_status().reason)
+          print('Manifest exists:', manifest.exists())
+          if manifest.exists():
+              file_stat = manifest.lstat()
+              print('Manifest regular file:', stat.S_ISREG(file_stat.st_mode))
+              print('Manifest symlink:', stat.S_ISLNK(file_stat.st_mode))
+              print('Manifest mode:', oct(stat.S_IMODE(file_stat.st_mode)))
+              print('Manifest size:', file_stat.st_size)
+              try:
+                  raw = json.loads(manifest.read_text(encoding='utf-8'))
+                  print('Manifest JSON type:', type(raw).__name__)
+                  print('Manifest keys:', sorted(raw.keys()) if isinstance(raw, dict) else None)
+                  if isinstance(raw, dict):
+                      print('Manifest schema:', raw.get('schema'))
+                      print('Manifest protocol:', raw.get('protocol_version'))
+                      print('Manifest package:', raw.get('package_version'))
+                  print('Manifest schema valid:', _decode_runtime_manifest(raw) is not None)
+              except (OSError, UnicodeDecodeError, ValueError) as exc:
+                  print('Manifest decoding failure:', type(exc).__name__)
           PY
       - name: Build TypeScript
         run: npm run build
