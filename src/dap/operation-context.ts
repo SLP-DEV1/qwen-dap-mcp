@@ -46,12 +46,21 @@ export class DapOperationContext {
 
     this.signal = this.controller.signal;
 
-    const inheritedSignal = options.signal ?? parent?.signal;
-    if (inheritedSignal) {
-      const onAbort = () => this.abort(abortReason(inheritedSignal));
-      inheritedSignal.addEventListener('abort', onAbort, { once: true });
-      this.detachParent = () => inheritedSignal.removeEventListener('abort', onAbort);
-      if (inheritedSignal.aborted) onAbort();
+    // A child's explicit signal must not mask cancellation from its parent.
+    const inheritedSignals = new Set<AbortSignal>();
+    if (parent) inheritedSignals.add(parent.signal);
+    if (options.signal) inheritedSignals.add(options.signal);
+    if (inheritedSignals.size > 0) {
+      const detachListeners: Array<() => void> = [];
+      for (const inheritedSignal of inheritedSignals) {
+        const onAbort = () => this.abort(abortReason(inheritedSignal));
+        inheritedSignal.addEventListener('abort', onAbort, { once: true });
+        detachListeners.push(() => inheritedSignal.removeEventListener('abort', onAbort));
+        if (inheritedSignal.aborted) onAbort();
+      }
+      this.detachParent = () => {
+        for (const detach of detachListeners) detach();
+      };
     }
 
     if (this.deadlineAt !== undefined && !this.signal.aborted) {
