@@ -4,6 +4,16 @@ All notable prototype milestones are documented here.
 
 ## Unreleased
 
+## 0.18.2 - 2026-10-09
+
+### Fixed
+
+- Block new routed requests and concurrent closes while a DAP session is disconnecting; release the closing guard after failures.
+- Preserve cancellation from parent operations when nested requests supply their own AbortSignal.
+- Ignore the exact already-deleted GitHub branch race in CI cleanup without suppressing unrelated 422 failures.
+- Align adapter-doctor guidance with the available tools in agent, forensics and full modes.
+- Add regression tests for session shutdown, nested signal cancellation, branch cleanup and tool guidance.
+
 ### Added
 
 - Added opt-in `debug_adopt_child` for explicit adoption of one captured DAP `startDebugging` request into an isolated debugger session.
