@@ -94,7 +94,17 @@ jobs:
                 return;
               }
 
-              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              try {
+                await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              } catch (error) {
+                // GitHub/Dependabot may auto-delete between checking and deleting.
+                // Only ignore the missing-ref case, not unrelated 422 failures.
+                if (error.status === 404 || (error.status === 422 && /Reference does not exist/i.test(String(error.message)))) {
+                  core.info(`Skipping ${branch}: already deleted by another actor.`);
+                  return;
+                }
+                throw error;
+              }
               core.info(`Deleted ${branch}: ${reason}.`);
             }
 
