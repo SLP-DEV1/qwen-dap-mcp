@@ -20,6 +20,9 @@ test('merged-branch cleanup is bounded to safe same-repo stale heads', async () 
   assert.match(workflow, /current\.protected/);
   assert.match(workflow, /current\.sha !== expectedSha/);
   assert.match(workflow, /github\.rest\.git\.deleteRef/);
+  assert.match(workflow, /error\.status === 404/);
+  assert.match(workflow, /error\.status === 422 && \/Reference does not exist\/i\.test\(String\(error\.message\)\)/);
+  assert.match(workflow, /Skipping .*already deleted by another actor/);
 
   const shaGuard = workflow.indexOf('current.sha !== expectedSha');
   const deleteCall = workflow.indexOf('github.rest.git.deleteRef');
